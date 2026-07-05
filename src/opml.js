@@ -26,11 +26,12 @@ export function parseOpml(xml) {
     if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
     seen.add(url);
     const title = /(?:\btitle|\btext)\s*=\s*"([^"]*)"/i.exec(m[0])?.[1];
-    const htmlUrl = /\bhtmlUrl\s*=\s*"([^"]*)"/i.exec(m[0])?.[1];
+    // htmlUrl lands in an <a href> — accept http(s) only (XSS: javascript:)
+    const htmlUrl = decode(/\bhtmlUrl\s*=\s*"([^"]*)"/i.exec(m[0])?.[1] ?? '').trim();
     feeds.push({
       url,
       title: title ? decode(title) : undefined,
-      htmlUrl: htmlUrl ? decode(htmlUrl) : undefined,
+      htmlUrl: /^https?:\/\//i.test(htmlUrl) ? htmlUrl : undefined,
     });
   }
   return feeds;

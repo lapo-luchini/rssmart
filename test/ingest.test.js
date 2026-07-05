@@ -55,6 +55,23 @@ test('ingestAll inserts items once and is idempotent', async () => {
   }
 });
 
+test('javascript: links from feeds are dropped, not stored', async () => {
+  const db = tempDb();
+  const rss = await startRssServer();
+  rss.routes.set('/feed.xml', rssXml({
+    items: [{ title: 'Evil', guid: 'evil-1', link: 'javascript:alert(1)' }],
+  }).replace('<link>https://example.com</link>', '<link>javascript:alert(2)</link>'));
+
+  try {
+    syncFeeds(db, [{ url: `${rss.url}/feed.xml` }]);
+    await ingestAll(db, testConfig());
+    assert.equal(db.prepare('SELECT url FROM articles').get().url, null);
+    assert.equal(db.prepare('SELECT html_url FROM feeds').get().html_url, null);
+  } finally {
+    await rss.close();
+  }
+});
+
 test('a failing feed is recorded and does not abort other feeds', async () => {
   const db = tempDb();
   const rss = await startRssServer();

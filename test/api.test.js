@@ -146,13 +146,17 @@ test('feed management: add, disable, stats, OPML round-trip', async () => {
   const imported = await post('/api/feeds/import', {
     opml: `<opml><body>
       <outline type="rss" text="Imported &amp; Co" xmlUrl="http://imported.example/rss" htmlUrl="http://imported.example/"/>
+      <outline type="rss" text="XSS" xmlUrl="http://xss.example/rss" htmlUrl="javascript:alert(1)"/>
       <outline type="rss" xmlUrl="ftp://skip.me"/>
     </body></opml>`,
   });
-  assert.deepEqual(imported.body, { found: 1 });
+  assert.deepEqual(imported.body, { found: 2 });
 
-  const feed = (await get('/api/feeds')).body.find((f) => f.url === 'http://imported.example/rss');
+  const allFeeds = (await get('/api/feeds')).body;
+  const feed = allFeeds.find((f) => f.url === 'http://imported.example/rss');
   assert.equal(feed.html_url, 'http://imported.example/', 'htmlUrl stored');
+  const xss = allFeeds.find((f) => f.url === 'http://xss.example/rss');
+  assert.equal(xss.html_url, null, 'javascript: htmlUrl dropped');
 
   const opml = await fetch(`${base}/api/feeds.opml`).then((r) => r.text());
   assert.match(opml, /xmlUrl="http:\/\/imported\.example\/rss"/);

@@ -1,6 +1,10 @@
 import Parser from 'rss-parser';
 import { sanitizeHtml } from './html.js';
 
+// Feed-provided links end up in <a href> in the UI: allow http(s) only.
+const httpUrl = (u) =>
+  typeof u === 'string' && /^https?:\/\//i.test(u.trim()) ? u.trim() : null;
+
 /**
  * Seed the feeds table from the config. The DB is the source of truth
  * (feeds are managed from the web UI); config feeds are upserted as a
@@ -41,7 +45,7 @@ export async function ingestFeed(db, feed, parser) {
       const { changes } = insert.run(
         feed.id,
         String(guid),
-        item.link ?? null,
+        httpUrl(item.link),
         item.title.trim(),
         item.creator ?? item.author ?? null,
         item.isoDate ?? null,
@@ -57,7 +61,7 @@ export async function ingestFeed(db, feed, parser) {
          last_status = 'ok',
          ok_count = ok_count + 1
        WHERE id = ?`,
-    ).run(parsed.title ?? null, parsed.link ?? null, feed.id);
+    ).run(parsed.title ?? null, httpUrl(parsed.link), feed.id);
   })();
 
   return { added, skipped };
