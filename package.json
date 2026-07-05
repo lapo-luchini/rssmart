@@ -1,0 +1,28 @@
+{
+  "name": "rssmart",
+  "version": "1.0.0",
+  "description": "Personalized RSS news feed with Ollama classification and vote-based preference learning",
+  "main": "bin/rssmart.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "node --test",
+    "postinstall": "node scripts/vendor.js",
+    "cron": "node bin/rssmart.js cron",
+    "serve": "node bin/rssmart.js serve"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "express": "^5.2.1",
+    "rss-parser": "^3.13.0",
+    "vue": "^3.5.39"
+  },
+  "type": "module",
+  "bin": {
+    "rssmart": "bin/rssmart.js"
+  }
+}

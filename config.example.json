@@ -1,0 +1,23 @@
+{
+  "db": "./data/rssmart.db",
+  "feeds": [
+    { "url": "https://hnrss.org/frontpage", "title": "Hacker News" },
+    { "url": "https://lwn.net/headlines/rss" }
+  ],
+  "ollama": {
+    "url": "http://localhost:11434",
+    "chatModel": "llama3.1",
+    "embedModel": "nomic-embed-text",
+    "timeoutMs": 60000
+  },
+  "enrich": {
+    "batchSize": 30,
+    "maxAttempts": 5,
+    "dupThreshold": 0.87,
+    "dupWindowDays": 14
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8098
+  }
+}
