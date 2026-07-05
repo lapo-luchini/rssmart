@@ -82,10 +82,14 @@ test('a failing feed is recorded and does not abort other feeds', async () => {
       { url: `${rss.url}/good.xml` },
       { url: `${rss.url}/missing.xml` },
     ]);
-    const result = await ingestAll(db, testConfig());
+    const progress = [];
+    const result = await ingestAll(db, testConfig(), { onFeed: (f) => progress.push(f) });
     assert.equal(result.feedsOk, 1);
     assert.equal(result.feedsFailed, 1);
     assert.equal(result.added, 1);
+    assert.equal(progress.length, 2, 'onFeed fires per feed');
+    assert.ok(progress.some((f) => f.added === 1));
+    assert.ok(progress.some((f) => f.error));
 
     const bad = db.prepare('SELECT last_status FROM feeds WHERE url LIKE ?').get('%missing%');
     assert.match(bad.last_status, /^error:/);

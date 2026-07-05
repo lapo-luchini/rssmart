@@ -69,9 +69,10 @@ export async function ingestFeed(db, feed, parser) {
 
 /**
  * Fetch every active feed. One feed failing never aborts the run; the error
- * is recorded on the feed row and in the returned summary.
+ * is recorded on the feed row and in the returned summary. opts.onFeed, if
+ * given, is called as each feed completes (for live CLI progress).
  */
-export async function ingestAll(db, config, { parser } = {}) {
+export async function ingestAll(db, config, { parser, onFeed } = {}) {
   parser ??= new Parser({ timeout: 30_000 });
   const feeds = db
     .prepare('SELECT id, url, title FROM feeds WHERE active = 1')
@@ -85,10 +86,12 @@ export async function ingestAll(db, config, { parser } = {}) {
       summary.added += added;
       summary.skipped += skipped;
       summary.feeds.push({ url: feed.url, added, skipped });
+      onFeed?.({ url: feed.url, added, skipped });
     } catch (err) {
       summary.feedsFailed++;
       summary.errors.push({ url: feed.url, error: err.message });
       summary.feeds.push({ url: feed.url, error: err.message });
+      onFeed?.({ url: feed.url, error: err.message });
       db.prepare(
         `UPDATE feeds SET
            last_fetched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),

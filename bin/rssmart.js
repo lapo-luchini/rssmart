@@ -57,7 +57,12 @@ if (mode === 'cron') {
   const deadline = Date.now() + config.cron.maxRunMs;
   let ingestDone = false;
 
-  const ingestPromise = ingestAll(db, config).finally(() => {
+  const ingestPromise = ingestAll(db, config, {
+    onFeed(f) {
+      if (f.error) console.error(`feed ${f.url}: ${f.error}`);
+      else info(`feed ${f.url}: ${f.added} new`);
+    },
+  }).finally(() => {
     ingestDone = true;
   });
   const llm = new Ollama(config.ollama);
@@ -79,10 +84,6 @@ if (mode === 'cron') {
   });
   const [ingest, enrich] = await Promise.all([ingestPromise, enrichPromise]);
 
-  for (const f of ingest.feeds) {
-    if (f.error) console.error(`feed ${f.url}: ${f.error}`);
-    else info(`feed ${f.url}: ${f.added} new`);
-  }
   info(
     `ingest: ${ingest.added} new article(s) from ${ingest.feedsOk} feed(s)` +
       (ingest.feedsFailed ? `, ${ingest.feedsFailed} feed(s) failed` : ''),
