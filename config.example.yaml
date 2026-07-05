@@ -15,6 +15,9 @@ enrich:
   dupWindowDays: 14   # how far back to look for repeats
   fetchMinChars: 500  # if the RSS entry has less text than this, fetch the
                       # article's own page for the real content (0 = never)
+  allowPrivateFetch: false  # SSRF guard: article links resolving to private/
+                            # LAN addresses are not fetched; enable only if
+                            # you subscribe to intranet feeds you trust
 
 cron:
   maxRunMs: 300000    # time budget per cron run; unfinished classification

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { fetchArticleText } from '../src/fetchpage.js';
+import { fetchArticleText, isPrivateAddress } from '../src/fetchpage.js';
 import { enrichPending } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
@@ -43,16 +43,38 @@ function startPageServer() {
   });
 }
 
+test('SSRF guard: private/loopback targets and exotic schemes are refused', async () => {
+  const site = await startPageServer();
+  try {
+    // Default policy blocks the loopback stub; the explicit opt-in allows it.
+    assert.equal(await fetchArticleText(`${site.url}/article`), null);
+    assert.ok(await fetchArticleText(`${site.url}/article`, { allowPrivate: true }));
+    assert.equal(await fetchArticleText('file:///etc/passwd', { allowPrivate: true }), null);
+    assert.equal(await fetchArticleText('http://10.0.0.1/x'), null);
+    assert.equal(await fetchArticleText('not a url'), null);
+  } finally {
+    await site.close();
+  }
+
+  for (const addr of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.1',
+                      '169.254.1.1', '100.64.0.1', '0.0.0.0', '::1', 'fe80::1', 'fd00::1']) {
+    assert.equal(isPrivateAddress(addr), true, `${addr} is private`);
+  }
+  for (const addr of ['1.1.1.1', '93.184.216.34', '2606:4700::1111']) {
+    assert.equal(isPrivateAddress(addr), false, `${addr} is public`);
+  }
+});
+
 test('fetchArticleText extracts readable content, drops chrome and scripts', async () => {
   const site = await startPageServer();
   try {
-    const page = await fetchArticleText(`${site.url}/article`);
+    const page = await fetchArticleText(`${site.url}/article`, { allowPrivate: true });
     assert.ok(page.text.includes('ZETAFRAME is a revolutionary new framework'));
     assert.ok(!page.text.includes('copyright'));
     assert.ok(!page.html.includes('<script'));
 
-    assert.equal(await fetchArticleText(`${site.url}/missing`), null, '404 -> null');
-    assert.equal(await fetchArticleText('http://127.0.0.1:1/x'), null, 'unreachable -> null');
+    assert.equal(await fetchArticleText(`${site.url}/missing`, { allowPrivate: true }), null, '404 -> null');
+    assert.equal(await fetchArticleText('http://127.0.0.1:1/x', { allowPrivate: true }), null, 'unreachable -> null');
   } finally {
     await site.close();
   }

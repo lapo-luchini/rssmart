@@ -79,6 +79,10 @@ run (after 5 failed attempts an article is parked as unclassifiable).
 - Data lives in the SQLite file set by `config.db` (default `./data/rssmart.db`).
 - Feed HTML is stripped of scripts/event handlers before storage, but this is
   a personal-use reader — don't expose it to the open internet.
+- Origin-page fetching refuses article links that resolve to private, loopback
+  or link-local addresses (feed content is third-party input; this prevents a
+  malicious feed from probing your LAN). `enrich.allowPrivateFetch: true`
+  disables the guard for trusted intranet feeds.
 - Tests: `pnpm test` (stubs both the RSS feeds and the Ollama API; no network).
 
 ## Design

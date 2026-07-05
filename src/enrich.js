@@ -64,13 +64,16 @@ function findDuplicate(vec, articleId, recent, threshold) {
  * The text the LLM sees: the origin page's readable content when the RSS
  * entry is too thin (fetched once and stored), the RSS content otherwise.
  */
-async function articleText(db, article, fetchMinChars) {
+async function articleText(db, article, enrichCfg) {
   if (article.full_content) return stripHtml(article.full_content);
   const rssText = stripHtml(article.content);
+  const { fetchMinChars, allowPrivateFetch } = enrichCfg;
   if (!article.url || !fetchMinChars || rssText.length >= fetchMinChars) {
     return rssText;
   }
-  const page = await fetchArticleText(article.url);
+  const page = await fetchArticleText(article.url, {
+    allowPrivate: allowPrivateFetch,
+  });
   if (!page) return rssText;
   // Persist immediately so a later classify failure doesn't refetch.
   db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
@@ -79,12 +82,12 @@ async function articleText(db, article, fetchMinChars) {
 }
 
 /** Classify + summarize + embed one article and persist the outcome. */
-async function enrichOne(db, llm, article, recent, dupThreshold, fetchMinChars) {
+async function enrichOne(db, llm, article, recent, enrichCfg) {
   const existing = db
     .prepare('SELECT name FROM topics ORDER BY name')
     .all()
     .map((r) => r.name);
-  const text = await articleText(db, article, fetchMinChars);
+  const text = await articleText(db, article, enrichCfg);
 
   const reply = await llm.chatJSON(
     SYSTEM,
@@ -97,7 +100,7 @@ async function enrichOne(db, llm, article, recent, dupThreshold, fetchMinChars) 
   }
 
   const vec = await llm.embed(`${article.title}\n${summary}`);
-  const duplicateOf = findDuplicate(vec, article.id, recent, dupThreshold);
+  const duplicateOf = findDuplicate(vec, article.id, recent, enrichCfg.dupThreshold);
 
   const insertTopic = db.prepare(
     'INSERT INTO topics (name) VALUES (?) ON CONFLICT (name) DO UPDATE SET name = name RETURNING id',
@@ -141,7 +144,7 @@ export async function enrichPending(
   llm,
   { onItem, deadline, waitForMore, pollMs = 1000 } = {},
 ) {
-  const { maxAttempts, dupThreshold, dupWindowDays, fetchMinChars } = config.enrich;
+  const { maxAttempts, dupWindowDays } = config.enrich;
 
   if (!(await llm.available())) {
     return { skipped: true, reason: `ollama not reachable at ${llm.url}` };
@@ -191,7 +194,7 @@ export async function enrichPending(
 
     try {
       const { topics, summary, duplicateOf } =
-        await enrichOne(db, llm, article, recent, dupThreshold, fetchMinChars);
+        await enrichOne(db, llm, article, recent, config.enrich);
       result.enriched++;
       if (duplicateOf) result.duplicates++;
       onItem?.({ id: article.id, title: article.title, topics, summary, duplicateOf });
