@@ -116,9 +116,14 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
   );
   // Models occasionally drift on key names ("topic" for "topics").
   const topics = normalizeTopics(reply.topics ?? reply.topic);
-  const summary = typeof reply.summary === 'string' ? reply.summary.trim() : '';
-  if (topics.length === 0 || !summary) {
+  if (topics.length === 0) {
     throw new Error(`unusable LLM reply: ${JSON.stringify(reply).slice(0, 200)}`);
+  }
+  // At temperature 0 a model that omits the summary will omit it on every
+  // retry too — fall back to the article's opening words instead of parking.
+  let summary = typeof reply.summary === 'string' ? reply.summary.trim() : '';
+  if (!summary) {
+    summary = text.split(/\s+/).slice(0, 45).join(' ') || article.title;
   }
 
   const depthNum = Math.round(Number(reply.depth));

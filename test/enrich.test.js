@@ -70,6 +70,24 @@ test('enrichPending classifies, summarizes and embeds pending articles', async (
   }
 });
 
+test('a missing summary falls back to the article opening (deterministic at temp 0)', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  stub.chat = () => ({ topic: ['software'] }); // no summary, drifted key
+  const id = seedArticle(db, { title: 'Odd reply', content: 'Words one two three.' });
+  try {
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+    const result = await enrichPending(db, config, llm);
+    assert.equal(result.enriched, 1);
+    const art = db.prepare('SELECT summary, status FROM articles WHERE id = ?').get(id);
+    assert.equal(art.status, 'enriched');
+    assert.equal(art.summary, 'Words one two three.');
+  } finally {
+    await stub.close();
+  }
+});
+
 test('near-identical embeddings mark the newer article as duplicate', async () => {
   const db = tempDb();
   const stub = await startOllamaStub();
