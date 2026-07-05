@@ -87,7 +87,7 @@ export function createApp(db, config) {
 
   app.get('/api/articles/:id', (req, res) => {
     const row = db.prepare(`
-      SELECT ${ARTICLE_COLUMNS}, a.content
+      SELECT ${ARTICLE_COLUMNS}, COALESCE(a.full_content, a.content) AS content
       FROM articles a JOIN feeds f ON f.id = a.feed_id
       WHERE a.id = ?
     `).get(req.params.id);

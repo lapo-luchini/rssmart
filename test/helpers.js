@@ -114,7 +114,7 @@ export function testConfig(overrides = {}) {
       embedModel: 'test-embed',
       timeoutMs: 5000,
     },
-    enrich: { maxAttempts: 5, dupThreshold: 0.87, dupWindowDays: 14 },
+    enrich: { maxAttempts: 5, dupThreshold: 0.87, dupWindowDays: 14, fetchMinChars: 500 },
     cron: { maxRunMs: 300_000 },
     server: { host: '127.0.0.1', port: 0 },
     ...overrides,

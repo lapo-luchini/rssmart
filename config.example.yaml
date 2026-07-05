@@ -13,6 +13,8 @@ enrich:
   maxAttempts: 5      # failed classifications before an article is parked
   dupThreshold: 0.87  # cosine similarity above which a story is a repeat
   dupWindowDays: 14   # how far back to look for repeats
+  fetchMinChars: 500  # if the RSS entry has less text than this, fetch the
+                      # article's own page for the real content (0 = never)
 
 cron:
   maxRunMs: 300000    # time budget per cron run; unfinished classification

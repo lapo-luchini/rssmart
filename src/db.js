@@ -49,6 +49,11 @@ const MIGRATIONS = [
     PRIMARY KEY (article_id, topic_id)
   );
   `,
+  // v2 — readable content fetched from the article's origin page, used when
+  // the RSS entry itself is too thin (e.g. Hacker News link-only items)
+  `
+  ALTER TABLE articles ADD COLUMN full_content TEXT;
+  `,
 ];
 
 /** Open (creating if necessary) the SQLite database and apply migrations. */

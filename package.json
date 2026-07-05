@@ -16,8 +16,10 @@
   "author": "Lapo Luchini <lapo@lapo.it>",
   "license": "ISC",
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "better-sqlite3": "^12.11.1",
     "express": "^5.2.1",
+    "jsdom": "^29.1.1",
     "rss-parser": "^3.13.0",
     "vue": "^3.5.39",
     "yaml": "^2.9.0"

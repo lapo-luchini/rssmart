@@ -15,6 +15,7 @@ const DEFAULTS = {
     maxAttempts: 5,
     dupThreshold: 0.87,
     dupWindowDays: 14,
+    fetchMinChars: 500,
   },
   cron: {
     maxRunMs: 300_000,

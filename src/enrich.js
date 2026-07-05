@@ -1,4 +1,5 @@
 import { stripHtml } from './html.js';
+import { fetchArticleText } from './fetchpage.js';
 
 export function cosine(a, b) {
   if (a.length !== b.length) return 0;
@@ -59,13 +60,31 @@ function findDuplicate(vec, articleId, recent, threshold) {
   return duplicateOf;
 }
 
+/**
+ * The text the LLM sees: the origin page's readable content when the RSS
+ * entry is too thin (fetched once and stored), the RSS content otherwise.
+ */
+async function articleText(db, article, fetchMinChars) {
+  if (article.full_content) return stripHtml(article.full_content);
+  const rssText = stripHtml(article.content);
+  if (!article.url || !fetchMinChars || rssText.length >= fetchMinChars) {
+    return rssText;
+  }
+  const page = await fetchArticleText(article.url);
+  if (!page) return rssText;
+  // Persist immediately so a later classify failure doesn't refetch.
+  db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
+    .run(page.html, article.id);
+  return page.text;
+}
+
 /** Classify + summarize + embed one article and persist the outcome. */
-async function enrichOne(db, llm, article, recent, dupThreshold) {
+async function enrichOne(db, llm, article, recent, dupThreshold, fetchMinChars) {
   const existing = db
     .prepare('SELECT name FROM topics ORDER BY name')
     .all()
     .map((r) => r.name);
-  const text = stripHtml(article.content);
+  const text = await articleText(db, article, fetchMinChars);
 
   const reply = await llm.chatJSON(
     SYSTEM,
@@ -122,7 +141,7 @@ export async function enrichPending(
   llm,
   { onItem, deadline, waitForMore, pollMs = 1000 } = {},
 ) {
-  const { maxAttempts, dupThreshold, dupWindowDays } = config.enrich;
+  const { maxAttempts, dupThreshold, dupWindowDays, fetchMinChars } = config.enrich;
 
   if (!(await llm.available())) {
     return { skipped: true, reason: `ollama not reachable at ${llm.url}` };
@@ -132,7 +151,7 @@ export async function enrichPending(
   // the NEXT run) and must not be picked again by this one.
   const tried = [];
   const nextPending = db.prepare(`
-    SELECT id, title, content FROM articles
+    SELECT id, url, title, content, full_content FROM articles
     WHERE status = 'pending' AND enrich_attempts < ?
       AND id NOT IN (SELECT value FROM json_each(?))
     ORDER BY id LIMIT 1
@@ -172,7 +191,7 @@ export async function enrichPending(
 
     try {
       const { topics, summary, duplicateOf } =
-        await enrichOne(db, llm, article, recent, dupThreshold);
+        await enrichOne(db, llm, article, recent, dupThreshold, fetchMinChars);
       result.enriched++;
       if (duplicateOf) result.duplicates++;
       onItem?.({ id: article.id, title: article.title, topics, summary, duplicateOf });

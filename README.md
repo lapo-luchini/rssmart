@@ -30,6 +30,11 @@ Configure in `config.yaml`:
   (`ollama pull nomic-embed-text`).
 - `enrich.dupThreshold` — cosine similarity above which a story counts as a
   repeat (default 0.87; raise it if distinct stories get flagged).
+- `enrich.fetchMinChars` — link-only feeds (e.g. Hacker News) carry almost no
+  text, so when an RSS entry has less than this many characters, the
+  article's origin page is fetched and its readable content extracted
+  (Firefox reader mode) for classification, summarizing, and the expanded
+  view. Set 0 to disable.
 
 ## Usage
 
