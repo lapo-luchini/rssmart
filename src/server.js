@@ -11,7 +11,8 @@ const ARTICLE_COLUMNS = `
   f.title AS feed_title,
   (SELECT group_concat(t.name, '|') FROM article_topics at
    JOIN topics t ON t.id = at.topic_id
-   WHERE at.article_id = a.id) AS topics
+   WHERE at.article_id = a.id) AS topics,
+  (SELECT d.title FROM articles d WHERE d.id = a.duplicate_of) AS duplicate_title
 `;
 
 function rowToArticle(row) {

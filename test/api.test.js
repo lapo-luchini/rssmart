@@ -80,6 +80,8 @@ test('view=all with dupes=1 returns everything, date sorted', async () => {
   const { body } = await get('/api/articles?view=all&dupes=1&sort=date');
   assert.equal(body.total, 5);
   assert.equal(body.articles[0].title, 'Sports story');
+  const dupe = body.articles.find((a) => a.duplicate_of);
+  assert.equal(dupe.duplicate_title, 'Fresh tech story', 'repeats carry the original title');
 });
 
 test('topic, feed, search filters', async () => {

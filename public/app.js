@@ -22,6 +22,7 @@ createApp({
       feeds: [],
       stats: null,
       expandedId: null,
+      flashId: null,
       loading: false,
       error: null,
       prefByTopic: {},
@@ -168,6 +169,25 @@ createApp({
         }
       }
       if (!article.read_at) this.toggleRead(article);
+    },
+
+    // Jump to the original a repeat was matched against: scroll to it when
+    // it's in the current list, otherwise search for it across everything.
+    async goToOriginal(article) {
+      if (!this.articles.some((a) => a.id === article.duplicate_of)) {
+        this.view = 'all';
+        this.topic = '';
+        this.feedId = '';
+        this.q = article.duplicate_title || '';
+        await this.reload();
+      }
+      this.$nextTick(() => {
+        const el = document.getElementById(`article-${article.duplicate_of}`);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        this.flashId = article.duplicate_of;
+        setTimeout(() => (this.flashId = null), 1600);
+      });
     },
 
     // Preference tint: red (-1) through neutral gray (0) to green (+1).

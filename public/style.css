@@ -177,6 +177,26 @@ body {
   font-size: 0.68rem;
 }
 
+.flag-link {
+  font-family: var(--mono);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flag-link:hover { color: var(--ink); border-color: var(--muted); }
+
+.story.flash { animation: flash 1.6s ease-out; }
+
+@keyframes flash {
+  0%, 40% { background: #fdf6dd; }
+  100% { background: transparent; }
+}
+
 .story-title { margin: 0.25rem 0 0; }
 
 .story-title .expander {
@@ -307,7 +327,7 @@ body {
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
+  * { transition: none !important; animation: none !important; }
 }
 
 @media (max-width: 560px) {

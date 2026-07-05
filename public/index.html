@@ -47,15 +47,17 @@
   <main>
     <p v-if="error" class="notice error-notice">{{ error }}</p>
 
-    <article v-for="a in articles" :key="a.id"
-             class="story" :class="{ read: a.read_at, expanded: expandedId === a.id }"
+    <article v-for="a in articles" :key="a.id" :id="'article-' + a.id"
+             class="story" :class="{ read: a.read_at, expanded: expandedId === a.id, flash: flashId === a.id }"
              :style="edgeStyle(a)">
       <div class="story-meta">
         <span class="score" :style="{ color: tint(a.score, 78) }"
               :title="'interest score ' + a.score.toFixed(2)">{{ fmtScore(a.score) }}</span>
         <span class="source">{{ a.feed_title || 'feed' }}</span>
         <time :datetime="a.published_at || a.created_at">{{ ago(a.published_at || a.created_at) }}</time>
-        <span v-if="a.duplicate_of" class="flag" :title="'repeat of story #' + a.duplicate_of">repeat</span>
+        <button v-if="a.duplicate_of" class="flag flag-link"
+                :title="'repeat of: ' + (a.duplicate_title || '#' + a.duplicate_of)"
+                @click="goToOriginal(a)">repeat of: {{ a.duplicate_title || '#' + a.duplicate_of }}</button>
         <span v-if="a.status === 'pending'" class="flag" title="waiting for the next classification run">new</span>
       </div>
 
