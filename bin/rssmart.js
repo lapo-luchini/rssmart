@@ -15,7 +15,7 @@ Modes:
   serve   Start the web UI + API server.
 
 Options:
-  --config <path>   Config file (default: $RSSMART_CONFIG or ./config.json)
+  --config <path>   Config file (default: $RSSMART_CONFIG or ./config.yaml)
   --port <n>        Override server port (serve mode)
   --help            Show this help
 `;

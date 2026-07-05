@@ -1,0 +1,25 @@
+# rssmart configuration — copy to config.yaml (gitignored) and edit.
+
+# SQLite database; relative paths resolve against this file's directory.
+db: ./data/rssmart.db
+
+feeds:
+  - url: https://hnrss.org/frontpage
+    title: Hacker News          # title is optional (taken from the feed itself)
+  - https://lwn.net/headlines/rss   # plain URL strings work too
+
+ollama:
+  url: http://localhost:11434   # your network-local Ollama instance
+  chatModel: llama3.1           # any instruct model, for topics + summaries
+  embedModel: nomic-embed-text  # embedding model, for duplicate detection
+  timeoutMs: 60000
+
+enrich:
+  batchSize: 30       # max articles classified per cron run
+  maxAttempts: 5      # failed classifications before an article is parked
+  dupThreshold: 0.87  # cosine similarity above which a story is a repeat
+  dupWindowDays: 14   # how far back to look for repeats
+
+server:
+  host: 0.0.0.0
+  port: 8098

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import YAML from 'yaml';
 
 const DEFAULTS = {
   db: './data/rssmart.db',
@@ -24,12 +25,13 @@ const DEFAULTS = {
 
 /**
  * Load configuration. Precedence: explicit path arg (--config) >
- * RSSMART_CONFIG env var > ./config.json in the current directory.
+ * RSSMART_CONFIG env var > ./config.yaml in the current directory.
+ * YAML is a superset of JSON, so a JSON config file also loads fine.
  * Relative paths inside the config (db) resolve against the config file's
  * directory, so cron jobs work regardless of their working directory.
  */
 export function loadConfig(path) {
-  const file = path ?? process.env.RSSMART_CONFIG ?? 'config.json';
+  const file = path ?? process.env.RSSMART_CONFIG ?? 'config.yaml';
   let raw;
   try {
     raw = readFileSync(file, 'utf8');
@@ -38,9 +40,12 @@ export function loadConfig(path) {
   }
   let user;
   try {
-    user = JSON.parse(raw);
+    user = YAML.parse(raw);
   } catch (err) {
-    throw new Error(`config file "${file}" is not valid JSON: ${err.message}`);
+    throw new Error(`config file "${file}" is not valid YAML: ${err.message}`);
+  }
+  if (!user || typeof user !== 'object') {
+    throw new Error(`config file "${file}" must contain a YAML mapping`);
   }
 
   const config = {

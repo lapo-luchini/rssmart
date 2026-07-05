@@ -1,5 +1,6 @@
 node_modules/
 data/
+config.yaml
 config.json
 public/vendor/
 *.db

@@ -17,12 +17,12 @@ are detected by cosine similarity of embeddings against recent articles.
 
 ```sh
 pnpm install
-cp config.example.json config.json   # then edit
+cp config.example.yaml config.yaml   # then edit; config.yaml is gitignored
 ```
 
-Configure in `config.json`:
+Configure in `config.yaml`:
 
-- `feeds` — list of `{ "url": ..., "title": optional }` (or plain URL strings).
+- `feeds` — list of `{url, title?}` entries (or plain URL strings).
   Removing a feed deactivates it; its articles are kept.
 - `ollama.url` — your Ollama instance, e.g. `http://192.168.1.10:11434`.
 - `ollama.chatModel` — any instruct model, e.g. `llama3.1`, `qwen3`.
