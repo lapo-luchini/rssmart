@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rssmart</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#128225;</text></svg>">
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <header class="masthead">
+    <h1>rssmart</h1>
+    <p class="wire-stats" v-if="stats">
+      {{ stats.unread }} unread · {{ stats.total }} total<span v-if="stats.pending"> · {{ stats.pending }} awaiting classification</span><span v-if="stats.errors"> · {{ stats.errors }} unclassifiable</span>
+    </p>
+  </header>
+
+  <nav class="toolbar">
+    <div class="tabs" role="tablist">
+      <button v-for="v in views" :key="v.id" role="tab"
+              :aria-selected="view === v.id"
+              :class="{ active: view === v.id }"
+              @click="setView(v.id)">{{ v.label }}</button>
+    </div>
+    <div class="filters">
+      <select v-model="topic" @change="reload" aria-label="Filter by topic">
+        <option value="">all topics</option>
+        <option v-for="t in topics" :key="t.id" :value="t.name">{{ t.name }}</option>
+      </select>
+      <select v-model="feedId" @change="reload" aria-label="Filter by feed">
+        <option value="">all feeds</option>
+        <option v-for="f in feeds" :key="f.id" :value="f.id">{{ f.title || f.url }}</option>
+      </select>
+      <select v-model="sort" @change="reload" aria-label="Sort order">
+        <option value="score">by interest</option>
+        <option value="date">by date</option>
+      </select>
+      <input type="search" v-model="q" placeholder="search…" aria-label="Search articles">
+      <label class="dupes-toggle">
+        <input type="checkbox" v-model="dupes" @change="reload"> repeats
+      </label>
+    </div>
+  </nav>
+
+  <main>
+    <p v-if="error" class="notice error-notice">{{ error }}</p>
+
+    <article v-for="a in articles" :key="a.id"
+             class="story" :class="{ read: a.read_at, expanded: expandedId === a.id }"
+             :style="edgeStyle(a)">
+      <div class="story-meta">
+        <span class="score" :style="{ color: tint(a.score, 78) }"
+              :title="'interest score ' + a.score.toFixed(2)">{{ fmtScore(a.score) }}</span>
+        <span class="source">{{ a.feed_title || 'feed' }}</span>
+        <time :datetime="a.published_at || a.created_at">{{ ago(a.published_at || a.created_at) }}</time>
+        <span v-if="a.duplicate_of" class="flag" :title="'repeat of story #' + a.duplicate_of">repeat</span>
+        <span v-if="a.status === 'pending'" class="flag" title="waiting for the next classification run">new</span>
+      </div>
+
+      <h2 class="story-title">
+        <button class="expander" @click="toggle(a)" :aria-expanded="expandedId === a.id">{{ a.title }}</button>
+      </h2>
+
+      <p class="story-summary" v-if="a.summary">{{ a.summary }}</p>
+
+      <div class="story-foot">
+        <span class="chips">
+          <button v-for="t in a.topics" :key="t" class="chip"
+                  :style="chipStyle(t)" :title="'filter by ' + t"
+                  @click="topic = t; reload()">{{ t }}</button>
+        </span>
+        <span class="actions">
+          <button class="vote up" :class="{ on: a.vote === 1 }"
+                  @click="vote(a, 1)" title="more like this" aria-label="More like this">▲</button>
+          <button class="vote down" :class="{ on: a.vote === -1 }"
+                  @click="vote(a, -1)" title="less like this" aria-label="Less like this">▼</button>
+          <button class="mark" @click="toggleRead(a)">{{ a.read_at ? 'unread' : 'mark read' }}</button>
+          <a v-if="a.url" class="mark" :href="a.url" target="_blank" rel="noopener">open ↗</a>
+        </span>
+      </div>
+
+      <div v-if="expandedId === a.id" class="story-body">
+        <div v-if="a.content" v-html="a.content"></div>
+        <p v-else class="notice">This feed carries no article body. Use “open ↗” to read at the source.</p>
+      </div>
+    </article>
+
+    <p v-if="!loading && articles.length === 0 && !error" class="notice">
+      {{ emptyMessage }}
+    </p>
+
+    <button v-if="articles.length < total" class="load-more" @click="loadMore" :disabled="loading">
+      {{ loading ? 'loading…' : `more (${articles.length} of ${total})` }}
+    </button>
+  </main>
+
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
