@@ -16,7 +16,7 @@ are detected by cosine similarity of embeddings against recent articles.
 ## Setup
 
 ```sh
-npm install
+pnpm install
 cp config.example.json config.json   # then edit
 ```
 
@@ -65,7 +65,7 @@ run (after 5 failed attempts an article is parked as unclassifiable).
 - Data lives in the SQLite file set by `config.db` (default `./data/rssmart.db`).
 - Feed HTML is stripped of scripts/event handlers before storage, but this is
   a personal-use reader — don't expose it to the open internet.
-- Tests: `npm test` (stubs both the RSS feeds and the Ollama API; no network).
+- Tests: `pnpm test` (stubs both the RSS feeds and the Ollama API; no network).
 
 ## Design
 
