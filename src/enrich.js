@@ -175,21 +175,25 @@ export async function enrichPending(
     WHERE id = ?
   `);
 
+  // Pick the next pending article, polling while ingestion may add more.
+  // Distinguishes a drained queue ({}) from work cut off by the deadline
+  // ({timedOut}) so an on-time finish isn't reported as a timeout.
+  const nextArticle = async () => {
+    while (true) {
+      const article = nextPending.get(maxAttempts, JSON.stringify(tried));
+      const expired = deadline && Date.now() >= deadline;
+      if (article) return expired ? { timedOut: true } : { article };
+      if (!waitForMore?.() || expired) return {};
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+  };
+
   const result = { enriched: 0, failed: 0, duplicates: 0, errors: [], timedOut: false };
 
   while (true) {
-    if (deadline && Date.now() >= deadline) {
-      result.timedOut = true;
-      break;
-    }
-    const article = nextPending.get(maxAttempts, JSON.stringify(tried));
-    if (!article) {
-      if (waitForMore?.()) {
-        await new Promise((r) => setTimeout(r, pollMs));
-        continue;
-      }
-      break;
-    }
+    const { article, timedOut } = await nextArticle();
+    if (timedOut) result.timedOut = true;
+    if (!article) break;
     tried.push(article.id);
 
     try {
