@@ -21,22 +21,40 @@ export function bufToVec(buf) {
 
 const SYSTEM = 'You are a news classification assistant. Always answer with a single JSON object and nothing else.';
 
-function classifyPrompt(existingTopics, title, text) {
+function classifyPrompt(existingTopics, title, text, maxInputChars) {
   return `Classify this news article and write a very short preview.
 
 Existing topics: ${existingTopics.length ? existingTopics.join(', ') : '(none yet)'}
 
 Rules:
 - "topics": an array of 1 to 3 topics. Strongly prefer topics from the existing list; only if none fit, invent at most one new topic name (1-2 words, lowercase English).
-- "summary": a preview of at most 50 words, plain text, factual, same language as the article.
+- "summary": a preview of at most 50 words, plain text, factual, same language as the article. Cover the article as a whole, not just its opening.
 
 Article title: ${title}
-Article content: ${text.slice(0, 2000)}
+Article content: ${sampleText(text, maxInputChars)}
 
 Answer with JSON: {"topics": ["..."], "summary": "..."}`;
 }
 
+/**
+ * Fit text into budget chars. Long articles keep their head AND tail — a
+ * long essay's opening often doesn't name its real subject, its conclusion
+ * almost always does.
+ */
+export function sampleText(text, budget) {
+  if (text.length <= budget) return text;
+  const head = Math.floor(budget * 0.6);
+  const tail = budget - head;
+  return `${text.slice(0, head)}\n[... middle of the article omitted ...]\n${text.slice(-tail)}`;
+}
+
+/** Context window needed for the prompt (~3 chars/token) plus headroom. */
+function contextTokens(maxInputChars) {
+  return Math.max(4096, Math.ceil((maxInputChars / 3 + 1000) / 1024) * 1024);
+}
+
 function normalizeTopics(topics) {
+  if (typeof topics === 'string') topics = [topics];
   if (!Array.isArray(topics)) return [];
   return [...new Set(
     topics
@@ -89,11 +107,14 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     .map((r) => r.name);
   const text = await articleText(db, article, enrichCfg);
 
+  const { maxInputChars } = enrichCfg;
   const reply = await llm.chatJSON(
     SYSTEM,
-    classifyPrompt(existing, article.title, text),
+    classifyPrompt(existing, article.title, text, maxInputChars),
+    { numCtx: contextTokens(maxInputChars) },
   );
-  const topics = normalizeTopics(reply.topics);
+  // Models occasionally drift on key names ("topic" for "topics").
+  const topics = normalizeTopics(reply.topics ?? reply.topic);
   const summary = typeof reply.summary === 'string' ? reply.summary.trim() : '';
   if (topics.length === 0 || !summary) {
     throw new Error(`unusable LLM reply: ${JSON.stringify(reply).slice(0, 200)}`);

@@ -53,12 +53,14 @@ export class Ollama {
   }
 
   /** Single-turn chat forced into JSON mode; returns the parsed object. */
-  async chatJSON(system, prompt) {
+  async chatJSON(system, prompt, { numCtx } = {}) {
     const data = await this.#post('/api/chat', {
       model: this.chatModel,
       stream: false,
       format: 'json',
-      options: { temperature: 0 },
+      // Ollama's default context is small (4096); long prompts must ask
+      // for more or they get silently truncated.
+      options: { temperature: 0, ...(numCtx ? { num_ctx: numCtx } : {}) },
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: prompt },

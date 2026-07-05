@@ -120,6 +120,7 @@ export function testConfig(overrides = {}) {
       dupWindowDays: 14,
       fetchMinChars: 500,
       allowPrivateFetch: true, // test stubs listen on loopback
+      maxInputChars: 8000,
     },
     cron: { maxRunMs: 300_000 },
     server: { host: '127.0.0.1', port: 0 },

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
-import { enrichPending, cosine, bufToVec } from '../src/enrich.js';
+import { enrichPending, cosine, bufToVec, sampleText } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
 
 function seedArticle(db, { title, content = 'body' }) {
@@ -11,6 +11,16 @@ function seedArticle(db, { title, content = 'body' }) {
     .run(`g-${title}`, title, content);
   return Number(lastInsertRowid);
 }
+
+test('sampleText keeps short text whole, long text keeps head and tail', () => {
+  assert.equal(sampleText('short', 100), 'short');
+  const long = 'A'.repeat(900) + 'B'.repeat(900) + 'C'.repeat(900);
+  const sampled = sampleText(long, 1000);
+  assert.ok(sampled.startsWith('AAA'), 'head kept');
+  assert.ok(sampled.endsWith('CCC'), 'tail kept');
+  assert.ok(sampled.includes('omitted'), 'gap marked');
+  assert.ok(sampled.length < 1100, 'stays near budget');
+});
 
 test('cosine similarity basics', () => {
   assert.equal(cosine([1, 0], [1, 0]), 1);
@@ -46,11 +56,13 @@ test('enrichPending classifies, summarizes and embeds pending articles', async (
     `).all(id).map((r) => r.name);
     assert.deepEqual(topics, ['linux', 'security'], 'topics normalized to lowercase');
 
-    // The prompt advertises existing topics to later classifications.
+    // The prompt advertises existing topics to later classifications, and
+    // the request sizes the context window for the configured input length.
     stub.calls.chat.length = 0;
     seedArticle(db, { title: 'Another one' });
     await enrichPending(db, config, llm);
     assert.match(stub.calls.chat[0].messages[1].content, /linux, security/);
+    assert.ok(stub.calls.chat[0].options.num_ctx >= 4096);
   } finally {
     await stub.close();
   }
