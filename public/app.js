@@ -10,11 +10,11 @@ createApp({
         { id: 'unread', label: 'Unread' },
         { id: 'all', label: 'All' },
       ],
-      view: 'interesting',
+      view: 'unread',
       topic: '',
       feedId: '',
       q: '',
-      sort: 'score',
+      sort: 'date',
       dupes: false,
       articles: [],
       total: 0,
@@ -44,7 +44,7 @@ createApp({
 
     emptyMessage() {
       if (this.q || this.topic || this.feedId) return 'Nothing matches these filters.';
-      if (this.view === 'all') return 'No articles yet. Add feeds to config.json and run: rssmart cron';
+      if (this.view === 'all') return 'No articles yet. Add feeds in the Feeds tab and run: rssmart cron';
       return 'All caught up. New articles arrive on the next cron run.';
     },
   },
@@ -57,6 +57,10 @@ createApp({
   },
 
   created() {
+    // Hash routes (#/unread, #/feeds, ...): bookmarkable tabs, working
+    // back/forward, and a reload stays on the current tab.
+    this.applyRoute(location.hash, { replace: true });
+    window.addEventListener('hashchange', () => this.applyRoute(location.hash));
     this.reload();
     this.loadSidebarData();
   },
@@ -130,16 +134,38 @@ createApp({
       }
     },
 
+    currentRoute() {
+      return this.panel ?? this.view;
+    },
+
+    syncHash() {
+      const hash = `#/${this.currentRoute()}`;
+      if (location.hash !== hash) location.hash = hash;
+    },
+
+    applyRoute(hash, { replace = false } = {}) {
+      const route = hash.replace(/^#\//, '');
+      if (replace && !['interesting', 'unread', 'all', 'topics', 'feeds'].includes(route)) {
+        history.replaceState(null, '', `#/${this.currentRoute()}`);
+        return;
+      }
+      if (route === this.currentRoute()) return;
+      if (route === 'topics' || route === 'feeds') this.openPanel(route);
+      else if (['interesting', 'unread', 'all'].includes(route)) this.setView(route);
+    },
+
     setView(v) {
       this.panel = null;
       this.view = v;
       this.sort = v === 'interesting' ? 'score' : 'date';
+      this.syncHash();
       this.reload();
     },
 
     openPanel(name) {
       this.panel = name;
       this.feedNotice = '';
+      this.syncHash();
       this.loadSidebarData();
     },
 
