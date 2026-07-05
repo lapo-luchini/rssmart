@@ -17,6 +17,9 @@ Modes:
 Options:
   --config <path>   Config file (default: $RSSMART_CONFIG or ./config.yaml)
   --port <n>        Override server port (serve mode)
+  -v, --verbose     Cron mode: report progress (default is silent on success,
+                    errors on stderr — safe for real cron)
+  --debug           Like --verbose, plus generated summaries
   --help            Show this help
 `;
 
@@ -25,6 +28,8 @@ const { values, positionals } = parseArgs({
   options: {
     config: { type: 'string' },
     port: { type: 'string' },
+    verbose: { type: 'boolean', short: 'v' },
+    debug: { type: 'boolean' },
     help: { type: 'boolean' },
   },
 });
@@ -39,24 +44,43 @@ const config = loadConfig(values.config);
 const db = openDb(config.db);
 
 if (mode === 'cron') {
+  // Cron etiquette: silent on success, errors on stderr. --verbose/--debug
+  // narrate progress for manual runs.
+  const verbose = values.verbose || values.debug;
+  const info = (...args) => verbose && console.log(...args);
+
   syncFeeds(db, config.feeds);
 
   const ingest = await ingestAll(db, config);
-  console.log(
+  for (const f of ingest.feeds) {
+    if (f.error) console.error(`feed ${f.url}: ${f.error}`);
+    else info(`feed ${f.url}: ${f.added} new`);
+  }
+  info(
     `ingest: ${ingest.added} new article(s) from ${ingest.feedsOk} feed(s)` +
       (ingest.feedsFailed ? `, ${ingest.feedsFailed} feed(s) failed` : ''),
   );
-  for (const e of ingest.errors) console.error(`  feed ${e.url}: ${e.error}`);
 
   const llm = new Ollama(config.ollama);
-  const enrich = await enrichPending(db, config, llm);
+  const enrich = await enrichPending(db, config, llm, {
+    onItem(item) {
+      if (item.error) {
+        console.error(`article #${item.id} "${item.title}": ${item.error}`);
+        return;
+      }
+      info(
+        `#${item.id} ${item.title} -> [${item.topics.join(', ')}]` +
+          (item.duplicateOf ? ` (repeat of #${item.duplicateOf})` : ''),
+      );
+      if (values.debug) info(`    ${item.summary}`);
+    },
+  });
   if (enrich.skipped) {
-    console.log(`enrich: skipped (${enrich.reason}); articles stay pending`);
+    console.error(`enrich skipped: ${enrich.reason}; articles stay pending`);
   } else {
-    console.log(
+    info(
       `enrich: ${enrich.enriched} enriched (${enrich.duplicates} duplicate(s)), ${enrich.failed} failed`,
     );
-    for (const e of enrich.errors) console.error(`  article #${e.id}: ${e.error}`);
   }
 
   recomputeScores(db);

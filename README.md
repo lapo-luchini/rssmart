@@ -41,10 +41,15 @@ node bin/rssmart.js serve    # web UI on http://0.0.0.0:8098
 `--config <path>` (or `RSSMART_CONFIG`) selects the config file;
 `--port <n>` overrides the serve port.
 
+`cron` follows cron etiquette: silent when all is well, problems on stderr
+(so real cron only emails you on failure). To watch it work when running
+manually, add `--verbose` (per-feed and per-article progress) or `--debug`
+(also prints the generated summaries).
+
 Schedule ingestion with system cron, e.g. every 30 minutes:
 
 ```cron
-*/30 * * * * cd /project/rssmart && node bin/rssmart.js cron >> /var/log/rssmart.log 2>&1
+*/30 * * * * cd /project/rssmart && node bin/rssmart.js cron
 ```
 
 `cron` and `serve` can run concurrently (SQLite WAL). If Ollama is down,

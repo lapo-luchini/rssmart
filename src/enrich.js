@@ -50,8 +50,10 @@ function normalizeTopics(topics) {
  * ~50-word summary, embed, and mark near-duplicates of recent articles.
  * Failures leave the article pending for the next run, up to
  * enrich.maxAttempts, after which it is parked as status='error'.
+ * opts.onItem, if given, is called after each article (LLM calls are slow;
+ * this lets the CLI report progress live).
  */
-export async function enrichPending(db, config, llm) {
+export async function enrichPending(db, config, llm, { onItem } = {}) {
   const { batchSize, maxAttempts, dupThreshold, dupWindowDays } = config.enrich;
 
   if (!(await llm.available())) {
@@ -140,10 +142,12 @@ export async function enrichPending(db, config, llm) {
       recent.push({ id: article.id, vec });
       result.enriched++;
       if (duplicateOf) result.duplicates++;
+      onItem?.({ id: article.id, title: article.title, topics, summary, duplicateOf });
     } catch (err) {
       saveFailure.run(maxAttempts, article.id);
       result.failed++;
       result.errors.push({ id: article.id, error: err.message });
+      onItem?.({ id: article.id, title: article.title, error: err.message });
     }
   }
 

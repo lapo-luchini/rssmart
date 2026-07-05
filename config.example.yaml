@@ -3,11 +3,6 @@
 # SQLite database; relative paths resolve against this file's directory.
 db: ./data/rssmart.db
 
-feeds:
-  - url: https://hnrss.org/frontpage
-    title: Hacker News          # title is optional (taken from the feed itself)
-  - https://lwn.net/headlines/rss   # plain URL strings work too
-
 ollama:
   url: http://localhost:11434   # your network-local Ollama instance
   chatModel: llama3.1           # any instruct model, for topics + summaries
@@ -23,3 +18,9 @@ enrich:
 server:
   host: 0.0.0.0
   port: 8098
+
+# Keep feeds last: this list tends to grow long.
+feeds:
+  - url: https://hnrss.org/frontpage
+    title: Hacker News          # title is optional (taken from the feed itself)
+  - https://lwn.net/headlines/rss   # plain URL strings work too
