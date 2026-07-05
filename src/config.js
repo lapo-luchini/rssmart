@@ -17,7 +17,7 @@ const DEFAULTS = {
     dupWindowDays: 14,
     fetchMinChars: 500,
     allowPrivateFetch: false,
-    maxInputChars: 8000,
+    maxInputChars: 32_000,
   },
   cron: {
     maxRunMs: 300_000,

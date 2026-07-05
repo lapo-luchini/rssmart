@@ -18,10 +18,11 @@ enrich:
   allowPrivateFetch: false  # SSRF guard: article links resolving to private/
                             # LAN addresses are not fetched; enable only if
                             # you subscribe to intranet feeds you trust
-  maxInputChars: 8000 # how much article text the LLM reads for topics and
-                      # the preview. Reading is fast (generation dominates
-                      # cost), so bigger mostly costs VRAM: the context
-                      # window is sized automatically to fit
+  maxInputChars: 32000  # how much article text the LLM reads for topics and
+                        # the preview (longer articles keep head + tail).
+                        # Reading is fast — 32k costs ~25% more time than 8k —
+                        # but very large values degrade small models'
+                        # instruction-following before they cost time
 
 cron:
   maxRunMs: 300000    # time budget per cron run; unfinished classification
