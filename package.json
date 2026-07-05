@@ -13,7 +13,7 @@
     "serve": "node bin/rssmart.js serve"
   },
   "keywords": [],
-  "author": "",
+  "author": "Lapo Luchini <lapo@lapo.it>",
   "license": "ISC",
   "dependencies": {
     "better-sqlite3": "^12.11.1",
