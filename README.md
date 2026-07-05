@@ -32,10 +32,6 @@ cp config.example.yaml config.yaml   # then edit; config.yaml is gitignored
 
 Configure in `config.yaml`:
 
-- `feeds` — list of `{url, title?}` entries (or plain URL strings). These are
-  only seeds: the feed list itself lives in the database and is managed from
-  the web UI ("feeds" button — add, enable/disable, OPML import/export),
-  so removing an entry here changes nothing.
 - `ollama.url` — your Ollama instance, e.g. `http://192.168.1.10:11434`.
 - `ollama.chatModel` — any instruct model, e.g. `llama3.1`, `qwen3`.
 - `ollama.embedModel` — an embedding model, e.g. `nomic-embed-text`
@@ -69,10 +65,14 @@ Schedule ingestion with system cron, e.g. every 30 minutes:
 */30 * * * * cd /project/rssmart && node bin/rssmart.js cron
 ```
 
+Feeds themselves are managed from the web UI (Feeds tab); a config `feeds:`
+list is optional and only seeds the database.
+
 Each cron run fetches feeds and classifies articles in parallel (one is
 network-bound, the other Ollama-bound) within a time budget
-(`cron.maxRunMs`, default 5 minutes); classification work that doesn't fit
-continues on the next run. `cron` and `serve` can run concurrently
+(`cron.maxRunMs`, default 5 minutes; `--max-run <minutes>` overrides it,
+`--max-run 0` removes it for long backfills); classification work that
+doesn't fit continues on the next run. `cron` and `serve` can run concurrently
 (SQLite WAL). If Ollama is down,
 ingestion still works; articles stay `pending` and are classified on a later
 run (after 5 failed attempts an article is parked as unclassifiable).

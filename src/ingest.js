@@ -79,19 +79,21 @@ export async function ingestAll(db, config, { parser, onFeed } = {}) {
     .all();
 
   const summary = { feedsOk: 0, feedsFailed: 0, added: 0, skipped: 0, errors: [], feeds: [] };
+  let index = 0;
   for (const feed of feeds) {
+    index++;
     try {
       const { added, skipped } = await ingestFeed(db, feed, parser);
       summary.feedsOk++;
       summary.added += added;
       summary.skipped += skipped;
       summary.feeds.push({ url: feed.url, added, skipped });
-      onFeed?.({ url: feed.url, added, skipped });
+      onFeed?.({ url: feed.url, added, skipped, index, total: feeds.length });
     } catch (err) {
       summary.feedsFailed++;
       summary.errors.push({ url: feed.url, error: err.message });
       summary.feeds.push({ url: feed.url, error: err.message });
-      onFeed?.({ url: feed.url, error: err.message });
+      onFeed?.({ url: feed.url, error: err.message, index, total: feeds.length });
       db.prepare(
         `UPDATE feeds SET
            last_fetched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),

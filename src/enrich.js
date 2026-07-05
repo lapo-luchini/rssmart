@@ -210,6 +210,18 @@ export async function enrichPending(
   `).all(`-${dupWindowDays} days`)
     .map((r) => ({ id: r.id, vec: bufToVec(r.embedding) }));
 
+  // Queue position for progress display: n = attempted this run, m = n plus
+  // what's still pending (m can grow while ingestion adds articles).
+  const countPending = db.prepare(`
+    SELECT COUNT(*) AS c FROM articles
+    WHERE status = 'pending' AND enrich_attempts < ?
+      AND id NOT IN (SELECT value FROM json_each(?))
+  `);
+  const position = () => ({
+    index: tried.length,
+    total: tried.length + countPending.get(maxAttempts, JSON.stringify(tried)).c,
+  });
+
   const saveFailure = db.prepare(`
     UPDATE articles
     SET enrich_attempts = enrich_attempts + 1,
@@ -243,12 +255,12 @@ export async function enrichPending(
         await enrichOne(db, llm, article, recent, config.enrich);
       result.enriched++;
       if (duplicateOf) result.duplicates++;
-      onItem?.({ id: article.id, title: article.title, topics, summary, depth, duplicateOf });
+      onItem?.({ id: article.id, title: article.title, topics, summary, depth, duplicateOf, ...position() });
     } catch (err) {
       saveFailure.run(maxAttempts, article.id);
       result.failed++;
       result.errors.push({ id: article.id, error: err.message });
-      onItem?.({ id: article.id, title: article.title, error: err.message });
+      onItem?.({ id: article.id, title: article.title, error: err.message, ...position() });
     }
   }
 

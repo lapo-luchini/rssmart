@@ -20,6 +20,8 @@ Options:
   -v, --verbose     Cron mode: report progress (default is silent on success,
                     errors on stderr — safe for real cron)
   --debug           Like --verbose, plus generated summaries
+  --max-run <min>   Cron mode: override the time budget, in minutes
+                    (0 = no limit, e.g. for a long backfill run)
   --help            Show this help
 `;
 
@@ -30,6 +32,7 @@ const { values, positionals } = parseArgs({
     port: { type: 'string' },
     verbose: { type: 'boolean', short: 'v' },
     debug: { type: 'boolean' },
+    'max-run': { type: 'string' },
     help: { type: 'boolean' },
   },
 });
@@ -54,13 +57,21 @@ if (mode === 'cron') {
   // Ingest (network-bound) and enrichment (Ollama-bound) run concurrently.
   // The whole run has a time budget; whatever enrichment doesn't finish
   // stays pending for the next run. Ingestion always covers every feed.
-  const deadline = Date.now() + config.cron.maxRunMs;
+  if (values['max-run'] !== undefined) {
+    const minutes = Number(values['max-run']);
+    if (!Number.isFinite(minutes) || minutes < 0) {
+      console.error(`invalid --max-run "${values['max-run']}": minutes required (0 = no limit)`);
+      process.exit(2);
+    }
+    config.cron.maxRunMs = minutes === 0 ? null : minutes * 60_000;
+  }
+  const deadline = config.cron.maxRunMs ? Date.now() + config.cron.maxRunMs : undefined;
   let ingestDone = false;
 
   const ingestPromise = ingestAll(db, config, {
     onFeed(f) {
-      if (f.error) console.error(`feed ${f.url}: ${f.error}`);
-      else info(`feed ${f.url}: ${f.added} new`);
+      if (f.error) console.error(`[${f.index}/${f.total}] feed ${f.url}: ${f.error}`);
+      else info(`[${f.index}/${f.total}] feed ${f.url}: ${f.added} new`);
     },
   }).finally(() => {
     ingestDone = true;
@@ -71,11 +82,11 @@ if (mode === 'cron') {
     waitForMore: () => !ingestDone,
     onItem(item) {
       if (item.error) {
-        console.error(`article #${item.id} "${item.title}": ${item.error}`);
+        console.error(`[${item.index}/${item.total}] article #${item.id} "${item.title}": ${item.error}`);
         return;
       }
       info(
-        `#${item.id} ${item.title} -> [${item.topics.join(', ')}]` +
+        `[${item.index}/${item.total}] #${item.id} ${item.title} -> [${item.topics.join(', ')}]` +
           (item.depth ? ` depth ${item.depth}/5` : '') +
           (item.duplicateOf ? ` (repeat of #${item.duplicateOf})` : ''),
       );

@@ -90,6 +90,7 @@ test('a failing feed is recorded and does not abort other feeds', async () => {
     assert.equal(progress.length, 2, 'onFeed fires per feed');
     assert.ok(progress.some((f) => f.added === 1));
     assert.ok(progress.some((f) => f.error));
+    assert.deepEqual(progress.map((f) => [f.index, f.total]), [[1, 2], [2, 2]]);
 
     const bad = db.prepare('SELECT last_status FROM feeds WHERE url LIKE ?').get('%missing%');
     assert.match(bad.last_status, /^error:/);

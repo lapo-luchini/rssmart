@@ -103,7 +103,11 @@ test('near-identical embeddings mark the newer article as duplicate', async () =
   try {
     const config = testConfig();
     const llm = new Ollama({ ...config.ollama, url: stub.url });
-    const result = await enrichPending(db, config, llm);
+    const progress = [];
+    const result = await enrichPending(db, config, llm, {
+      onItem: (i) => progress.push([i.index, i.total]),
+    });
+    assert.deepEqual(progress, [[1, 3], [2, 3], [3, 3]], 'queue positions reported');
 
     assert.equal(result.enriched, 3);
     assert.equal(result.duplicates, 1);

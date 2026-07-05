@@ -42,8 +42,6 @@ server:
   host: 0.0.0.0
   port: 8098
 
-# Keep feeds last: this list tends to grow long.
-feeds:
-  - url: https://hnrss.org/frontpage
-    title: Hacker News          # title is optional (taken from the feed itself)
-  - https://lwn.net/headlines/rss   # plain URL strings work too
+# Feeds are managed from the web UI (Feeds tab: add, enable/disable, OPML
+# import/export). An optional "feeds:" list of URLs here is seeded into the
+# database on each cron run, but is not required.
