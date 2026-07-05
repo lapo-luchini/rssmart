@@ -22,6 +22,8 @@ createApp({
       feeds: [],
       feedsDetailed: [],
       panel: null, // null = article list, 'topics' | 'feeds' = content tabs
+      topicSort: { key: 'pref', dir: -1 },
+      feedSort: { key: null, dir: -1 }, // null = server order (active first)
       feedForm: { url: '', title: '' },
       feedNotice: '',
       stats: null,
@@ -37,9 +39,24 @@ createApp({
 
   computed: {
     topicsRanked() {
-      return [...this.topics].sort(
-        (a, b) => b.pref - a.pref || a.name.localeCompare(b.name),
-      );
+      const value = (t, key) => ({
+        name: t.name.toLowerCase(),
+        votes: t.up + t.down,
+      }[key] ?? t[key]);
+      return this.sortRows(this.topics, this.topicSort, value);
+    },
+
+    feedsRanked() {
+      if (!this.feedSort.key) return this.feedsDetailed;
+      const value = (f, key) => ({
+        name: (f.title || f.url).toLowerCase(),
+        // "fetches" sorts by error rate so problem feeds surface together
+        errors: f.ok_count + f.error_count
+          ? f.error_count / (f.ok_count + f.error_count)
+          : -1,
+        avg_vote: f.avg_vote ?? -Infinity, // unvoted feeds sort last
+      }[key] ?? f[key]);
+      return this.sortRows(this.feedsDetailed, this.feedSort, value);
     },
 
     emptyMessage() {
@@ -132,6 +149,24 @@ createApp({
       } catch {
         /* header extras are non-essential */
       }
+    },
+
+    sortRows(rows, state, value) {
+      return [...rows].sort((a, b) => {
+        const va = value(a, state.key);
+        const vb = value(b, state.key);
+        const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+        return cmp * state.dir;
+      });
+    },
+
+    setSort(state, key) {
+      if (state.key === key) state.dir = -state.dir;
+      else Object.assign(state, { key, dir: key === 'name' ? 1 : -1 });
+    },
+
+    sortMark(state, key) {
+      return state.key === key ? (state.dir > 0 ? ' ▴' : ' ▾') : '';
     },
 
     currentRoute() {

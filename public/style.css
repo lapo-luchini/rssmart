@@ -146,6 +146,19 @@ body {
 }
 
 .feed-head { color: var(--muted); border-bottom-style: solid; }
+
+.th {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.th:hover { color: var(--ink); }
 .feed-row.inactive .feed-name { opacity: 0.45; }
 
 .feed-name { display: flex; flex-direction: column; min-width: 0; }
