@@ -52,7 +52,11 @@ Schedule ingestion with system cron, e.g. every 30 minutes:
 */30 * * * * cd /project/rssmart && node bin/rssmart.js cron
 ```
 
-`cron` and `serve` can run concurrently (SQLite WAL). If Ollama is down,
+Each cron run fetches feeds and classifies articles in parallel (one is
+network-bound, the other Ollama-bound) within a time budget
+(`cron.maxRunMs`, default 5 minutes); classification work that doesn't fit
+continues on the next run. `cron` and `serve` can run concurrently
+(SQLite WAL). If Ollama is down,
 ingestion still works; articles stay `pending` and are classified on a later
 run (after 5 failed attempts an article is parked as unclassifiable).
 

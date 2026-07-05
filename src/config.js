@@ -12,10 +12,12 @@ const DEFAULTS = {
     timeoutMs: 60_000,
   },
   enrich: {
-    batchSize: 30,
     maxAttempts: 5,
     dupThreshold: 0.87,
     dupWindowDays: 14,
+  },
+  cron: {
+    maxRunMs: 300_000,
   },
   server: {
     host: '0.0.0.0',
@@ -53,6 +55,7 @@ export function loadConfig(path) {
     ...user,
     ollama: { ...DEFAULTS.ollama, ...user.ollama },
     enrich: { ...DEFAULTS.enrich, ...user.enrich },
+    cron: { ...DEFAULTS.cron, ...user.cron },
     server: { ...DEFAULTS.server, ...user.server },
   };
 

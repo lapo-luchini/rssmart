@@ -10,10 +10,13 @@ ollama:
   timeoutMs: 60000
 
 enrich:
-  batchSize: 30       # max articles classified per cron run
   maxAttempts: 5      # failed classifications before an article is parked
   dupThreshold: 0.87  # cosine similarity above which a story is a repeat
   dupWindowDays: 14   # how far back to look for repeats
+
+cron:
+  maxRunMs: 300000    # time budget per cron run; unfinished classification
+                      # work simply continues on the next run
 
 server:
   host: 0.0.0.0

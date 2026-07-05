@@ -51,18 +51,19 @@ if (mode === 'cron') {
 
   syncFeeds(db, config.feeds);
 
-  const ingest = await ingestAll(db, config);
-  for (const f of ingest.feeds) {
-    if (f.error) console.error(`feed ${f.url}: ${f.error}`);
-    else info(`feed ${f.url}: ${f.added} new`);
-  }
-  info(
-    `ingest: ${ingest.added} new article(s) from ${ingest.feedsOk} feed(s)` +
-      (ingest.feedsFailed ? `, ${ingest.feedsFailed} feed(s) failed` : ''),
-  );
+  // Ingest (network-bound) and enrichment (Ollama-bound) run concurrently.
+  // The whole run has a time budget; whatever enrichment doesn't finish
+  // stays pending for the next run. Ingestion always covers every feed.
+  const deadline = Date.now() + config.cron.maxRunMs;
+  let ingestDone = false;
 
+  const ingestPromise = ingestAll(db, config).finally(() => {
+    ingestDone = true;
+  });
   const llm = new Ollama(config.ollama);
-  const enrich = await enrichPending(db, config, llm, {
+  const enrichPromise = enrichPending(db, config, llm, {
+    deadline,
+    waitForMore: () => !ingestDone,
     onItem(item) {
       if (item.error) {
         console.error(`article #${item.id} "${item.title}": ${item.error}`);
@@ -75,11 +76,22 @@ if (mode === 'cron') {
       if (values.debug) info(`    ${item.summary}`);
     },
   });
+  const [ingest, enrich] = await Promise.all([ingestPromise, enrichPromise]);
+
+  for (const f of ingest.feeds) {
+    if (f.error) console.error(`feed ${f.url}: ${f.error}`);
+    else info(`feed ${f.url}: ${f.added} new`);
+  }
+  info(
+    `ingest: ${ingest.added} new article(s) from ${ingest.feedsOk} feed(s)` +
+      (ingest.feedsFailed ? `, ${ingest.feedsFailed} feed(s) failed` : ''),
+  );
   if (enrich.skipped) {
     console.error(`enrich skipped: ${enrich.reason}; articles stay pending`);
   } else {
     info(
-      `enrich: ${enrich.enriched} enriched (${enrich.duplicates} duplicate(s)), ${enrich.failed} failed`,
+      `enrich: ${enrich.enriched} enriched (${enrich.duplicates} duplicate(s)), ${enrich.failed} failed` +
+        (enrich.timedOut ? ' — time budget reached, the rest next run' : ''),
     );
   }
 

@@ -31,6 +31,7 @@ ollama:
   assert.equal(config.ollama.url, 'http://macmini.local:11434');
   assert.equal(config.ollama.embedModel, 'nomic-embed-text', 'default survives partial override');
   assert.equal(config.enrich.dupThreshold, 0.87, 'untouched section keeps defaults');
+  assert.equal(config.cron.maxRunMs, 300_000, 'cron time budget default');
 });
 
 test('JSON is accepted too (YAML superset)', () => {

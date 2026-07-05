@@ -118,6 +118,53 @@ test('LLM failures retry then park the article as error', async () => {
   }
 });
 
+test('an expired deadline stops before touching any article', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  const id = seedArticle(db, { title: 'Never reached' });
+  try {
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+    const result = await enrichPending(db, config, llm, { deadline: Date.now() - 1 });
+    assert.equal(result.timedOut, true);
+    assert.equal(result.enriched, 0);
+    const art = db.prepare('SELECT status, enrich_attempts FROM articles WHERE id = ?').get(id);
+    assert.deepEqual(art, { status: 'pending', enrich_attempts: 0 });
+  } finally {
+    await stub.close();
+  }
+});
+
+test('waitForMore keeps draining articles inserted mid-run', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  try {
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+
+    let ingesting = true;
+    const run = enrichPending(db, config, llm, {
+      waitForMore: () => ingesting,
+      pollMs: 10,
+    });
+    // Simulate a slow feed fetch finishing after enrichment started.
+    setTimeout(() => {
+      seedArticle(db, { title: 'Arrived late' });
+      ingesting = false;
+    }, 30);
+
+    const result = await run;
+    assert.equal(result.enriched, 1);
+    assert.equal(result.timedOut, false);
+    assert.equal(
+      db.prepare('SELECT status FROM articles').get().status,
+      'enriched',
+    );
+  } finally {
+    await stub.close();
+  }
+});
+
 test('unreachable ollama skips enrichment and keeps articles pending', async () => {
   const db = tempDb();
   const id = seedArticle(db, { title: 'Waiting' });
