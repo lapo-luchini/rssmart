@@ -45,9 +45,11 @@ test('ingestAll inserts items once and is idempotent', async () => {
     assert.ok(!art.content.includes('<script>'), 'scripts are stripped');
     assert.ok(art.content.includes('world'));
 
-    const feed = db.prepare('SELECT title, last_status FROM feeds').get();
+    const feed = db.prepare('SELECT title, html_url, last_status, ok_count FROM feeds').get();
     assert.equal(feed.title, 'My Feed', 'feed title backfilled from RSS');
+    assert.equal(feed.html_url, 'https://example.com', 'site link backfilled from channel <link>');
     assert.equal(feed.last_status, 'ok');
+    assert.equal(feed.ok_count, 2);
   } finally {
     await rss.close();
   }

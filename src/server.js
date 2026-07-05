@@ -138,7 +138,7 @@ export function createApp(db, config) {
   });
 
   const feedList = () => db.prepare(`
-    SELECT f.id, f.url, f.title, f.active, f.last_fetched_at, f.last_status,
+    SELECT f.id, f.url, f.title, f.html_url, f.active, f.last_fetched_at, f.last_status,
            f.ok_count, f.error_count,
            COUNT(a.id) AS articles,
            COALESCE(SUM(a.read_at IS NULL), 0) AS unread,
@@ -152,9 +152,11 @@ export function createApp(db, config) {
   `).all();
 
   const upsertFeed = db.prepare(`
-    INSERT INTO feeds (url, title, active) VALUES (?, ?, 1)
+    INSERT INTO feeds (url, title, html_url, active) VALUES (?, ?, ?, 1)
     ON CONFLICT (url) DO UPDATE SET
-      active = 1, title = COALESCE(feeds.title, excluded.title)
+      active = 1,
+      title = COALESCE(feeds.title, excluded.title),
+      html_url = COALESCE(feeds.html_url, excluded.html_url)
   `);
 
   app.get('/api/feeds', (_req, res) => {
@@ -166,7 +168,7 @@ export function createApp(db, config) {
     if (typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) {
       return res.status(400).json({ error: 'url must start with http(s)://' });
     }
-    upsertFeed.run(url.trim(), title?.trim() || null);
+    upsertFeed.run(url.trim(), title?.trim() || null, null);
     res.status(201).json(feedList().find((f) => f.url === url.trim()));
   });
 
@@ -189,14 +191,16 @@ export function createApp(db, config) {
     }
     const found = parseOpml(opml);
     db.transaction(() => {
-      for (const feed of found) upsertFeed.run(feed.url, feed.title ?? null);
+      for (const feed of found) {
+        upsertFeed.run(feed.url, feed.title ?? null, feed.htmlUrl ?? null);
+      }
     })();
     res.json({ found: found.length });
   });
 
   app.get('/api/feeds.opml', (_req, res) => {
     const feeds = db
-      .prepare('SELECT url, title FROM feeds WHERE active = 1 ORDER BY title')
+      .prepare('SELECT url, title, html_url FROM feeds WHERE active = 1 ORDER BY title')
       .all();
     res.type('text/x-opml').send(buildOpml(feeds));
   });

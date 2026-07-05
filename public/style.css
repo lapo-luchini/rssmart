@@ -150,6 +150,9 @@ body {
 .feed-name { display: flex; flex-direction: column; min-width: 0; }
 .feed-name strong { font-weight: 600; }
 
+.feed-site { color: var(--ink); text-decoration: none; }
+.feed-site:hover { text-decoration: underline; }
+
 .feed-url {
   color: var(--muted);
   text-decoration: none;

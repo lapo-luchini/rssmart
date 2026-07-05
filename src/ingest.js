@@ -52,11 +52,12 @@ export async function ingestFeed(db, feed, parser) {
     db.prepare(
       `UPDATE feeds SET
          title = COALESCE(title, ?),
+         html_url = COALESCE(html_url, ?),
          last_fetched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
          last_status = 'ok',
          ok_count = ok_count + 1
        WHERE id = ?`,
-    ).run(parsed.title ?? null, feed.id);
+    ).run(parsed.title ?? null, parsed.link ?? null, feed.id);
   })();
 
   return { added, skipped };

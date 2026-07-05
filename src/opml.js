@@ -26,15 +26,23 @@ export function parseOpml(xml) {
     if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
     seen.add(url);
     const title = /(?:\btitle|\btext)\s*=\s*"([^"]*)"/i.exec(m[0])?.[1];
-    feeds.push({ url, title: title ? decode(title) : undefined });
+    const htmlUrl = /\bhtmlUrl\s*=\s*"([^"]*)"/i.exec(m[0])?.[1];
+    feeds.push({
+      url,
+      title: title ? decode(title) : undefined,
+      htmlUrl: htmlUrl ? decode(htmlUrl) : undefined,
+    });
   }
   return feeds;
 }
 
-/** Build an OPML document from feed rows ({url, title}). */
+/** Build an OPML document from feed rows ({url, title, html_url}). */
 export function buildOpml(feeds) {
   const outlines = feeds
-    .map((f) => `    <outline type="rss" text="${encode(f.title ?? f.url)}" xmlUrl="${encode(f.url)}"/>`)
+    .map((f) =>
+      `    <outline type="rss" text="${encode(f.title ?? f.url)}" xmlUrl="${encode(f.url)}"` +
+      (f.html_url ? ` htmlUrl="${encode(f.html_url)}"` : '') +
+      '/>')
     .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <opml version="2.0">

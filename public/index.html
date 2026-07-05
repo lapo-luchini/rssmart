@@ -57,7 +57,9 @@
     </div>
     <div class="feed-row" v-for="f in feedsDetailed" :key="f.id" :class="{ inactive: !f.active }">
       <span class="feed-name">
-        <strong>{{ f.title || f.url }}</strong>
+        <a v-if="f.html_url" class="feed-site" :href="f.html_url" target="_blank"
+           rel="noopener"><strong>{{ f.title || f.url }}</strong></a>
+        <strong v-else>{{ f.title || f.url }}</strong>
         <a class="feed-url" :href="f.url" target="_blank" rel="noopener">{{ f.url }}</a>
         <em v-if="f.last_status && f.last_status !== 'ok'" class="feed-error">{{ f.last_status }}</em>
       </span>

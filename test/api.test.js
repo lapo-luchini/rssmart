@@ -145,14 +145,18 @@ test('feed management: add, disable, stats, OPML round-trip', async () => {
 
   const imported = await post('/api/feeds/import', {
     opml: `<opml><body>
-      <outline type="rss" text="Imported &amp; Co" xmlUrl="http://imported.example/rss"/>
+      <outline type="rss" text="Imported &amp; Co" xmlUrl="http://imported.example/rss" htmlUrl="http://imported.example/"/>
       <outline type="rss" xmlUrl="ftp://skip.me"/>
     </body></opml>`,
   });
   assert.deepEqual(imported.body, { found: 1 });
 
+  const feed = (await get('/api/feeds')).body.find((f) => f.url === 'http://imported.example/rss');
+  assert.equal(feed.html_url, 'http://imported.example/', 'htmlUrl stored');
+
   const opml = await fetch(`${base}/api/feeds.opml`).then((r) => r.text());
   assert.match(opml, /xmlUrl="http:\/\/imported\.example\/rss"/);
+  assert.match(opml, /htmlUrl="http:\/\/imported\.example\/"/);
   assert.match(opml, /Imported &amp; Co/);
   assert.ok(!opml.includes('new.example'), 'disabled feeds stay out of the export');
 });

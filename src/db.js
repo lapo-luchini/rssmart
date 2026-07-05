@@ -72,6 +72,11 @@ const MIGRATIONS = [
   ALTER TABLE feeds ADD COLUMN ok_count INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE feeds ADD COLUMN error_count INTEGER NOT NULL DEFAULT 0;
   `,
+  // v5 — the feed's human-facing site (OPML htmlUrl); auto-backfilled from
+  // the RSS channel's <link> on fetch
+  `
+  ALTER TABLE feeds ADD COLUMN html_url TEXT;
+  `,
 ];
 
 /** Open (creating if necessary) the SQLite database and apply migrations. */
