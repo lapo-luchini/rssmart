@@ -21,7 +21,7 @@ createApp({
       topics: [],
       feeds: [],
       feedsDetailed: [],
-      showFeeds: false,
+      panel: null, // null = article list, 'topics' | 'feeds' = content tabs
       feedForm: { url: '', title: '' },
       feedNotice: '',
       stats: null,
@@ -36,6 +36,12 @@ createApp({
   },
 
   computed: {
+    topicsRanked() {
+      return [...this.topics].sort(
+        (a, b) => b.pref - a.pref || a.name.localeCompare(b.name),
+      );
+    },
+
     emptyMessage() {
       if (this.q || this.topic || this.feedId) return 'Nothing matches these filters.';
       if (this.view === 'all') return 'No articles yet. Add feeds to config.json and run: rssmart cron';
@@ -125,8 +131,21 @@ createApp({
     },
 
     setView(v) {
+      this.panel = null;
       this.view = v;
       this.sort = v === 'interesting' ? 'score' : 'date';
+      this.reload();
+    },
+
+    openPanel(name) {
+      this.panel = name;
+      this.feedNotice = '';
+      this.loadSidebarData();
+    },
+
+    filterTopic(name) {
+      this.panel = null;
+      this.topic = name;
       this.reload();
     },
 

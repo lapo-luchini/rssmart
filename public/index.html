@@ -20,11 +20,18 @@
   <nav class="toolbar">
     <div class="tabs" role="tablist">
       <button v-for="v in views" :key="v.id" role="tab"
-              :aria-selected="view === v.id"
-              :class="{ active: view === v.id }"
+              :aria-selected="!panel && view === v.id"
+              :class="{ active: !panel && view === v.id }"
               @click="setView(v.id)">{{ v.label }}</button>
+      <span class="tab-spacer" aria-hidden="true"></span>
+      <button role="tab" :aria-selected="panel === 'topics'"
+              :class="{ active: panel === 'topics' }"
+              @click="openPanel('topics')">Topics</button>
+      <button role="tab" :aria-selected="panel === 'feeds'"
+              :class="{ active: panel === 'feeds' }"
+              @click="openPanel('feeds')">Feeds</button>
     </div>
-    <div class="filters">
+    <div class="filters" v-if="!panel">
       <select v-model="topic" @change="reload" aria-label="Filter by topic">
         <option value="">all topics</option>
         <option v-for="t in topics" :key="t.id" :value="t.name">{{ t.name }}</option>
@@ -41,12 +48,27 @@
       <label class="dupes-toggle">
         <input type="checkbox" v-model="dupes" @change="reload"> repeats
       </label>
-      <button class="mark" :aria-expanded="showFeeds"
-              @click="showFeeds = !showFeeds">{{ showFeeds ? 'close feeds' : 'feeds' }}</button>
     </div>
   </nav>
 
-  <section class="feeds-panel" v-if="showFeeds">
+  <section class="feeds-panel" v-if="panel === 'topics'">
+    <div class="feed-row topic-grid feed-head">
+      <span>topic</span>
+      <span title="learned preference from your votes">pref</span>
+      <span title="weighted up/down votes on this topic's articles">votes</span>
+      <span>articles</span>
+      <span></span>
+    </div>
+    <div class="feed-row topic-grid" v-for="t in topicsRanked" :key="t.id">
+      <span class="feed-name"><strong>{{ t.name }}</strong></span>
+      <span :style="{ color: tint(t.pref, 45) }">{{ fmtPart(t.pref) }}</span>
+      <span>▲{{ t.up }} ▼{{ t.down }}</span>
+      <span>{{ t.articles }}</span>
+      <span><button class="mark" @click="filterTopic(t.name)">show articles</button></span>
+    </div>
+  </section>
+
+  <section class="feeds-panel" v-if="panel === 'feeds'">
     <div class="feed-row feed-head">
       <span class="feed-name">feed</span>
       <span title="average of your votes on this feed's articles">avg vote</span>
@@ -85,7 +107,7 @@
     </form>
   </section>
 
-  <main>
+  <main v-if="!panel">
     <p v-if="error" class="notice error-notice">{{ error }}</p>
 
     <article v-for="a in articles" :key="a.id" :id="'article-' + a.id"

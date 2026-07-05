@@ -86,9 +86,12 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   (±2, counts double in every signal), a third clears. Expanding a story
   marks it read. Topic chips and each story's left edge are tinted by
   learned preference: green = liked, red = disliked.
-- The "feeds" button opens feed management: add a feed, import/export OPML,
-  enable/disable sources, and see each feed's average vote, articles/week,
-  and fetch success/error record.
+- **Topics** and **Feeds** tabs (right side of the tab bar) replace the
+  article list with their own views: Topics shows every learned topic with
+  its preference, votes and article count (click through to its articles);
+  Feeds is feed management — add a feed, import/export OPML, enable/disable
+  sources, and see each feed's average vote, articles/week, and fetch
+  success/error record.
 
 ## Notes
 

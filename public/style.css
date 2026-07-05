@@ -75,7 +75,8 @@ body {
   align-items: center;
 }
 
-.tabs { display: flex; gap: 0.2rem; }
+.tabs { display: flex; gap: 0.2rem; flex: 1 1 100%; }
+.tab-spacer { flex: 1; }
 
 .tabs button {
   font-family: var(--mono);
@@ -184,6 +185,8 @@ body {
 
 .feed-add input[type='url'] { flex: 1 1 16rem; }
 .opml-import { cursor: pointer; }
+
+.topic-grid { grid-template-columns: 1fr 4.5rem 5.5rem 4.5rem 7rem; }
 
 @media (max-width: 700px) {
   .feed-row { grid-template-columns: 1fr 4rem 4.5rem; }
