@@ -1,3 +1,22 @@
+/**
+ * Extract the JSON object from a model reply. Some models/backends ignore
+ * Ollama's format:'json' constraint and wrap the object in a markdown code
+ * fence or prose — take the outermost {...} span.
+ */
+export function parseJsonReply(content) {
+  const text = String(content ?? '');
+  try {
+    return JSON.parse(text);
+  } catch {
+    const span = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
+    try {
+      return JSON.parse(span);
+    } catch {
+      throw new Error(`ollama returned non-JSON: ${text.slice(0, 200)}`);
+    }
+  }
+}
+
 /** Thin client for a (possibly remote) Ollama instance. */
 export class Ollama {
   constructor({ url, chatModel, embedModel, timeoutMs = 60_000 }) {
@@ -45,12 +64,7 @@ export class Ollama {
         { role: 'user', content: prompt },
       ],
     });
-    const content = data.message?.content;
-    try {
-      return JSON.parse(content);
-    } catch {
-      throw new Error(`ollama returned non-JSON: ${String(content).slice(0, 200)}`);
-    }
+    return parseJsonReply(data.message?.content);
   }
 
   /** Embed a text; returns a Float32Array. */
