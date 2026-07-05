@@ -22,6 +22,15 @@ const DEFAULTS = {
   cron: {
     maxRunMs: 300_000,
   },
+  scoring: {
+    knn: 20,
+    weights: {
+      topics: 0.4,
+      embedding: 0.3,
+      depth: 0.2,
+      feed: 0.1,
+    },
+  },
   server: {
     host: '0.0.0.0',
     port: 8098,
@@ -59,6 +68,11 @@ export function loadConfig(path) {
     ollama: { ...DEFAULTS.ollama, ...user.ollama },
     enrich: { ...DEFAULTS.enrich, ...user.enrich },
     cron: { ...DEFAULTS.cron, ...user.cron },
+    scoring: {
+      ...DEFAULTS.scoring,
+      ...user.scoring,
+      weights: { ...DEFAULTS.scoring.weights, ...user.scoring?.weights },
+    },
     server: { ...DEFAULTS.server, ...user.server },
   };
 

@@ -28,6 +28,16 @@ cron:
   maxRunMs: 300000    # time budget per cron run; unfinished classification
                       # work simply continues on the next run
 
+# An article's interest score blends four signals, each -1..+1 and neutral
+# when it has no data yet. Weights need not sum to 1.
+scoring:
+  knn: 20             # how many similar voted articles the embedding signal uses
+  weights:
+    topics: 0.4       # votes on the article's topics
+    embedding: 0.3    # votes on articles with similar text (style/genre taste)
+    depth: 0.2        # LLM substance rating: rewards real reporting/analysis
+    feed: 0.1         # the source's own vote record
+
 server:
   host: 0.0.0.0
   port: 8098

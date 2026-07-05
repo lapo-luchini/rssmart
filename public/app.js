@@ -20,9 +20,14 @@ createApp({
       total: 0,
       topics: [],
       feeds: [],
+      feedsDetailed: [],
+      showFeeds: false,
+      feedForm: { url: '', title: '' },
+      feedNotice: '',
       stats: null,
       expandedId: null,
       flashId: null,
+      scoreDetailId: null,
       loading: false,
       error: null,
       prefByTopic: {},
@@ -110,6 +115,7 @@ createApp({
           this.api('/api/stats'),
         ]);
         this.topics = topics.filter((t) => t.articles > 0);
+        this.feedsDetailed = feeds;
         this.feeds = feeds.filter((f) => f.active);
         this.stats = stats;
         this.prefByTopic = Object.fromEntries(topics.map((t) => [t.name, t.pref]));
@@ -124,16 +130,21 @@ createApp({
       this.reload();
     },
 
-    async vote(article, value) {
-      const vote = article.vote === value ? 0 : value; // second click retracts
+    // Voting escalates: ▲ = interesting (+1), ▲ again = WOW (+2), again = clear.
+    voteCycle(article, direction) {
+      const current = article.vote * direction; // 0, 1 or 2 in this direction
+      const next = current === 2 ? 0 : (current + 1) * direction;
+      return this.vote(article, next);
+    },
+
+    async vote(article, vote) {
       try {
         const updated = await this.api(`/api/articles/${article.id}/vote`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ vote }),
         });
-        article.vote = updated.vote;
-        article.score = updated.score;
+        Object.assign(article, updated); // vote, score and its components
         this.loadSidebarData();
       } catch (err) {
         this.error = `Vote failed: ${err.message}`;
@@ -169,6 +180,57 @@ createApp({
         }
       }
       if (!article.read_at) this.toggleRead(article);
+    },
+
+    async addFeed() {
+      try {
+        await this.api('/api/feeds', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ url: this.feedForm.url, title: this.feedForm.title }),
+        });
+        this.feedForm = { url: '', title: '' };
+        this.feedNotice = 'Feed added — articles arrive on the next cron run.';
+        this.loadSidebarData();
+      } catch (err) {
+        this.feedNotice = `Cannot add feed: ${err.message}`;
+      }
+    },
+
+    async setFeedActive(feed, active) {
+      try {
+        await this.api(`/api/feeds/${feed.id}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ active }),
+        });
+        this.loadSidebarData();
+      } catch (err) {
+        this.feedNotice = `Cannot update feed: ${err.message}`;
+      }
+    },
+
+    importOpml(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const { found } = await this.api('/api/feeds/import', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ opml: reader.result }),
+          });
+          this.feedNotice = found
+            ? `Imported ${found} feed(s).`
+            : 'No feeds found in that file.';
+          this.loadSidebarData();
+        } catch (err) {
+          this.feedNotice = `Import failed: ${err.message}`;
+        }
+        event.target.value = '';
+      };
+      reader.readAsText(file);
     },
 
     // Jump to the original a repeat was matched against: scroll to it when
@@ -212,6 +274,21 @@ createApp({
         '--edge-color': this.tint(article.score, 60),
         '--edge-alpha': (0.15 + strength * 0.85).toFixed(2),
       };
+    },
+
+    // The four learned components behind an article's score. Values are the
+    // already-weighted contributions, so they sum to the total.
+    scoreParts(a) {
+      return [
+        { label: 'topic votes', value: a.score_topics },
+        { label: 'similar articles', value: a.score_embedding },
+        { label: a.depth ? `depth (${a.depth}/5)` : 'depth (unrated)', value: a.score_depth },
+        { label: 'source record', value: a.score_feed },
+      ];
+    },
+
+    fmtPart(value) {
+      return (value < 0 ? '−' : '+') + Math.abs(value ?? 0).toFixed(2);
     },
 
     fmtScore(score) {

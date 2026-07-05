@@ -2,24 +2,18 @@ import Parser from 'rss-parser';
 import { sanitizeHtml } from './html.js';
 
 /**
- * Bring the feeds table in line with the config: upsert configured feeds,
- * deactivate feeds that were removed from the config (articles are kept).
+ * Seed the feeds table from the config. The DB is the source of truth
+ * (feeds are managed from the web UI); config feeds are upserted as a
+ * convenience but never deactivate anything.
  */
 export function syncFeeds(db, feeds) {
   const upsert = db.prepare(`
-    INSERT INTO feeds (url, title, active) VALUES (?, ?, 1)
+    INSERT INTO feeds (url, title) VALUES (?, ?)
     ON CONFLICT (url) DO UPDATE SET
-      active = 1,
-      title = COALESCE(excluded.title, feeds.title)
+      title = COALESCE(feeds.title, excluded.title)
   `);
   db.transaction(() => {
     for (const feed of feeds) upsert.run(feed.url, feed.title ?? null);
-    const urls = feeds.map((f) => f.url);
-    const placeholders = urls.map(() => '?').join(',');
-    db.prepare(
-      `UPDATE feeds SET active = 0
-       WHERE url NOT IN (${placeholders || "''"})`,
-    ).run(...urls);
   })();
 }
 
@@ -59,7 +53,8 @@ export async function ingestFeed(db, feed, parser) {
       `UPDATE feeds SET
          title = COALESCE(title, ?),
          last_fetched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
-         last_status = 'ok'
+         last_status = 'ok',
+         ok_count = ok_count + 1
        WHERE id = ?`,
     ).run(parsed.title ?? null, feed.id);
   })();
@@ -92,7 +87,8 @@ export async function ingestAll(db, config, { parser } = {}) {
       db.prepare(
         `UPDATE feeds SET
            last_fetched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
-           last_status = ?
+           last_status = ?,
+           error_count = error_count + 1
          WHERE id = ?`,
       ).run(`error: ${err.message}`.slice(0, 500), feed.id);
     }

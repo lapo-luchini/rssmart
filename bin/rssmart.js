@@ -71,6 +71,7 @@ if (mode === 'cron') {
       }
       info(
         `#${item.id} ${item.title} -> [${item.topics.join(', ')}]` +
+          (item.depth ? ` depth ${item.depth}/5` : '') +
           (item.duplicateOf ? ` (repeat of #${item.duplicateOf})` : ''),
       );
       if (values.debug) info(`    ${item.summary}`);
@@ -95,7 +96,7 @@ if (mode === 'cron') {
     );
   }
 
-  recomputeScores(db);
+  recomputeScores(db, config);
   db.close();
 
   const allFeedsFailed = ingest.feedsFailed > 0 && ingest.feedsOk === 0;

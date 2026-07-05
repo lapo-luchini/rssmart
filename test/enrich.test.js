@@ -31,7 +31,7 @@ test('cosine similarity basics', () => {
 test('enrichPending classifies, summarizes and embeds pending articles', async () => {
   const db = tempDb();
   const stub = await startOllamaStub();
-  stub.chat = () => ({ topics: ['Linux', 'security'], summary: 'Kernel patch released.' });
+  stub.chat = () => ({ topics: ['Linux', 'security'], summary: 'Kernel patch released.', depth: 4 });
 
   const id = seedArticle(db, { title: 'Kernel 6.20 fixes bug' });
   try {
@@ -46,7 +46,9 @@ test('enrichPending classifies, summarizes and embeds pending articles', async (
     const art = db.prepare('SELECT * FROM articles WHERE id = ?').get(id);
     assert.equal(art.status, 'enriched');
     assert.equal(art.summary, 'Kernel patch released.');
+    assert.equal(art.depth, 4);
     assert.ok(art.embedding instanceof Buffer && art.embedding.length > 0);
+    assert.ok(art.text_embedding instanceof Buffer && art.text_embedding.length > 0);
     assert.equal(bufToVec(art.embedding).length, 8);
 
     const topics = db.prepare(`

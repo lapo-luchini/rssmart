@@ -54,6 +54,24 @@ const MIGRATIONS = [
   `
   ALTER TABLE articles ADD COLUMN full_content TEXT;
   `,
+  // v3 — blended scoring: a style-bearing embedding of the article text
+  // (the dedup embedding is of our own uniform summary and carries no
+  // style), an LLM depth rating, and the persisted score components
+  `
+  ALTER TABLE articles ADD COLUMN text_embedding BLOB;
+  ALTER TABLE articles ADD COLUMN depth INTEGER;
+  ALTER TABLE articles ADD COLUMN score_topics REAL NOT NULL DEFAULT 0;
+  ALTER TABLE articles ADD COLUMN score_embedding REAL NOT NULL DEFAULT 0;
+  ALTER TABLE articles ADD COLUMN score_depth REAL NOT NULL DEFAULT 0;
+  ALTER TABLE articles ADD COLUMN score_feed REAL NOT NULL DEFAULT 0;
+  `,
+  // v4 — client-side feed management: fetch outcome counters (the feed list
+  // itself already lives in the feeds table, which becomes the source of
+  // truth; config feeds are only seeds)
+  `
+  ALTER TABLE feeds ADD COLUMN ok_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE feeds ADD COLUMN error_count INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** Open (creating if necessary) the SQLite database and apply migrations. */

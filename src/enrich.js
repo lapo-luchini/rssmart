@@ -29,11 +29,12 @@ Existing topics: ${existingTopics.length ? existingTopics.join(', ') : '(none ye
 Rules:
 - "topics": an array of 1 to 3 topics. Strongly prefer topics from the existing list; only if none fit, invent at most one new topic name (1-2 words, lowercase English).
 - "summary": a preview of at most 50 words, plain text, factual, same language as the article. Cover the article as a whole, not just its opening.
+- "depth": an integer 1-5 rating substance and craft: 5 = deep original reporting or analysis by an author who clearly knows the field, 3 = solid routine coverage, 1 = a thin, low-effort rehash.
 
 Article title: ${title}
 Article content: ${sampleText(text, maxInputChars)}
 
-Answer with JSON: {"topics": ["..."], "summary": "..."}`;
+Answer with JSON: {"topics": ["..."], "summary": "...", "depth": 3}`;
 }
 
 /**
@@ -120,7 +121,14 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     throw new Error(`unusable LLM reply: ${JSON.stringify(reply).slice(0, 200)}`);
   }
 
+  const depthNum = Math.round(Number(reply.depth));
+  const depth = depthNum >= 1 && depthNum <= 5 ? depthNum : null;
+
+  // Two embeddings with different jobs: the summary embedding is stylistically
+  // uniform (our own voice) and drives duplicate detection; the raw-text
+  // embedding keeps the article's own register for similarity-based scoring.
   const vec = await llm.embed(`${article.title}\n${summary}`);
+  const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
   const duplicateOf = findDuplicate(vec, article.id, recent, enrichCfg.dupThreshold);
 
   const insertTopic = db.prepare(
@@ -136,13 +144,21 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     }
     db.prepare(`
       UPDATE articles
-      SET summary = ?, embedding = ?, duplicate_of = ?, status = 'enriched'
+      SET summary = ?, embedding = ?, text_embedding = ?, depth = ?,
+          duplicate_of = ?, status = 'enriched'
       WHERE id = ?
-    `).run(summary, Buffer.from(vec.buffer), duplicateOf, article.id);
+    `).run(
+      summary,
+      Buffer.from(vec.buffer),
+      Buffer.from(textVec.buffer),
+      depth,
+      duplicateOf,
+      article.id,
+    );
   })();
 
   recent.push({ id: article.id, vec });
-  return { topics, summary, duplicateOf, vec };
+  return { topics, summary, depth, duplicateOf, vec };
 }
 
 /**
@@ -218,11 +234,11 @@ export async function enrichPending(
     tried.push(article.id);
 
     try {
-      const { topics, summary, duplicateOf } =
+      const { topics, summary, depth, duplicateOf } =
         await enrichOne(db, llm, article, recent, config.enrich);
       result.enriched++;
       if (duplicateOf) result.duplicates++;
-      onItem?.({ id: article.id, title: article.title, topics, summary, duplicateOf });
+      onItem?.({ id: article.id, title: article.title, topics, summary, depth, duplicateOf });
     } catch (err) {
       saveFailure.run(maxAttempts, article.id);
       result.failed++;

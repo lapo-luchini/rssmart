@@ -35,7 +35,7 @@ function seed() {
   link.run(out.sporty, sports);
   out.readOne = Number(insArt.run({ ...base, guid: 'g4', title: 'Already read', published_at: '2026-07-02T00:00:00Z', read_at: '2026-07-02T10:00:00Z' }).lastInsertRowid);
   out.dupe = Number(insArt.run({ ...base, guid: 'g5', title: 'Fresh tech story (copy)', published_at: '2026-07-03T01:00:00Z', duplicate_of: out.fresh }).lastInsertRowid);
-  recomputeScores(db);
+  recomputeScores(db, testConfig());
   return out;
 }
 
@@ -103,8 +103,10 @@ test('article detail includes content; unknown id -> 404', async () => {
 });
 
 test('voting validates input, persists and recomputes scores', async () => {
-  const bad = await post(`/api/articles/${ids.sporty}/vote`, { vote: 5 });
-  assert.equal(bad.status, 400);
+  for (const vote of [5, -3, 1.5, '1']) {
+    const bad = await post(`/api/articles/${ids.sporty}/vote`, { vote });
+    assert.equal(bad.status, 400, `vote ${vote} rejected`);
+  }
 
   const before = (await get(`/api/articles/${ids.sporty}`)).body.score;
   assert.equal(before, 0);
@@ -112,8 +114,47 @@ test('voting validates input, persists and recomputes scores', async () => {
   assert.equal(status, 200);
   assert.equal(body.vote, 1);
   assert.ok(body.score > 0, 'sports preference rose after upvote');
+  assert.ok('score_topics' in body && 'score_embedding' in body, 'components returned');
+
+  const wow = await post(`/api/articles/${ids.sporty}/vote`, { vote: 2 });
+  assert.ok(wow.body.score > body.score, 'a WOW vote outweighs a plain upvote');
 
   await post(`/api/articles/${ids.sporty}/vote`, { vote: 0 }); // restore
+});
+
+test('feed management: add, disable, stats, OPML round-trip', async () => {
+  const added = await post('/api/feeds', { url: 'http://new.example/rss', title: 'New Feed' });
+  assert.equal(added.status, 201);
+  assert.equal(added.body.active, 1);
+
+  const rejected = await post('/api/feeds', { url: 'ftp://nope' });
+  assert.equal(rejected.status, 400);
+
+  const disabled = await fetch(`${base}/api/feeds/${added.body.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ active: false }),
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+  assert.equal(disabled.body.active, 0);
+
+  const feeds = await get('/api/feeds');
+  const feedOne = feeds.body.find((f) => f.title === 'Feed One');
+  assert.equal(feedOne.articles, 5);
+  assert.ok('ok_count' in feedOne && 'error_count' in feedOne && 'per_week' in feedOne);
+  assert.ok('avg_vote' in feedOne);
+
+  const imported = await post('/api/feeds/import', {
+    opml: `<opml><body>
+      <outline type="rss" text="Imported &amp; Co" xmlUrl="http://imported.example/rss"/>
+      <outline type="rss" xmlUrl="ftp://skip.me"/>
+    </body></opml>`,
+  });
+  assert.deepEqual(imported.body, { found: 1 });
+
+  const opml = await fetch(`${base}/api/feeds.opml`).then((r) => r.text());
+  assert.match(opml, /xmlUrl="http:\/\/imported\.example\/rss"/);
+  assert.match(opml, /Imported &amp; Co/);
+  assert.ok(!opml.includes('new.example'), 'disabled feeds stay out of the export');
 });
 
 test('read toggling', async () => {

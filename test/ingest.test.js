@@ -3,16 +3,19 @@ import assert from 'node:assert/strict';
 import { tempDb, rssXml, startRssServer, testConfig } from './helpers.js';
 import { syncFeeds, ingestAll } from '../src/ingest.js';
 
-test('syncFeeds upserts configured feeds and deactivates removed ones', () => {
+test('syncFeeds seeds config feeds without touching UI-managed state', () => {
   const db = tempDb();
   syncFeeds(db, [{ url: 'http://a.example/rss', title: 'A' }, { url: 'http://b.example/rss' }]);
   assert.equal(db.prepare('SELECT COUNT(*) c FROM feeds WHERE active = 1').get().c, 2);
 
+  // A feed disabled in the UI stays disabled; one missing from the config
+  // stays active — the DB is the source of truth.
+  db.prepare("UPDATE feeds SET active = 0 WHERE url = 'http://b.example/rss'").run();
   syncFeeds(db, [{ url: 'http://b.example/rss' }]);
   const rows = db.prepare('SELECT url, active FROM feeds ORDER BY url').all();
   assert.deepEqual(rows, [
-    { url: 'http://a.example/rss', active: 0 },
-    { url: 'http://b.example/rss', active: 1 },
+    { url: 'http://a.example/rss', active: 1 },
+    { url: 'http://b.example/rss', active: 0 },
   ]);
 });
 

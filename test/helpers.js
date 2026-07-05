@@ -123,6 +123,8 @@ export function testConfig(overrides = {}) {
       maxInputChars: 8000,
     },
     cron: { maxRunMs: 300_000 },
+    // topics-only by default so scoring tests exercise one signal at a time
+    scoring: { knn: 20, weights: { topics: 1, embedding: 0, depth: 0, feed: 0 } },
     server: { host: '127.0.0.1', port: 0 },
     ...overrides,
   };

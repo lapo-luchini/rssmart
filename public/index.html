@@ -41,8 +41,47 @@
       <label class="dupes-toggle">
         <input type="checkbox" v-model="dupes" @change="reload"> repeats
       </label>
+      <button class="mark" :aria-expanded="showFeeds"
+              @click="showFeeds = !showFeeds">{{ showFeeds ? 'close feeds' : 'feeds' }}</button>
     </div>
   </nav>
+
+  <section class="feeds-panel" v-if="showFeeds">
+    <div class="feed-row feed-head">
+      <span class="feed-name">feed</span>
+      <span title="average of your votes on this feed's articles">avg vote</span>
+      <span title="articles per week (last 4 weeks)">/week</span>
+      <span title="successful and failed fetches">fetches</span>
+      <span>unread</span>
+      <span></span>
+    </div>
+    <div class="feed-row" v-for="f in feedsDetailed" :key="f.id" :class="{ inactive: !f.active }">
+      <span class="feed-name">
+        <strong>{{ f.title || f.url }}</strong>
+        <a class="feed-url" :href="f.url" target="_blank" rel="noopener">{{ f.url }}</a>
+        <em v-if="f.last_status && f.last_status !== 'ok'" class="feed-error">{{ f.last_status }}</em>
+      </span>
+      <span :style="{ color: tint((f.avg_vote ?? 0) / 2, 55) }">
+        {{ f.votes ? (f.avg_vote >= 0 ? '+' : '−') + Math.abs(f.avg_vote).toFixed(1) : '—' }}
+      </span>
+      <span>{{ f.per_week }}</span>
+      <span :class="{ 'feed-error': f.error_count > f.ok_count }">{{ f.ok_count }}✓ {{ f.error_count }}✗</span>
+      <span>{{ f.unread }}/{{ f.articles }}</span>
+      <span>
+        <button class="mark" @click="setFeedActive(f, !f.active)">{{ f.active ? 'disable' : 'enable' }}</button>
+      </span>
+    </div>
+    <form class="feed-add" @submit.prevent="addFeed">
+      <input type="url" v-model="feedForm.url" placeholder="https://example.com/feed.xml" required>
+      <input type="text" v-model="feedForm.title" placeholder="title (optional)">
+      <button class="mark" type="submit">add feed</button>
+      <label class="mark opml-import">
+        import OPML<input type="file" accept=".opml,.xml,text/xml" @change="importOpml" hidden>
+      </label>
+      <a class="mark" href="/api/feeds.opml" download="rssmart.opml">export OPML</a>
+      <em v-if="feedNotice" class="feed-notice">{{ feedNotice }}</em>
+    </form>
+  </section>
 
   <main>
     <p v-if="error" class="notice error-notice">{{ error }}</p>
@@ -51,8 +90,22 @@
              class="story" :class="{ read: a.read_at, expanded: expandedId === a.id, flash: flashId === a.id }"
              :style="edgeStyle(a)">
       <div class="story-meta">
-        <span class="score" :style="{ color: tint(a.score, 78) }"
-              :title="'interest score ' + a.score.toFixed(2)">{{ fmtScore(a.score) }}</span>
+        <span class="score-wrap" :class="{ pinned: scoreDetailId === a.id }">
+          <button class="score" :style="{ color: tint(a.score, 78) }"
+                  :aria-expanded="scoreDetailId === a.id"
+                  aria-label="Show score breakdown"
+                  @click="scoreDetailId = scoreDetailId === a.id ? null : a.id">{{ fmtScore(a.score) }}</button>
+          <span class="score-details" role="tooltip">
+            <span class="score-row" v-for="p in scoreParts(a)" :key="p.label">
+              <span>{{ p.label }}</span>
+              <span :style="{ color: tint(p.value, 55) }">{{ fmtPart(p.value) }}</span>
+            </span>
+            <span class="score-row score-total">
+              <span>score</span>
+              <span :style="{ color: tint(a.score, 55) }">{{ fmtPart(a.score) }}</span>
+            </span>
+          </span>
+        </span>
         <span class="source">{{ a.feed_title || 'feed' }}</span>
         <time :datetime="a.published_at || a.created_at">{{ ago(a.published_at || a.created_at) }}</time>
         <button v-if="a.duplicate_of" class="flag flag-link"
@@ -74,10 +127,14 @@
                   @click="topic = t; reload()">{{ t }}</button>
         </span>
         <span class="actions">
-          <button class="vote up" :class="{ on: a.vote === 1 }"
-                  @click="vote(a, 1)" title="more like this" aria-label="More like this">▲</button>
-          <button class="vote down" :class="{ on: a.vote === -1 }"
-                  @click="vote(a, -1)" title="less like this" aria-label="Less like this">▼</button>
+          <button class="vote up" :class="{ on: a.vote > 0, max: a.vote === 2 }"
+                  @click="voteCycle(a, 1)"
+                  :title="a.vote === 1 ? 'WOW! (click once more to clear)' : a.vote === 2 ? 'clear vote' : 'more like this'"
+                  aria-label="More like this">{{ a.vote === 2 ? '▲▲' : '▲' }}</button>
+          <button class="vote down" :class="{ on: a.vote < 0, max: a.vote === -2 }"
+                  @click="voteCycle(a, -1)"
+                  :title="a.vote === -1 ? 'never again! (click once more to clear)' : a.vote === -2 ? 'clear vote' : 'less like this'"
+                  aria-label="Less like this">{{ a.vote === -2 ? '▼▼' : '▼' }}</button>
           <button class="mark" @click="toggleRead(a)">{{ a.read_at ? 'unread' : 'mark read' }}</button>
           <a v-if="a.url" class="mark" :href="a.url" target="_blank" rel="noopener">open ↗</a>
         </span>

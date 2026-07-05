@@ -7,11 +7,21 @@ what you like from explicit 👍/👎 votes given while you read.
 
 ## How the learning works
 
-Every vote adjusts the preference of the article's topics
-(Laplace-smoothed up/down ratio, range −1…+1). An article's interest score is
-the mean preference of its topics, recomputed on every vote and every cron
-run — no training jobs, fully inspectable via `GET /api/topics`. Duplicates
-are detected by cosine similarity of embeddings against recent articles.
+An article's interest score blends four signals (weights in `scoring.weights`),
+each −1…+1 and neutral when it has no data, recomputed on every vote and
+every cron run — no training jobs:
+
+- **topic votes** — Laplace-smoothed up/down ratio of the article's topics;
+- **similar articles** — k-nearest-neighbors over the raw-text embeddings of
+  articles you voted on, so it learns style/genre taste that shared topic
+  names flatten;
+- **depth** — an LLM rating (1–5) of substance and craft, so a thin rehash
+  scores below real reporting on the same subject;
+- **source record** — the feed's own vote ratio.
+
+Click or hover an article's score in the UI to see the breakdown. Duplicates
+are detected separately, by cosine similarity of summary embeddings against
+recent articles.
 
 ## Setup
 
@@ -22,8 +32,10 @@ cp config.example.yaml config.yaml   # then edit; config.yaml is gitignored
 
 Configure in `config.yaml`:
 
-- `feeds` — list of `{url, title?}` entries (or plain URL strings).
-  Removing a feed deactivates it; its articles are kept.
+- `feeds` — list of `{url, title?}` entries (or plain URL strings). These are
+  only seeds: the feed list itself lives in the database and is managed from
+  the web UI ("feeds" button — add, enable/disable, OPML import/export),
+  so removing an entry here changes nothing.
 - `ollama.url` — your Ollama instance, e.g. `http://192.168.1.10:11434`.
 - `ollama.chatModel` — any instruct model, e.g. `llama3.1`, `qwen3`.
 - `ollama.embedModel` — an embedding model, e.g. `nomic-embed-text`
@@ -70,9 +82,13 @@ run (after 5 failed attempts an article is parked as unclassifiable).
 - **Interesting** (default): unread, repeats hidden, sorted by learned score.
 - **Unread / All** tabs, topic + feed filters, full-text search, date sort,
   and a "repeats" toggle.
-- ▲ / ▼ vote to teach it (click again to retract); expanding a story marks it
-  read. Topic chips and each story's left edge are tinted by learned
-  preference: green = liked, red = disliked.
+- ▲ / ▼ vote to teach it: one click = interesting (±1), a second click = WOW
+  (±2, counts double in every signal), a third clears. Expanding a story
+  marks it read. Topic chips and each story's left edge are tinted by
+  learned preference: green = liked, red = disliked.
+- The "feeds" button opens feed management: add a feed, import/export OPML,
+  enable/disable sources, and see each feed's average vote, articles/week,
+  and fetch success/error record.
 
 ## Notes
 
