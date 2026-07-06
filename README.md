@@ -127,16 +127,7 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   disables the guard for trusted intranet feeds.
 - Tests: `pnpm test` (stubs both the RSS feeds and the Ollama API; no network).
 
-## Design notes
+## Design
 
-- **Node.js over Go**: a tool you rely on daily belongs in the language you
-  can fix fastest, and it keeps the stack coherent with the Vue frontend. A
-  Go rewrite against the same SQLite schema and HTTP API would make a good
-  learning project.
-- **Duplicate detection uses embeddings, not a generative prompt**: cosine
-  similarity of summary embeddings is cheap, deterministic, and needs no
-  prompt engineering.
-- **No LLM in the preference loop**: scoring derives from your votes at
-  recompute time — transparent, inspectable, retrains "for free".
-- Ideas deliberately deferred: non-RSS sources (the feeds table would grow a
-  `kind` column), bookmarkable filter state in the URL hash.
+Why things are built this way — and where the known scaling limits are —
+lives in [DESIGN.md](DESIGN.md).
