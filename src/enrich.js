@@ -218,8 +218,11 @@ export async function enrichPending(
     WHERE status = 'pending' AND enrich_attempts < ?
       AND id NOT IN (SELECT value FROM json_each(?))
   `);
+  // index counts completions (monotonic even with parallel workers);
+  // total = claimed + still pending, so it can grow during ingestion.
+  let completed = 0;
   const position = () => ({
-    index: tried.length,
+    index: ++completed,
     total: tried.length + countPending.get(maxAttempts, JSON.stringify(tried)).c,
   });
 

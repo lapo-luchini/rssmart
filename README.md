@@ -47,9 +47,20 @@ Configure in `config.yaml`:
 ## Usage
 
 ```sh
-node bin/rssmart.js cron     # fetch feeds, classify new articles, exit
-node bin/rssmart.js serve    # web UI on http://0.0.0.0:8098
+node bin/rssmart.js serve    # web UI on http://0.0.0.0:8098 + built-in scheduler
+node bin/rssmart.js cron     # one-shot: fetch due feeds, classify, exit
 ```
+
+`serve` is self-sufficient: its internal scheduler (`scheduler.enabled`)
+fetches each feed on an adaptive cadence — roughly as often as it publishes,
+bounded by `scheduler.minIntervalMin`/`maxIntervalMin` — and continuously
+classifies pending articles. No system cron required.
+
+`cron` remains for one-shot uses: backfills (`--max-run 0`), debugging
+(`--debug`), or driving rssmart from system cron instead of the scheduler
+(set `scheduler.enabled: false` then). It fetches only feeds that are due
+(`--all-feeds` overrides), and a lease in the DB ensures a cron run and a
+running scheduler never classify the same queue twice.
 
 `--config <path>` (or `RSSMART_CONFIG`) selects the config file;
 `--port <n>` overrides the serve port.
@@ -59,7 +70,7 @@ node bin/rssmart.js serve    # web UI on http://0.0.0.0:8098
 manually, add `--verbose` (per-feed and per-article progress) or `--debug`
 (also prints the generated summaries).
 
-Schedule ingestion with system cron, e.g. every 30 minutes:
+If you prefer system cron over the internal scheduler, e.g. every 30 minutes:
 
 ```cron
 */30 * * * * cd /project/rssmart && node bin/rssmart.js cron

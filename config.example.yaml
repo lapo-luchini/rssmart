@@ -31,6 +31,13 @@ cron:
   maxRunMs: 300000    # time budget per cron run; unfinished classification
                       # work simply continues on the next run
 
+scheduler:
+  enabled: true       # serve mode runs everything itself: fetches feeds when
+                      # they're due and classifies pending articles — no
+                      # system cron needed
+  minIntervalMin: 15  # bounds for the adaptive per-feed fetch cadence
+  maxIntervalMin: 1440  # (a feed is checked about as often as it publishes)
+
 # An article's interest score blends four signals, each -1..+1 and neutral
 # when it has no data yet. Weights need not sum to 1.
 scoring:

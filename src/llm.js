@@ -24,6 +24,9 @@ export class Ollama {
     this.chatModel = chatModel;
     this.embedModel = embedModel;
     this.timeoutMs = timeoutMs;
+    // Thinking models waste time and leak "thought" keys into the JSON;
+    // ask Ollama to disable it. Cleared if the server rejects the param.
+    this.disableThink = true;
   }
 
   /** Quick reachability probe so a cron run can skip enrichment cleanly. */
@@ -54,7 +57,7 @@ export class Ollama {
 
   /** Single-turn chat forced into JSON mode; returns the parsed object. */
   async chatJSON(system, prompt, { numCtx } = {}) {
-    const data = await this.#post('/api/chat', {
+    const body = {
       model: this.chatModel,
       stream: false,
       format: 'json',
@@ -65,7 +68,20 @@ export class Ollama {
         { role: 'system', content: system },
         { role: 'user', content: prompt },
       ],
-    });
+    };
+    if (this.disableThink) body.think = false;
+
+    let data;
+    try {
+      data = await this.#post('/api/chat', body);
+    } catch (err) {
+      // Some models/servers reject the think param outright — fall back
+      // once and stop sending it.
+      if (!this.disableThink || !/think/i.test(err.message)) throw err;
+      this.disableThink = false;
+      delete body.think;
+      data = await this.#post('/api/chat', body);
+    }
     return parseJsonReply(data.message?.content);
   }
 

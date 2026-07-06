@@ -23,6 +23,11 @@ const DEFAULTS = {
   cron: {
     maxRunMs: 300_000,
   },
+  scheduler: {
+    enabled: true,
+    minIntervalMin: 15,
+    maxIntervalMin: 1440,
+  },
   scoring: {
     knn: 20,
     weights: {
@@ -69,6 +74,7 @@ export function loadConfig(path) {
     ollama: { ...DEFAULTS.ollama, ...user.ollama },
     enrich: { ...DEFAULTS.enrich, ...user.enrich },
     cron: { ...DEFAULTS.cron, ...user.cron },
+    scheduler: { ...DEFAULTS.scheduler, ...user.scheduler },
     scoring: {
       ...DEFAULTS.scoring,
       ...user.scoring,

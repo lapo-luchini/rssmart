@@ -77,6 +77,16 @@ const MIGRATIONS = [
   `
   ALTER TABLE feeds ADD COLUMN html_url TEXT;
   `,
+  // v6 — adaptive per-feed scheduling (next due time + optional manual
+  // interval override) and a meta table for the enrichment lease
+  `
+  ALTER TABLE feeds ADD COLUMN next_fetch_at TEXT;
+  ALTER TABLE feeds ADD COLUMN fetch_interval_min INTEGER;
+  CREATE TABLE meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  `,
 ];
 
 /** Open (creating if necessary) the SQLite database and apply migrations. */

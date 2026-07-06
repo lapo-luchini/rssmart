@@ -65,6 +65,7 @@ test('enrichPending classifies, summarizes and embeds pending articles', async (
     await enrichPending(db, config, llm);
     assert.match(stub.calls.chat[0].messages[1].content, /linux, security/);
     assert.ok(stub.calls.chat[0].options.num_ctx >= 4096);
+    assert.equal(stub.calls.chat[0].think, false, 'model thinking disabled');
   } finally {
     await stub.close();
   }
@@ -219,10 +220,14 @@ test('enrich.workers processes articles concurrently', async () => {
     const config = testConfig();
     config.enrich.workers = 2;
     const llm = new Ollama({ ...config.ollama, url: stub.url });
-    const result = await enrichPending(db, config, llm);
+    const indexes = [];
+    const result = await enrichPending(db, config, llm, {
+      onItem: (i) => indexes.push(i.index),
+    });
     assert.equal(result.enriched, 4);
     assert.equal(result.failed, 0);
     assert.equal(peak, 2, 'two generations in flight at once');
+    assert.deepEqual(indexes, [1, 2, 3, 4], 'progress index is monotonic under parallelism');
   } finally {
     await stub.close();
   }

@@ -292,6 +292,24 @@ createApp({
       }
     },
 
+    async refreshFeeds() {
+      try {
+        await this.api('/api/refresh', { method: 'POST' });
+        this.feedNotice = 'Fetching all feeds in the background…';
+        setTimeout(() => this.loadSidebarData(), 5000);
+      } catch (err) {
+        this.feedNotice = `Refresh failed: ${err.message}`;
+      }
+    },
+
+    until(iso) {
+      const s = (new Date(iso).getTime() - Date.now()) / 1000;
+      if (s <= 0) return 'due now';
+      if (s < 5400) return `in ${Math.round(s / 60)}m`;
+      if (s < 129600) return `in ${Math.round(s / 3600)}h`;
+      return `in ${Math.round(s / 86400)}d`;
+    },
+
     importOpml(event) {
       const file = event.target.files?.[0];
       if (!file) return;

@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recomputeScores, topicPrefs } from './scoring.js';
 import { parseOpml, buildOpml } from './opml.js';
+import { ingestAll } from './ingest.js';
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -148,6 +149,7 @@ export function createApp(db, config) {
 
   const feedList = () => db.prepare(`
     SELECT f.id, f.url, f.title, f.html_url, f.active, f.last_fetched_at, f.last_status,
+           f.next_fetch_at, f.fetch_interval_min,
            f.ok_count, f.error_count,
            COUNT(a.id) AS articles,
            COALESCE(SUM(a.read_at IS NULL), 0) AS unread,
@@ -205,6 +207,15 @@ export function createApp(db, config) {
       }
     })();
     res.json({ found: found.length });
+  });
+
+  // Kick a full fetch (ignoring the adaptive schedule) in the background.
+  let refreshing = null;
+  app.post('/api/refresh', (_req, res) => {
+    refreshing ??= ingestAll(db, config, { dueOnly: false }).finally(() => {
+      refreshing = null;
+    });
+    res.status(202).json({ started: true });
   });
 
   app.get('/api/feeds.opml', (_req, res) => {

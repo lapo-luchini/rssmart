@@ -92,6 +92,7 @@
         <strong v-else>{{ f.title || f.url }}</strong>
         <a class="feed-url" :href="f.url" target="_blank" rel="noopener">{{ f.url }}</a>
         <em v-if="f.last_status && f.last_status !== 'ok'" class="feed-error">{{ f.last_status }}</em>
+        <em v-else-if="f.active && f.next_fetch_at" class="feed-next">next check {{ until(f.next_fetch_at) }}</em>
       </span>
       <span :style="{ color: tint((f.avg_vote ?? 0) / 2, 55) }">
         {{ f.votes ? (f.avg_vote >= 0 ? '+' : '−') + Math.abs(f.avg_vote).toFixed(1) : '—' }}
@@ -111,6 +112,7 @@
         import OPML<input type="file" accept=".opml,.xml,text/xml" @change="importOpml" hidden>
       </label>
       <a class="mark" href="/api/feeds.opml" download="rssmart.opml">export OPML</a>
+      <button class="mark" type="button" @click="refreshFeeds">fetch all now</button>
       <em v-if="feedNotice" class="feed-notice">{{ feedNotice }}</em>
     </form>
   </section>

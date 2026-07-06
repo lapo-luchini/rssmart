@@ -7,6 +7,8 @@ import { Ollama } from '../src/llm.js';
 import { enrichPending } from '../src/enrich.js';
 import { recomputeScores } from '../src/scoring.js';
 import { createApp } from '../src/server.js';
+import { startScheduler } from '../src/scheduler.js';
+import { acquireLease, releaseLease } from '../src/lease.js';
 
 const USAGE = `Usage: rssmart <mode> [options]
 
@@ -22,6 +24,8 @@ Options:
   --debug           Like --verbose, plus generated summaries
   --max-run <min>   Cron mode: override the time budget, in minutes
                     (0 = no limit, e.g. for a long backfill run)
+  --all-feeds       Cron mode: fetch every active feed, ignoring the
+                    adaptive per-feed schedule
   --help            Show this help
 `;
 
@@ -33,6 +37,7 @@ const { values, positionals } = parseArgs({
     verbose: { type: 'boolean', short: 'v' },
     debug: { type: 'boolean' },
     'max-run': { type: 'string' },
+    'all-feeds': { type: 'boolean' },
     help: { type: 'boolean' },
   },
 });
@@ -69,6 +74,7 @@ if (mode === 'cron') {
   let ingestDone = false;
 
   const ingestPromise = ingestAll(db, config, {
+    dueOnly: !values['all-feeds'],
     onFeed(f) {
       if (f.error) console.error(`[${f.index}/${f.total}] feed ${f.url}: ${f.error}`);
       else info(`[${f.index}/${f.total}] feed ${f.url}: ${f.added} new`);
@@ -76,11 +82,18 @@ if (mode === 'cron') {
   }).finally(() => {
     ingestDone = true;
   });
+
+  // A serve process with the internal scheduler (or another cron run) may
+  // already be classifying; the lease keeps the queue single-consumer.
+  const owner = `cron-${process.pid}`;
   const llm = new Ollama(config.ollama);
-  const enrichPromise = enrichPending(db, config, llm, {
+  const enrichPromise = !acquireLease(db, owner)
+    ? Promise.resolve({ skipped: true, reason: 'another rssmart process holds the classification lease' })
+    : enrichPending(db, config, llm, {
     deadline,
     waitForMore: () => !ingestDone,
     onItem(item) {
+      acquireLease(db, owner); // heartbeat
       if (item.error) {
         console.error(`[${item.index}/${item.total}] article #${item.id} "${item.title}": ${item.error}`);
         return;
@@ -94,13 +107,16 @@ if (mode === 'cron') {
     },
   });
   const [ingest, enrich] = await Promise.all([ingestPromise, enrichPromise]);
+  releaseLease(db, owner);
 
   info(
     `ingest: ${ingest.added} new article(s) from ${ingest.feedsOk} feed(s)` +
       (ingest.feedsFailed ? `, ${ingest.feedsFailed} feed(s) failed` : ''),
   );
   if (enrich.skipped) {
-    console.error(`enrich skipped: ${enrich.reason}; articles stay pending`);
+    // a held lease is normal coexistence with a serve scheduler, not an error
+    if (/lease/.test(enrich.reason)) info(`enrich skipped: ${enrich.reason}`);
+    else console.error(`enrich skipped: ${enrich.reason}; articles stay pending`);
   } else {
     info(
       `enrich: ${enrich.enriched} enriched (${enrich.duplicates} duplicate(s)), ${enrich.failed} failed` +
@@ -119,4 +135,8 @@ if (mode === 'cron') {
   app.listen(port, config.server.host, () => {
     console.log(`rssmart serving on http://${config.server.host}:${port}`);
   });
+  if (config.scheduler.enabled) {
+    startScheduler(db, config, { log: console.log });
+    console.log('internal scheduler active: fetching due feeds, classifying pending articles');
+  }
 }

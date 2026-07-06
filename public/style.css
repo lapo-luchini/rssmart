@@ -176,6 +176,7 @@ body {
 }
 
 .feed-error { color: var(--down); font-style: normal; }
+.feed-next { color: var(--muted); font-style: normal; font-size: 0.68rem; }
 .feed-notice { color: var(--muted); font-style: normal; }
 
 .feed-add {

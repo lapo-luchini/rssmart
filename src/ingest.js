@@ -21,6 +21,37 @@ export function syncFeeds(db, feeds) {
   })();
 }
 
+/**
+ * Adaptive fetch cadence: check a feed about as often as it publishes one
+ * article (measured over the last 28 days), clamped to the configured
+ * bounds. A silent feed settles at the maximum interval.
+ */
+export function fetchIntervalMinutes(articlesLast28d, { minIntervalMin, maxIntervalMin }) {
+  if (!articlesLast28d) return maxIntervalMin;
+  const minutes = (28 * 24 * 60) / articlesLast28d;
+  return Math.round(Math.min(Math.max(minutes, minIntervalMin), maxIntervalMin));
+}
+
+function scheduleNextFetch(db, feed, config, { failed = false } = {}) {
+  let minutes;
+  if (feed.fetch_interval_min) {
+    minutes = feed.fetch_interval_min; // manual override always wins
+  } else if (failed) {
+    minutes = Math.min(60, config.scheduler.maxIntervalMin); // retry errors hourly
+  } else {
+    const { c } = db.prepare(`
+      SELECT COUNT(*) AS c FROM articles
+      WHERE feed_id = ? AND COALESCE(published_at, created_at) >= datetime('now', '-28 days')
+    `).get(feed.id);
+    minutes = fetchIntervalMinutes(c, config.scheduler);
+  }
+  db.prepare(`
+    UPDATE feeds
+    SET next_fetch_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+' || ? || ' minutes')
+    WHERE id = ?
+  `).run(minutes, feed.id);
+}
+
 /** Fetch one feed and insert its new items. Returns the new-article count. */
 export async function ingestFeed(db, feed, parser) {
   const parsed = await parser.parseURL(feed.url);
@@ -68,14 +99,19 @@ export async function ingestFeed(db, feed, parser) {
 }
 
 /**
- * Fetch every active feed. One feed failing never aborts the run; the error
- * is recorded on the feed row and in the returned summary. opts.onFeed, if
+ * Fetch active feeds. One feed failing never aborts the run; the error is
+ * recorded on the feed row and in the returned summary. opts.onFeed, if
  * given, is called as each feed completes (for live CLI progress).
+ * opts.dueOnly restricts the run to feeds whose adaptive next_fetch_at has
+ * passed; every fetch (either way) reschedules the feed.
  */
-export async function ingestAll(db, config, { parser, onFeed } = {}) {
+export async function ingestAll(db, config, { parser, onFeed, dueOnly = false } = {}) {
   parser ??= new Parser({ timeout: 30_000 });
+  const due = dueOnly
+    ? "AND (next_fetch_at IS NULL OR next_fetch_at <= strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+    : '';
   const feeds = db
-    .prepare('SELECT id, url, title FROM feeds WHERE active = 1')
+    .prepare(`SELECT id, url, title, fetch_interval_min FROM feeds WHERE active = 1 ${due}`)
     .all();
 
   const summary = { feedsOk: 0, feedsFailed: 0, added: 0, skipped: 0, errors: [], feeds: [] };
@@ -88,6 +124,7 @@ export async function ingestAll(db, config, { parser, onFeed } = {}) {
       summary.added += added;
       summary.skipped += skipped;
       summary.feeds.push({ url: feed.url, added, skipped });
+      scheduleNextFetch(db, feed, config);
       onFeed?.({ url: feed.url, added, skipped, index, total: feeds.length });
     } catch (err) {
       summary.feedsFailed++;
@@ -101,6 +138,7 @@ export async function ingestAll(db, config, { parser, onFeed } = {}) {
            error_count = error_count + 1
          WHERE id = ?`,
       ).run(`error: ${err.message}`.slice(0, 500), feed.id);
+      scheduleNextFetch(db, feed, config, { failed: true });
     }
   }
   return summary;
