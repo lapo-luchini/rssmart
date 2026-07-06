@@ -196,11 +196,13 @@ export async function enrichPending(
   // Articles already attempted in this run: a failure stays 'pending' (for
   // the NEXT run) and must not be picked again by this one.
   const tried = [];
+  // Newest first: fresh articles are worth reading now, a backlog of old
+  // ones can wait (and shouldn't make the fresh ones old too).
   const nextPending = db.prepare(`
     SELECT id, url, title, content, full_content FROM articles
     WHERE status = 'pending' AND enrich_attempts < ?
       AND id NOT IN (SELECT value FROM json_each(?))
-    ORDER BY id LIMIT 1
+    ORDER BY COALESCE(published_at, created_at) DESC, id DESC LIMIT 1
   `);
 
   // Embeddings of recent, already-enriched articles for duplicate detection.

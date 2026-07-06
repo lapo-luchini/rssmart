@@ -4,11 +4,11 @@ import { tempDb, startOllamaStub, testConfig } from './helpers.js';
 import { enrichPending, cosine, bufToVec, sampleText } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
 
-function seedArticle(db, { title, content = 'body' }) {
+function seedArticle(db, { title, content = 'body', published = null }) {
   db.prepare("INSERT OR IGNORE INTO feeds (id, url) VALUES (1, 'http://f')").run();
   const { lastInsertRowid } = db
-    .prepare("INSERT INTO articles (feed_id, guid, title, content) VALUES (1, ?, ?, ?)")
-    .run(`g-${title}`, title, content);
+    .prepare("INSERT INTO articles (feed_id, guid, title, content, published_at) VALUES (1, ?, ?, ?, ?)")
+    .run(`g-${title}`, title, content, published);
   return Number(lastInsertRowid);
 }
 
@@ -98,24 +98,30 @@ test('near-identical embeddings mark the newer article as duplicate', async () =
       ? [1, 0.05, 0, 0]
       : [0, 1, 0, 0];
 
-  const a = seedArticle(db, { title: 'Alpha happens' });
-  const b = seedArticle(db, { title: 'Alpha again: happens' });
-  const c = seedArticle(db, { title: 'Unrelated thing' });
+  const a = seedArticle(db, { title: 'Alpha happens', published: '2026-07-01T00:00:00Z' });
+  const b = seedArticle(db, { title: 'Alpha again: happens', published: '2026-07-02T00:00:00Z' });
+  const c = seedArticle(db, { title: 'Unrelated thing', published: '2026-07-03T00:00:00Z' });
   try {
     const config = testConfig();
     const llm = new Ollama({ ...config.ollama, url: stub.url });
     const progress = [];
+    const order = [];
     const result = await enrichPending(db, config, llm, {
-      onItem: (i) => progress.push([i.index, i.total]),
+      onItem: (i) => {
+        progress.push([i.index, i.total]);
+        order.push(i.id);
+      },
     });
     assert.deepEqual(progress, [[1, 3], [2, 3], [3, 3]], 'queue positions reported');
+    assert.deepEqual(order, [c, b, a], 'freshest articles are classified first');
 
     assert.equal(result.enriched, 3);
     assert.equal(result.duplicates, 1);
+    // the newer twin was enriched first, so the older one is the repeat
     const rows = db.prepare('SELECT id, duplicate_of FROM articles ORDER BY id').all();
     assert.deepEqual(rows, [
-      { id: a, duplicate_of: null },
-      { id: b, duplicate_of: a },
+      { id: a, duplicate_of: b },
+      { id: b, duplicate_of: null },
       { id: c, duplicate_of: null },
     ]);
   } finally {

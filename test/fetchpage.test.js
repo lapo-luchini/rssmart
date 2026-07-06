@@ -87,10 +87,11 @@ test('thin RSS entries get their origin page fetched for the LLM; failures fall 
   try {
     db.prepare("INSERT INTO feeds (id, url) VALUES (1, 'http://f')").run();
     const ins = db.prepare(
-      'INSERT INTO articles (feed_id, guid, url, title, content) VALUES (1, ?, ?, ?, ?)',
+      'INSERT INTO articles (feed_id, guid, url, title, content, published_at) VALUES (1, ?, ?, ?, ?, ?)',
     );
-    const thin = Number(ins.run('g1', `${site.url}/article`, 'Big Announcement', '<a href="#">Comments</a>').lastInsertRowid);
-    const dead = Number(ins.run('g2', `${site.url}/missing`, 'Gone page', 'Short RSS text only.').lastInsertRowid);
+    // enrichment runs newest-first: 'thin' has the later date so it goes first
+    const thin = Number(ins.run('g1', `${site.url}/article`, 'Big Announcement', '<a href="#">Comments</a>', '2026-07-02T00:00:00Z').lastInsertRowid);
+    const dead = Number(ins.run('g2', `${site.url}/missing`, 'Gone page', 'Short RSS text only.', '2026-07-01T00:00:00Z').lastInsertRowid);
 
     const config = testConfig();
     const llm = new Ollama({ ...config.ollama, url: stub.url });
