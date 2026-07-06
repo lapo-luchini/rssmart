@@ -29,6 +29,7 @@ createApp({
       feedNotice: '',
       stats: null,
       expandedId: null,
+      expandedVersions: {},
       flashId: null,
       scoreDetailId: null,
       loading: false,
@@ -112,6 +113,7 @@ createApp({
       this.loading = true;
       this.error = null;
       this.expandedId = null;
+      this.expandedVersions = {};
       try {
         const data = await this.api(`/api/articles?${this.params(0)}`);
         this.articles = data.articles;
@@ -331,6 +333,19 @@ createApp({
         event.target.value = '';
       };
       reader.readAsText(file);
+    },
+
+    async toggleVersions(article) {
+      if (this.expandedVersions[article.id]) {
+        delete this.expandedVersions[article.id];
+        return;
+      }
+      try {
+        this.expandedVersions[article.id] =
+          await this.api(`/api/articles/${article.id}/versions`);
+      } catch (err) {
+        this.error = `Cannot load versions: ${err.message}`;
+      }
     },
 
     // Jump to the original a repeat was matched against: scroll to it when

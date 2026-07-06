@@ -422,6 +422,35 @@ body {
 .story-body img { max-width: 100%; height: auto; }
 .story-body a { color: var(--ink); }
 
+/* Other versions of the same news, expanded from the versions badge. */
+.versions {
+  margin-top: 0.6rem;
+  border-left: 2px solid var(--hairline);
+  padding-left: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.version-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.version-title {
+  color: var(--ink);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-title:hover { text-decoration: underline; }
+
 /* ---- notices ----------------------------------------------------------- */
 
 .notice {

@@ -37,7 +37,6 @@ function articleQuery(query) {
   } else if (view !== 'all') {
     return { error: `unknown view "${view}"` };
   }
-  if (dupes !== '1') where.push('a.duplicate_of IS NULL');
   if (status) {
     if (!['pending', 'enriched', 'error'].includes(status)) {
       return { error: `unknown status "${status}"` };
@@ -68,6 +67,7 @@ function articleQuery(query) {
   return {
     whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '',
     params,
+    grouped: dupes !== '1', // default: bundle repeats, show best of each group
     orderBy: sortKey === 'score'
       ? 'a.score DESC, COALESCE(a.published_at, a.created_at) DESC'
       : 'COALESCE(a.published_at, a.created_at) DESC',
@@ -76,6 +76,12 @@ function articleQuery(query) {
   };
 }
 
+// Total members of an article's duplicate group (root + repeats).
+const VERSIONS_COL = `
+  (SELECT COUNT(*) FROM articles d
+   WHERE COALESCE(d.duplicate_of, d.id) = COALESCE(a.duplicate_of, a.id)) AS versions
+`;
+
 export function createApp(db, config) {
   const app = express();
   app.use(express.json({ limit: '2mb' })); // OPML imports ride in JSON
@@ -83,19 +89,47 @@ export function createApp(db, config) {
   app.get('/api/articles', (req, res) => {
     const query = articleQuery(req.query);
     if (query.error) return res.status(400).json({ error: query.error });
-    const { whereSql, params, orderBy, lim, off } = query;
+    const { whereSql, params, grouped, orderBy, lim, off } = query;
 
+    // Grouped mode: one card per duplicate group — its best-scoring member
+    // among the articles matching the filters.
+    const source = grouped
+      ? `(SELECT a.*, ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(a.duplicate_of, a.id)
+            ORDER BY a.score DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC
+          ) AS rn
+          FROM articles a ${whereSql}) a
+          JOIN feeds f ON f.id = a.feed_id
+          WHERE a.rn = 1`
+      : `articles a JOIN feeds f ON f.id = a.feed_id ${whereSql}`;
+
+    const rows = db.prepare(`
+      SELECT ${ARTICLE_COLUMNS}, ${VERSIONS_COL}
+      FROM ${source} ORDER BY ${orderBy} LIMIT ? OFFSET ?
+    `).all(...params, lim, off);
+
+    const { total } = db.prepare(grouped
+      ? `SELECT COUNT(*) AS total FROM (
+           SELECT 1 FROM articles a ${whereSql}
+           GROUP BY COALESCE(a.duplicate_of, a.id))`
+      : `SELECT COUNT(*) AS total FROM articles a ${whereSql}`
+    ).get(...params);
+
+    res.json({ total, articles: rows.map(rowToArticle) });
+  });
+
+  app.get('/api/articles/:id/versions', (req, res) => {
+    const row = db
+      .prepare('SELECT COALESCE(duplicate_of, id) AS root FROM articles WHERE id = ?')
+      .get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'not found' });
     const rows = db.prepare(`
       SELECT ${ARTICLE_COLUMNS}
       FROM articles a JOIN feeds f ON f.id = a.feed_id
-      ${whereSql} ORDER BY ${orderBy} LIMIT ? OFFSET ?
-    `).all(...params, lim, off);
-
-    const { total } = db.prepare(`
-      SELECT COUNT(*) AS total FROM articles a ${whereSql}
-    `).get(...params);
-
-    res.json({ total, articles: rows.map(rowToArticle) });
+      WHERE COALESCE(a.duplicate_of, a.id) = ? AND a.id != ?
+      ORDER BY a.score DESC, COALESCE(a.published_at, a.created_at) DESC
+    `).all(row.root, req.params.id);
+    res.json(rows.map(rowToArticle));
   });
 
   app.get('/api/articles/:id', (req, res) => {

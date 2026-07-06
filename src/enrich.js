@@ -100,6 +100,20 @@ async function articleText(db, article, enrichCfg) {
   return page.text;
 }
 
+/**
+ * duplicate_of always points to a group root, never to another repeat —
+ * that keeps groups single-level for bundling. If the matched article's
+ * root is the article itself (a re-enriched original matching one of its
+ * own repeats), it stays a root.
+ */
+function resolveGroupRoot(db, matchedId, articleId) {
+  if (!matchedId) return null;
+  const { root } = db
+    .prepare('SELECT COALESCE(duplicate_of, id) AS root FROM articles WHERE id = ?')
+    .get(matchedId);
+  return root === articleId ? null : root;
+}
+
 /** Classify + summarize + embed one article and persist the outcome. */
 async function enrichOne(db, llm, article, recent, enrichCfg) {
   const existing = db
@@ -134,7 +148,11 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
   // embedding keeps the article's own register for similarity-based scoring.
   const vec = await llm.embed(`${article.title}\n${summary}`);
   const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
-  const duplicateOf = findDuplicate(vec, article.id, recent, enrichCfg.dupThreshold);
+  const duplicateOf = resolveGroupRoot(
+    db,
+    findDuplicate(vec, article.id, recent, enrichCfg.dupThreshold),
+    article.id,
+  );
 
   const insertTopic = db.prepare(
     'INSERT INTO topics (name) VALUES (?) ON CONFLICT (name) DO UPDATE SET name = name RETURNING id',

@@ -45,8 +45,8 @@
         <option value="date">by date</option>
       </select>
       <input type="search" v-model="q" placeholder="search…" aria-label="Search articles">
-      <label class="dupes-toggle">
-        <input type="checkbox" v-model="dupes" @change="reload"> repeats
+      <label class="dupes-toggle" title="show every version of a news item as its own card">
+        <input type="checkbox" v-model="dupes" @change="reload"> all versions
       </label>
       <label class="dupes-toggle" title="hide articles still waiting for classification">
         <input type="checkbox" v-model="enrichedOnly" @change="reload"> classified only
@@ -142,7 +142,10 @@
         </span>
         <span class="source">{{ a.feed_title || 'feed' }}</span>
         <time :datetime="a.published_at || a.created_at">{{ ago(a.published_at || a.created_at) }}</time>
-        <button v-if="a.duplicate_of" class="flag flag-link"
+        <button v-if="a.versions > 1 && !dupes" class="flag flag-link"
+                :title="'this news appears in ' + a.versions + ' articles'"
+                @click="toggleVersions(a)">{{ expandedVersions[a.id] ? 'hide versions' : `${a.versions - 1} more ${a.versions === 2 ? 'version' : 'versions'}` }}</button>
+        <button v-if="a.duplicate_of && dupes" class="flag flag-link"
                 :title="'repeat of: ' + (a.duplicate_title || '#' + a.duplicate_of)"
                 @click="goToOriginal(a)">repeat of: {{ a.duplicate_title || '#' + a.duplicate_of }}</button>
         <span v-if="a.status === 'pending'" class="flag" title="waiting for the next classification run">new</span>
@@ -177,6 +180,15 @@
       <div v-if="expandedId === a.id" class="story-body">
         <div v-if="a.content" v-html="a.content"></div>
         <p v-else class="notice">This feed carries no article body. Use “open ↗” to read at the source.</p>
+      </div>
+
+      <div v-if="expandedVersions[a.id]" class="versions">
+        <div class="version-row" v-for="v in expandedVersions[a.id]" :key="v.id">
+          <span class="score" :style="{ color: tint(v.score, 55) }">{{ fmtScore(v.score) }}</span>
+          <a class="version-title" :href="v.url" target="_blank" rel="noopener">{{ v.title }}</a>
+          <span class="source">{{ v.feed_title }}</span>
+          <time>{{ ago(v.published_at || v.created_at) }}</time>
+        </div>
       </div>
     </article>
 

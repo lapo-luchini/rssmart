@@ -90,6 +90,23 @@ test('view=all with dupes=1 returns everything, date sorted', async () => {
   assert.equal(dupe.duplicate_title, 'Fresh tech story', 'repeats carry the original title');
 });
 
+test('repeats are bundled: best of group shown, others via /versions', async () => {
+  const { body } = await get('/api/articles?view=all');
+  const fresh = body.articles.find((a) => a.id === ids.fresh);
+  assert.ok(fresh, 'the higher-scoring member represents the group');
+  assert.equal(fresh.versions, 2);
+  assert.ok(!body.articles.some((a) => a.id === ids.dupe), 'the repeat is bundled away');
+
+  const versions = await get(`/api/articles/${ids.fresh}/versions`);
+  assert.deepEqual(versions.body.map((a) => a.id), [ids.dupe]);
+  // works from the repeat's side too
+  const fromDupe = await get(`/api/articles/${ids.dupe}/versions`);
+  assert.deepEqual(fromDupe.body.map((a) => a.id), [ids.fresh]);
+
+  const missing = await get('/api/articles/99999/versions');
+  assert.equal(missing.status, 404);
+});
+
 test('status filter narrows to classified (or pending) articles', async () => {
   const enriched = await get('/api/articles?view=all&status=enriched');
   assert.equal(enriched.body.total, 4, 'pending article excluded');

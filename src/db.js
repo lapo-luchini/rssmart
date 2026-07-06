@@ -87,7 +87,43 @@ const MIGRATIONS = [
     value TEXT NOT NULL
   );
   `,
+  // v7 — duplicate bundling: duplicate_of must always point to a group root
+  // (repair pre-existing cycles/chains created by re-enrichment)
+  (db) => {
+    db.exec('CREATE INDEX idx_articles_duplicate_of ON articles(duplicate_of);');
+    repairDuplicateGroups(db);
+  },
 ];
+
+/**
+ * Normalize duplicate groups to a single level: every duplicate_of points
+ * to a root article whose own duplicate_of is NULL. Re-enrichment used to
+ * create A<->B cycles (hiding both) and A->B->C chains.
+ */
+export function repairDuplicateGroups(db) {
+  // self-references and 2-cycles: the smaller id becomes the root
+  db.exec(`
+    UPDATE articles SET duplicate_of = NULL
+    WHERE duplicate_of = id
+       OR (duplicate_of IS NOT NULL AND id < duplicate_of AND
+           (SELECT d.duplicate_of FROM articles d WHERE d.id = articles.duplicate_of) = articles.id)
+  `);
+  // flatten chains one hop at a time until every pointer hits a root
+  const hop = db.prepare(`
+    UPDATE articles SET duplicate_of = (
+      SELECT d.duplicate_of FROM articles d WHERE d.id = articles.duplicate_of
+    )
+    WHERE duplicate_of IS NOT NULL
+      AND (SELECT d.duplicate_of FROM articles d WHERE d.id = articles.duplicate_of) IS NOT NULL
+  `);
+  for (let i = 0; i < 10 && hop.run().changes > 0; i++);
+  // anything still nested after that is a longer cycle: promote to root
+  db.exec(`
+    UPDATE articles SET duplicate_of = NULL
+    WHERE duplicate_of IS NOT NULL
+      AND (SELECT d.duplicate_of FROM articles d WHERE d.id = articles.duplicate_of) IS NOT NULL
+  `);
+}
 
 /** Open (creating if necessary) the SQLite database and apply migrations. */
 export function openDb(path) {
@@ -99,7 +135,9 @@ export function openDb(path) {
   const version = db.pragma('user_version', { simple: true });
   for (let v = version; v < MIGRATIONS.length; v++) {
     db.transaction(() => {
-      db.exec(MIGRATIONS[v]);
+      const migration = MIGRATIONS[v];
+      if (typeof migration === 'function') migration(db);
+      else db.exec(migration);
       db.pragma(`user_version = ${v + 1}`);
     })();
   }

@@ -129,6 +129,44 @@ test('near-identical embeddings mark the newer article as duplicate', async () =
   }
 });
 
+test('new repeats point to the group root; re-enriched originals stay roots', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  stub.chat = () => ({ topics: ['news'], summary: 'Same event.' });
+  stub.embed = () => [1, 0, 0, 0]; // everything matches everything
+
+  const vecBlob = Buffer.from(Float32Array.from([1, 0, 0, 0]).buffer);
+  const a = seedArticle(db, { title: 'Original', published: '2026-07-01T00:00:00Z' });
+  const b = seedArticle(db, { title: 'Copy', published: '2026-07-02T00:00:00Z' });
+  db.prepare("UPDATE articles SET status='enriched', embedding=? WHERE id = ?").run(vecBlob, a);
+  db.prepare("UPDATE articles SET status='enriched', embedding=?, duplicate_of=? WHERE id = ?").run(vecBlob, a, b);
+
+  try {
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+
+    // A new copy matches b most strongly but must point to the root, a.
+    const c = seedArticle(db, { title: 'Third copy', published: '2026-07-03T00:00:00Z' });
+    await enrichPending(db, config, llm);
+    assert.equal(
+      db.prepare('SELECT duplicate_of FROM articles WHERE id = ?').get(c).duplicate_of,
+      a,
+      'repeat points to the group root, not another repeat',
+    );
+
+    // Re-enriching the original matches its own repeats -> must stay root.
+    db.prepare("UPDATE articles SET status='pending', enrich_attempts=0 WHERE id = ?").run(a);
+    await enrichPending(db, config, llm);
+    assert.equal(
+      db.prepare('SELECT duplicate_of FROM articles WHERE id = ?').get(a).duplicate_of,
+      null,
+      'no cycle: the re-enriched original keeps its root status',
+    );
+  } finally {
+    await stub.close();
+  }
+});
+
 test('LLM failures retry then park the article as error', async () => {
   const db = tempDb();
   const stub = await startOllamaStub();

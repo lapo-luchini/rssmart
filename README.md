@@ -19,9 +19,12 @@ every cron run — no training jobs:
   scores below real reporting on the same subject;
 - **source record** — the feed's own vote ratio.
 
-Click or hover an article's score in the UI to see the breakdown. Duplicates
-are detected separately, by cosine similarity of summary embeddings against
-recent articles.
+Click or hover an article's score in the UI to see the breakdown.
+
+Near-duplicate stories (detected by cosine similarity of summary embeddings)
+are bundled: the list shows one card per news item — its best-scoring
+version — with an "N more versions" badge that expands the others inline.
+The "all versions" toggle ungroups them.
 
 ## Setup
 
