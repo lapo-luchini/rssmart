@@ -182,7 +182,8 @@
                   :title="a.vote === -1 ? 'never again! (click once more to clear)' : a.vote === -2 ? 'clear vote' : 'less like this'"
                   aria-label="Less like this">{{ a.vote === -2 ? '▼▼' : '▼' }}</button>
           <button class="mark" @click="toggleRead(a)">{{ a.read_at ? 'unread' : 'mark read' }}</button>
-          <a v-if="a.url" class="mark" :href="a.url" target="_blank" rel="noopener">open ↗</a>
+          <a v-if="a.url" class="mark" :href="a.url" target="_blank" rel="noopener"
+             @click="!a.read_at && toggleRead(a)">open ↗</a>
         </span>
       </div>
 
