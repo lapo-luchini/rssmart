@@ -103,3 +103,9 @@ Two paths, with very different scaling:
   without an LLM round-trip.
 - An LLM-updated *draft* of guidelines proposed from accumulated notes,
   applied only on explicit reader approval.
+- Semantic search: embed the query (same model), cosine against the stored
+  text_embeddings, top-k — the same math as the vote kNN, so no sqlite-vec
+  needed until the same ~100k-article horizon. Caveat: nomic-embed-text
+  wants asymmetric prefixes (`search_document:` / `search_query:`); stored
+  embeddings are unprefixed, so proper quality needs a one-off re-embed
+  pass. Fall back to LIKE when Ollama is down.
