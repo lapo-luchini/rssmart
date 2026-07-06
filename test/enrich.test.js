@@ -201,6 +201,33 @@ test('waitForMore keeps draining articles inserted mid-run', async () => {
   }
 });
 
+test('enrich.workers processes articles concurrently', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  let active = 0;
+  let peak = 0;
+  stub.chat = async () => {
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise((r) => setTimeout(r, 60));
+    active--;
+    return { topics: ['x'], summary: 'S.' };
+  };
+  for (let i = 0; i < 4; i++) seedArticle(db, { title: `Article ${i}` });
+
+  try {
+    const config = testConfig();
+    config.enrich.workers = 2;
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+    const result = await enrichPending(db, config, llm);
+    assert.equal(result.enriched, 4);
+    assert.equal(result.failed, 0);
+    assert.equal(peak, 2, 'two generations in flight at once');
+  } finally {
+    await stub.close();
+  }
+});
+
 test('unreachable ollama skips enrichment and keeps articles pending', async () => {
   const db = tempDb();
   const id = seedArticle(db, { title: 'Waiting' });

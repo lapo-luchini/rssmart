@@ -172,11 +172,12 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
  * Failures leave the article pending for the next run, up to
  * enrich.maxAttempts, after which it is parked as status='error'.
  *
- * Articles are drained one at a time until none are left or opts.deadline
- * (epoch ms) passes — the current article always finishes, so the deadline
- * can overshoot by one LLM call. While opts.waitForMore() returns true
- * (e.g. ingestion still running), an empty queue polls instead of exiting,
- * so articles ingested mid-run get enriched in the same run.
+ * enrich.workers articles are processed concurrently (Ollama overlaps
+ * requests) until none are left or opts.deadline (epoch ms) passes —
+ * in-flight articles always finish, so the deadline can overshoot by one
+ * LLM call per worker. While opts.waitForMore() returns true (e.g.
+ * ingestion still running), an empty queue polls instead of exiting, so
+ * articles ingested mid-run get enriched in the same run.
  * opts.onItem, if given, is called after each article (LLM calls are slow;
  * this lets the CLI report progress live).
  */
@@ -229,27 +230,21 @@ export async function enrichPending(
     WHERE id = ?
   `);
 
-  // Pick the next pending article, polling while ingestion may add more.
-  // Distinguishes a drained queue ({}) from work cut off by the deadline
-  // ({timedOut}) so an on-time finish isn't reported as a timeout.
-  const nextArticle = async () => {
-    while (true) {
-      const article = nextPending.get(maxAttempts, JSON.stringify(tried));
-      const expired = deadline && Date.now() >= deadline;
-      if (article) return expired ? { timedOut: true } : { article };
-      if (!waitForMore?.() || expired) return {};
-      await new Promise((r) => setTimeout(r, pollMs));
-    }
-  };
-
   const result = { enriched: 0, failed: 0, duplicates: 0, errors: [], timedOut: false };
 
-  while (true) {
-    const { article, timedOut } = await nextArticle();
-    if (timedOut) result.timedOut = true;
-    if (!article) break;
-    tried.push(article.id);
+  // Claiming is synchronous (select + mark in one tick), so concurrent
+  // workers can never grab the same article. Note the small concurrency
+  // tradeoff: two near-duplicates in flight at the same moment won't see
+  // each other's embedding — later repeats are still caught.
+  const claimNext = () => {
+    const article = nextPending.get(maxAttempts, JSON.stringify(tried));
+    if (article) tried.push(article.id);
+    return article;
+  };
+  const remaining = () =>
+    countPending.get(maxAttempts, JSON.stringify(tried)).c;
 
+  const processOne = async (article) => {
     try {
       const { topics, summary, depth, duplicateOf } =
         await enrichOne(db, llm, article, recent, config.enrich);
@@ -262,7 +257,27 @@ export async function enrichPending(
       result.errors.push({ id: article.id, error: err.message });
       onItem?.({ id: article.id, title: article.title, error: err.message, ...position() });
     }
-  }
+  };
+
+  const worker = async () => {
+    while (true) {
+      if (deadline && Date.now() >= deadline) {
+        // only a real cut-off counts as a timeout, not a drained queue
+        if (remaining() > 0) result.timedOut = true;
+        return;
+      }
+      const article = claimNext();
+      if (!article) {
+        if (!waitForMore?.()) return;
+        await new Promise((r) => setTimeout(r, pollMs));
+        continue;
+      }
+      await processOne(article);
+    }
+  };
+
+  const workers = Math.max(1, config.enrich.workers ?? 2);
+  await Promise.all(Array.from({ length: workers }, worker));
 
   return result;
 }

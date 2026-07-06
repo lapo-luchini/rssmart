@@ -82,9 +82,11 @@ export async function startOllamaStub() {
       try {
         if (req.url === '/api/chat') {
           stub.calls.chat.push(data);
-          const reply = stub.chat(data);
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ message: { role: 'assistant', content: JSON.stringify(reply) } }));
+          // stub.chat may be async (used to simulate slow generations)
+          Promise.resolve(stub.chat(data)).then((reply) => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ message: { role: 'assistant', content: JSON.stringify(reply) } }));
+          });
         } else if (req.url === '/api/embed') {
           stub.calls.embed.push(data);
           res.writeHead(200, { 'content-type': 'application/json' });
@@ -115,6 +117,7 @@ export function testConfig(overrides = {}) {
       timeoutMs: 5000,
     },
     enrich: {
+      workers: 1, // deterministic ordering for tests; parallelism tested explicitly
       maxAttempts: 5,
       dupThreshold: 0.87,
       dupWindowDays: 14,

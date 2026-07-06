@@ -10,6 +10,9 @@ ollama:
   timeoutMs: 60000
 
 enrich:
+  workers: 2          # concurrent articles in the LLM pipeline; raising this
+                      # only helps if the Ollama server accepts parallel
+                      # requests (OLLAMA_NUM_PARALLEL)
   maxAttempts: 5      # failed classifications before an article is parked
   dupThreshold: 0.87  # cosine similarity above which a story is a repeat
   dupWindowDays: 14   # how far back to look for repeats

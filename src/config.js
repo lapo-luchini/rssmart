@@ -12,6 +12,7 @@ const DEFAULTS = {
     timeoutMs: 60_000,
   },
   enrich: {
+    workers: 2,
     maxAttempts: 5,
     dupThreshold: 0.87,
     dupWindowDays: 14,
