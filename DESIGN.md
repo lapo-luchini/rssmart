@@ -39,6 +39,19 @@ day-one spec was retired for exactly that reason; it's in git history).
 - **Classification is newest-first, reclassifications first of all.** A deep
   backlog must not make today's articles stale; explicit reader requests
   jump the queue entirely (`enrich_priority`).
+- **The embedding space is versioned.** Vectors from different models must
+  never be compared, so the model that produced the stored vectors is
+  recorded in `meta.embed_model`. Changing `ollama.embedModel` in the config
+  is detected on the next run (cron or serve): all vectors are cleared and
+  rebuilt by `reembedMissing` — embeddings only, no LLM classification, so
+  ~2-3 articles/s. Legacy vectors with no record are treated as unknown
+  space and rebuilt too. Duplicate marks made in the old space are kept:
+  they were real matches when made, and re-deriving them is O(N²).
+  Task prefixes (`ollama.embedPrefixes`, document/query) ride in the config
+  because every retrieval model spells them differently (qwen3: plain
+  documents + instructed queries; nomic v1.5: `search_document:` /
+  `search_query:`). Current model: qwen3-embedding:0.6b (multilingual —
+  half the feeds are Italian; nomic v1.5 was English-centric).
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
