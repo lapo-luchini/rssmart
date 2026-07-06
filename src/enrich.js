@@ -11,7 +11,7 @@ export function cosine(a, b) {
     na += a[i] * a[i];
     nb += b[i] * b[i];
   }
-  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  const denom = Math.sqrt(na * nb);
   return denom === 0 ? 0 : dot / denom;
 }
 
