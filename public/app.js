@@ -27,6 +27,8 @@ createApp({
       feedSort: { key: null, dir: -1 }, // null = server order (active first)
       feedForm: { url: '', title: '' },
       feedNotice: '',
+      guidelines: '',
+      guidelinesNotice: '',
       stats: null,
       expandedId: null,
       expandedVersions: {},
@@ -204,8 +206,41 @@ createApp({
     openPanel(name) {
       this.panel = name;
       this.feedNotice = '';
+      this.guidelinesNotice = '';
       this.syncHash();
       this.loadSidebarData();
+      if (name === 'topics') {
+        this.api('/api/guidelines')
+          .then((g) => (this.guidelines = g.text))
+          .catch(() => {});
+      }
+    },
+
+    async saveGuidelines() {
+      try {
+        await this.api('/api/guidelines', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text: this.guidelines }),
+        });
+        this.guidelinesNotice = 'Saved — used for every classification from now on.';
+      } catch (err) {
+        this.guidelinesNotice = `Save failed: ${err.message}`;
+      }
+    },
+
+    async reclassify(article) {
+      try {
+        const updated = await this.api(`/api/articles/${article.id}/reclassify`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ note: article.enrich_note ?? '' }),
+        });
+        Object.assign(article, updated); // status -> pending, note as stored
+        this.loadSidebarData();
+      } catch (err) {
+        this.error = `Reclassify failed: ${err.message}`;
+      }
     },
 
     filterTopic(name) {

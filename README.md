@@ -103,6 +103,12 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   (±2, counts double in every signal), a third clears. Expanding a story
   marks it read. Topic chips and each story's left edge are tinted by
   learned preference: green = liked, red = disliked.
+- Disagree with a classification? Expand the article and hit **reclassify**,
+  optionally with a note ("this is about hardware, not software") — the note
+  is stored with the article, shown to the LLM together with the previous
+  classification, and the article jumps the queue. For corrections that
+  should apply to *everything*, edit the **classification guidelines** in
+  the Topics tab: that text rides along with every classification request.
 - **Topics** and **Feeds** tabs (right side of the tab bar) replace the
   article list with their own views: Topics shows every learned topic with
   its preference, votes and article count (click through to its articles);

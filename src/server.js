@@ -11,6 +11,7 @@ const ARTICLE_COLUMNS = `
   a.id, a.feed_id, a.url, a.title, a.author, a.published_at, a.summary,
   a.status, a.duplicate_of, a.score, a.vote, a.read_at, a.created_at,
   a.depth, a.score_topics, a.score_embedding, a.score_depth, a.score_feed,
+  a.enrich_note,
   f.title AS feed_title,
   (SELECT group_concat(t.name, '|') FROM article_topics at
    JOIN topics t ON t.id = at.topic_id
@@ -158,6 +159,47 @@ export function createApp(db, config) {
       FROM articles WHERE id = ?
     `).get(req.params.id);
     res.json(row);
+  });
+
+  // Re-queue an article for classification, optionally with a persistent
+  // reader note the LLM must take into account. Jumps the queue.
+  app.post('/api/articles/:id/reclassify', (req, res) => {
+    const note = req.body?.note;
+    if (note !== undefined && typeof note !== 'string') {
+      return res.status(400).json({ error: 'note must be a string' });
+    }
+    const { changes } = db.prepare(`
+      UPDATE articles
+      SET status = 'pending', enrich_attempts = 0, enrich_priority = 1,
+          enrich_note = COALESCE(NULLIF(TRIM(?), ''), enrich_note)
+      WHERE id = ?
+    `).run(note ?? '', req.params.id);
+    if (!changes) return res.status(404).json({ error: 'not found' });
+    const row = db
+      .prepare('SELECT id, status, enrich_note FROM articles WHERE id = ?')
+      .get(req.params.id);
+    res.json(row);
+  });
+
+  app.get('/api/guidelines', (_req, res) => {
+    const row = db.prepare("SELECT value FROM meta WHERE key = 'guidelines'").get();
+    res.json({ text: row?.value ?? '' });
+  });
+
+  app.put('/api/guidelines', (req, res) => {
+    const text = req.body?.text;
+    if (typeof text !== 'string') {
+      return res.status(400).json({ error: 'text must be a string' });
+    }
+    if (text.trim()) {
+      db.prepare(`
+        INSERT INTO meta (key, value) VALUES ('guidelines', ?)
+        ON CONFLICT (key) DO UPDATE SET value = excluded.value
+      `).run(text.trim());
+    } else {
+      db.prepare("DELETE FROM meta WHERE key = 'guidelines'").run();
+    }
+    res.json({ text: text.trim() });
   });
 
   app.post('/api/articles/:id/read', (req, res) => {

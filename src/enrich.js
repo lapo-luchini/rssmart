@@ -21,11 +21,19 @@ export function bufToVec(buf) {
 
 const SYSTEM = 'You are a news classification assistant. Always answer with a single JSON object and nothing else.';
 
-function classifyPrompt(existingTopics, title, text, maxInputChars) {
+function classifyPrompt(existingTopics, title, text, maxInputChars, { guidelines, previous, note } = {}) {
+  const guidelinesBlock = guidelines
+    ? `\nStanding guidelines from the reader — always follow them:\n${guidelines}\n`
+    : '';
+  const feedbackBlock = note
+    ? `\nA previous classification gave topics [${previous?.topics?.join(', ') ?? ''}]` +
+      (previous?.depth ? ` and depth ${previous.depth}` : '') +
+      `. The reader reviewed it and commented: "${note}". Follow the reader's feedback.\n`
+    : '';
   return `Classify this news article and write a very short preview.
 
 Existing topics: ${existingTopics.length ? existingTopics.join(', ') : '(none yet)'}
-
+${guidelinesBlock}${feedbackBlock}
 Rules:
 - "topics": an array of 1 to 3 topics. Strongly prefer topics from the existing list; only if none fit, invent at most one new topic name (1-2 words, lowercase English).
 - "summary": a preview of at most 50 words, plain text, factual, same language as the article. Cover the article as a whole, not just its opening.
@@ -122,10 +130,27 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     .map((r) => r.name);
   const text = await articleText(db, article, enrichCfg);
 
+  const guidelines = db
+    .prepare("SELECT value FROM meta WHERE key = 'guidelines'")
+    .get()?.value;
+  const previous = article.enrich_note
+    ? {
+        topics: db.prepare(`
+          SELECT t.name FROM article_topics at
+          JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ?
+        `).all(article.id).map((r) => r.name),
+        depth: article.depth,
+      }
+    : null;
+
   const { maxInputChars } = enrichCfg;
   const reply = await llm.chatJSON(
     SYSTEM,
-    classifyPrompt(existing, article.title, text, maxInputChars),
+    classifyPrompt(existing, article.title, text, maxInputChars, {
+      guidelines,
+      previous,
+      note: article.enrich_note,
+    }),
     { numCtx: contextTokens(maxInputChars) },
   );
   // Models occasionally drift on key names ("topic" for "topics").
@@ -161,6 +186,8 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     'INSERT OR IGNORE INTO article_topics (article_id, topic_id) VALUES (?, ?)',
   );
   db.transaction(() => {
+    // replace, don't merge: re-enrichment must drop corrected-away topics
+    db.prepare('DELETE FROM article_topics WHERE article_id = ?').run(article.id);
     for (const name of topics) {
       const { id: topicId } = insertTopic.get(name);
       linkTopic.run(article.id, topicId);
@@ -168,7 +195,7 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     db.prepare(`
       UPDATE articles
       SET summary = ?, embedding = ?, text_embedding = ?, depth = ?,
-          duplicate_of = ?, status = 'enriched'
+          duplicate_of = ?, status = 'enriched', enrich_priority = 0
       WHERE id = ?
     `).run(
       summary,
@@ -214,13 +241,15 @@ export async function enrichPending(
   // Articles already attempted in this run: a failure stays 'pending' (for
   // the NEXT run) and must not be picked again by this one.
   const tried = [];
-  // Newest first: fresh articles are worth reading now, a backlog of old
-  // ones can wait (and shouldn't make the fresh ones old too).
+  // Reader-requested reclassifications first, then newest first: fresh
+  // articles are worth reading now, a backlog of old ones can wait.
   const nextPending = db.prepare(`
-    SELECT id, url, title, content, full_content FROM articles
+    SELECT id, url, title, content, full_content, depth, enrich_note
+    FROM articles
     WHERE status = 'pending' AND enrich_attempts < ?
       AND id NOT IN (SELECT value FROM json_each(?))
-    ORDER BY COALESCE(published_at, created_at) DESC, id DESC LIMIT 1
+    ORDER BY enrich_priority DESC, COALESCE(published_at, created_at) DESC, id DESC
+    LIMIT 1
   `);
 
   // Embeddings of recent, already-enriched articles for duplicate detection.

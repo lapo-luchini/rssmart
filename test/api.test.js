@@ -208,6 +208,47 @@ test('read toggling', async () => {
   assert.equal(off.body.read_at, null);
 });
 
+test('reclassify endpoint queues with priority and keeps the note sticky', async () => {
+  const { status, body } = await post(`/api/articles/${ids.readOne}/reclassify`, {
+    note: 'wrong category',
+  });
+  assert.equal(status, 200);
+  assert.equal(body.status, 'pending');
+  assert.equal(body.enrich_note, 'wrong category');
+
+  // an empty note on a later request keeps the stored one
+  const again = await post(`/api/articles/${ids.readOne}/reclassify`, { note: '' });
+  assert.equal(again.body.enrich_note, 'wrong category');
+
+  const row = (await get(`/api/articles/${ids.readOne}`)).body;
+  assert.equal(row.status, 'pending');
+
+  assert.equal((await post('/api/articles/99999/reclassify', {})).status, 404);
+  assert.equal((await post(`/api/articles/${ids.readOne}/reclassify`, { note: 42 })).status, 400);
+
+  // restore for the stats assertions later in the suite
+  db.prepare("UPDATE articles SET status='enriched', enrich_priority=0 WHERE id = ?").run(ids.readOne);
+});
+
+test('guidelines are editable and round-trip', async () => {
+  assert.deepEqual((await get('/api/guidelines')).body, { text: '' });
+
+  const putRes = await fetch(`${base}/api/guidelines`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'prefer specific topics ' }),
+  });
+  assert.equal(putRes.status, 200);
+  assert.deepEqual((await get('/api/guidelines')).body, { text: 'prefer specific topics' });
+
+  const bad = await fetch(`${base}/api/guidelines`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 7 }),
+  });
+  assert.equal(bad.status, 400);
+});
+
 test('topics, feeds and stats endpoints', async () => {
   const topics = await get('/api/topics');
   const tech = topics.body.find((t) => t.name === 'tech');

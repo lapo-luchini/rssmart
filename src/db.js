@@ -93,6 +93,12 @@ const MIGRATIONS = [
     db.exec('CREATE INDEX idx_articles_duplicate_of ON articles(duplicate_of);');
     repairDuplicateGroups(db);
   },
+  // v8 — on-demand reclassification: a persistent reader note fed to the
+  // LLM, and a priority flag so requests jump the newest-first queue
+  `
+  ALTER TABLE articles ADD COLUMN enrich_note TEXT;
+  ALTER TABLE articles ADD COLUMN enrich_priority INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /**

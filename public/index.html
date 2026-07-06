@@ -71,6 +71,15 @@
       <span>{{ t.articles }}</span>
       <span><button class="mark" @click="filterTopic(t.name)">show articles</button></span>
     </div>
+    <form class="guidelines" @submit.prevent="saveGuidelines">
+      <label for="guidelines-text">classification guidelines — included in every classification request</label>
+      <textarea id="guidelines-text" v-model="guidelines" rows="4"
+                placeholder="e.g. articles about embedded electronics belong to “hardware”, never “software”"></textarea>
+      <span>
+        <button class="mark" type="submit">save guidelines</button>
+        <em v-if="guidelinesNotice" class="feed-notice">{{ guidelinesNotice }}</em>
+      </span>
+    </form>
   </section>
 
   <section class="feeds-panel" v-if="panel === 'feeds'">
@@ -180,6 +189,12 @@
       <div v-if="expandedId === a.id" class="story-body">
         <div v-if="a.content" v-html="a.content"></div>
         <p v-else class="notice">This feed carries no article body. Use “open ↗” to read at the source.</p>
+        <form class="reclassify" @submit.prevent="reclassify(a)">
+          <input type="text" v-model="a.enrich_note"
+                 placeholder="optional note to the classifier, e.g. “this is about hardware, not software”">
+          <button class="mark" type="submit"
+                  :disabled="a.status === 'pending'">{{ a.status === 'pending' ? 'queued…' : 'reclassify' }}</button>
+        </form>
       </div>
 
       <div v-if="expandedVersions[a.id]" class="versions">

@@ -167,6 +167,48 @@ test('new repeats point to the group root; re-enriched originals stay roots', as
   }
 });
 
+test('reclassification: note + guidelines reach the prompt, topics are replaced, queue is jumped', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  try {
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+
+    // first pass classifies as software
+    stub.chat = () => ({ topics: ['software'], summary: 'About things.', depth: 3 });
+    const old = seedArticle(db, { title: 'Corrected later', published: '2026-07-01T00:00:00Z' });
+    await enrichPending(db, config, llm);
+
+    // reader disagrees; a fresher pending article competes for the queue
+    db.prepare("INSERT INTO meta (key, value) VALUES ('guidelines', 'embedded systems are hardware')").run();
+    db.prepare(`UPDATE articles SET status='pending', enrich_attempts=0, enrich_priority=1,
+                enrich_note='this is about hardware, not software' WHERE id = ?`).run(old);
+    seedArticle(db, { title: 'Fresh competitor', published: '2026-07-05T00:00:00Z' });
+
+    stub.calls.chat.length = 0;
+    stub.chat = () => ({ topics: ['hardware'], summary: 'About hardware.', depth: 4 });
+    const order = [];
+    await enrichPending(db, config, llm, { onItem: (i) => order.push(i.id) });
+
+    assert.equal(order[0], old, 'reclassification request jumps the newest-first queue');
+    const prompt = stub.calls.chat[0].messages[1].content;
+    assert.match(prompt, /embedded systems are hardware/, 'guidelines included');
+    assert.match(prompt, /this is about hardware, not software/, 'reader note included');
+    assert.match(prompt, /previous classification gave topics \[software\] and depth 3/i);
+
+    const topics = db.prepare(`
+      SELECT t.name FROM article_topics at JOIN topics t ON t.id = at.topic_id
+      WHERE at.article_id = ?
+    `).all(old).map((r) => r.name);
+    assert.deepEqual(topics, ['hardware'], 'old topics replaced, not merged');
+    const art = db.prepare('SELECT depth, enrich_priority FROM articles WHERE id = ?').get(old);
+    assert.equal(art.depth, 4, 'depth re-evaluated');
+    assert.equal(art.enrich_priority, 0, 'priority cleared after the run');
+  } finally {
+    await stub.close();
+  }
+});
+
 test('LLM failures retry then park the article as error', async () => {
   const db = tempDb();
   const stub = await startOllamaStub();
