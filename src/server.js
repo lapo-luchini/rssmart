@@ -168,9 +168,12 @@ export function createApp(db, config) {
     if (note !== undefined && typeof note !== 'string') {
       return res.status(400).json({ error: 'note must be a string' });
     }
+    // full_content is cleared so the source text is re-fetched and
+    // re-judged too — reclassify doubles as "try this article again".
     const { changes } = db.prepare(`
       UPDATE articles
       SET status = 'pending', enrich_attempts = 0, enrich_priority = 1,
+          full_content = NULL,
           enrich_note = COALESCE(NULLIF(TRIM(?), ''), enrich_note)
       WHERE id = ?
     `).run(note ?? '', req.params.id);

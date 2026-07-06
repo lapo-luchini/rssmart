@@ -25,11 +25,19 @@ const PAGE = `<!doctype html>
   <script>alert('tracking')</script>
 </body></html>`;
 
+const FOOTER_PAGE = `<!doctype html>
+<html><head><title>Prepatch</title></head>
+<body>
+  <article><p>Copyright notices and legal information for this site. All rights reserved by their creators. Trademarks belong to their registered owners worldwide.</p></article>
+</body></html>`;
+
 function startPageServer() {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       if (req.url === '/article') {
         res.writeHead(200, { 'content-type': 'text/html' }).end(PAGE);
+      } else if (req.url === '/footer-only') {
+        res.writeHead(200, { 'content-type': 'text/html' }).end(FOOTER_PAGE);
       } else {
         res.writeHead(404).end('gone');
       }
@@ -92,11 +100,15 @@ test('thin RSS entries get their origin page fetched for the LLM; failures fall 
     // enrichment runs newest-first: 'thin' has the later date so it goes first
     const thin = Number(ins.run('g1', `${site.url}/article`, 'Big Announcement', '<a href="#">Comments</a>', '2026-07-02T00:00:00Z').lastInsertRowid);
     const dead = Number(ins.run('g2', `${site.url}/missing`, 'Gone page', 'Short RSS text only.', '2026-07-01T00:00:00Z').lastInsertRowid);
+    // page extraction worse than the feed text (the LWN-footer case):
+    // the RSS content must win and no full_content must be stored
+    const RSS_ANNOUNCEMENT = 'The 7.2-rc2 kernel prepatch is out for testing. Linus said things look very normal, in line with recent releases and slightly smaller than rc2 was in 7.1, so far so good. '.repeat(2);
+    const footer = Number(ins.run('g3', `${site.url}/footer-only`, 'Kernel prepatch', RSS_ANNOUNCEMENT, '2026-06-30T00:00:00Z').lastInsertRowid);
 
     const config = testConfig();
     const llm = new Ollama({ ...config.ollama, url: stub.url });
     const result = await enrichPending(db, config, llm);
-    assert.equal(result.enriched, 2);
+    assert.equal(result.enriched, 3);
 
     const prompts = stub.calls.chat.map((c) => c.messages.at(-1).content);
     assert.ok(
@@ -104,12 +116,16 @@ test('thin RSS entries get their origin page fetched for the LLM; failures fall 
       'LLM saw the fetched page text, not the RSS stub',
     );
     assert.ok(prompts[1].includes('Short RSS text only.'), 'fetch failure falls back to RSS text');
+    assert.ok(prompts[2].includes('kernel prepatch is out for testing'), 'feed text wins over a worse extraction');
+    assert.ok(!prompts[2].includes('Copyright notices'), 'footer extraction not used');
 
     const rows = db.prepare('SELECT id, full_content FROM articles ORDER BY id').all();
     assert.ok(rows[0].full_content.includes('ZETAFRAME'), 'page content persisted');
     assert.equal(rows[1].full_content, null);
+    assert.equal(rows[2].full_content, null, 'worse extraction not persisted');
     assert.equal(rows[0].id, thin);
     assert.equal(rows[1].id, dead);
+    assert.equal(rows[2].id, footer);
   } finally {
     await stub.close();
     await site.close();

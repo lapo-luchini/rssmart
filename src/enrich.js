@@ -101,7 +101,9 @@ async function articleText(db, article, enrichCfg) {
   const page = await fetchArticleText(article.url, {
     allowPrivate: allowPrivateFetch,
   });
-  if (!page) return rssText;
+  // Keep the page only when extraction actually beat the feed's own text —
+  // Readability sometimes grabs a footer or sidebar instead of the article.
+  if (!page || page.text.length <= rssText.length) return rssText;
   // Persist immediately so a later classify failure doesn't refetch.
   db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
     .run(page.html, article.id);
