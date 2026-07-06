@@ -16,6 +16,7 @@ createApp({
       q: '',
       sort: 'date',
       dupes: false,
+      enrichedOnly: false,
       articles: [],
       total: 0,
       topics: [],
@@ -94,6 +95,7 @@ createApp({
       if (this.feedId) p.set('feed_id', this.feedId);
       if (this.q) p.set('q', this.q);
       if (this.dupes) p.set('dupes', '1');
+      if (this.enrichedOnly) p.set('status', 'enriched');
       return p;
     },
 

@@ -35,6 +35,12 @@ function seed() {
   link.run(out.sporty, sports);
   out.readOne = Number(insArt.run({ ...base, guid: 'g4', title: 'Already read', published_at: '2026-07-02T00:00:00Z', read_at: '2026-07-02T10:00:00Z' }).lastInsertRowid);
   out.dupe = Number(insArt.run({ ...base, guid: 'g5', title: 'Fresh tech story (copy)', published_at: '2026-07-03T01:00:00Z', duplicate_of: out.fresh }).lastInsertRowid);
+  // one unclassified article, marked read so unread-view assertions stay put
+  out.pending = Number(db.prepare(`
+    INSERT INTO articles (feed_id, guid, title, content, status, published_at, read_at)
+    VALUES (1, 'g6', 'Awaiting classification', 'body', 'pending',
+            '2026-06-30T00:00:00Z', '2026-06-30T10:00:00Z')
+  `).run().lastInsertRowid);
   recomputeScores(db, testConfig());
   return out;
 }
@@ -78,10 +84,21 @@ test('default view: unread, no dupes, sorted by score then date', async () => {
 
 test('view=all with dupes=1 returns everything, date sorted', async () => {
   const { body } = await get('/api/articles?view=all&dupes=1&sort=date');
-  assert.equal(body.total, 5);
+  assert.equal(body.total, 6);
   assert.equal(body.articles[0].title, 'Sports story');
   const dupe = body.articles.find((a) => a.duplicate_of);
   assert.equal(dupe.duplicate_title, 'Fresh tech story', 'repeats carry the original title');
+});
+
+test('status filter narrows to classified (or pending) articles', async () => {
+  const enriched = await get('/api/articles?view=all&status=enriched');
+  assert.equal(enriched.body.total, 4, 'pending article excluded');
+
+  const pending = await get('/api/articles?view=all&status=pending');
+  assert.deepEqual(pending.body.articles.map((a) => a.title), ['Awaiting classification']);
+
+  const bad = await get('/api/articles?view=all&status=bogus');
+  assert.equal(bad.status, 400);
 });
 
 test('topic, feed, search filters', async () => {
@@ -89,7 +106,7 @@ test('topic, feed, search filters', async () => {
   assert.deepEqual(byTopic.body.articles.map((a) => a.title), ['Sports story']);
 
   const byFeed = await get('/api/articles?view=all&feed_id=1');
-  assert.equal(byFeed.body.total, 4, 'dupes still hidden by default');
+  assert.equal(byFeed.body.total, 5, 'dupes still hidden by default');
 
   const byQ = await get('/api/articles?view=all&q=Already');
   assert.deepEqual(byQ.body.articles.map((a) => a.title), ['Already read']);
@@ -139,7 +156,7 @@ test('feed management: add, disable, stats, OPML round-trip', async () => {
 
   const feeds = await get('/api/feeds');
   const feedOne = feeds.body.find((f) => f.title === 'Feed One');
-  assert.equal(feedOne.articles, 5);
+  assert.equal(feedOne.articles, 6);
   assert.ok('ok_count' in feedOne && 'error_count' in feedOne && 'per_week' in feedOne);
   assert.ok('avg_vote' in feedOne);
 
@@ -181,11 +198,11 @@ test('topics, feeds and stats endpoints', async () => {
   assert.ok(tech.pref > 0);
 
   const feeds = await get('/api/feeds');
-  assert.equal(feeds.body[0].articles, 5);
+  assert.equal(feeds.body[0].articles, 6);
 
   const stats = await get('/api/stats');
   assert.deepEqual(
-    { total: stats.body.total, duplicates: stats.body.duplicates },
-    { total: 5, duplicates: 1 },
+    { total: stats.body.total, duplicates: stats.body.duplicates, pending: stats.body.pending },
+    { total: 6, duplicates: 1, pending: 1 },
   );
 });

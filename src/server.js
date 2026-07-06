@@ -21,59 +21,68 @@ function rowToArticle(row) {
   return { ...row, topics: row.topics ? row.topics.split('|') : [] };
 }
 
+/** Translate list-endpoint query params into SQL; returns {error} on bad input. */
+function articleQuery(query) {
+  const {
+    view = 'interesting', topic, feed_id: feedId, q, sort, status,
+    dupes = '0', limit = '50', offset = '0',
+  } = query;
+
+  const where = [];
+  const params = [];
+
+  if (view === 'interesting' || view === 'unread') {
+    where.push('a.read_at IS NULL');
+  } else if (view !== 'all') {
+    return { error: `unknown view "${view}"` };
+  }
+  if (dupes !== '1') where.push('a.duplicate_of IS NULL');
+  if (status) {
+    if (!['pending', 'enriched', 'error'].includes(status)) {
+      return { error: `unknown status "${status}"` };
+    }
+    where.push('a.status = ?');
+    params.push(status);
+  }
+  if (topic) {
+    where.push(`EXISTS (SELECT 1 FROM article_topics at
+      JOIN topics t ON t.id = at.topic_id
+      WHERE at.article_id = a.id AND t.name = ? COLLATE NOCASE)`);
+    params.push(topic);
+  }
+  if (feedId) {
+    where.push('a.feed_id = ?');
+    params.push(Number(feedId));
+  }
+  if (q) {
+    where.push('(a.title LIKE ? OR a.summary LIKE ? OR a.content LIKE ?)');
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+  }
+
+  const sortKey = sort ?? (view === 'interesting' ? 'score' : 'date');
+  if (!['score', 'date'].includes(sortKey)) {
+    return { error: `unknown sort "${sort}"` };
+  }
+
+  return {
+    whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '',
+    params,
+    orderBy: sortKey === 'score'
+      ? 'a.score DESC, COALESCE(a.published_at, a.created_at) DESC'
+      : 'COALESCE(a.published_at, a.created_at) DESC',
+    lim: Math.min(Math.max(Number(limit) || 50, 1), 200),
+    off: Math.max(Number(offset) || 0, 0),
+  };
+}
+
 export function createApp(db, config) {
   const app = express();
   app.use(express.json({ limit: '2mb' })); // OPML imports ride in JSON
 
   app.get('/api/articles', (req, res) => {
-    const {
-      view = 'interesting',
-      topic,
-      feed_id: feedId,
-      q,
-      sort,
-      dupes = '0',
-      limit = '50',
-      offset = '0',
-    } = req.query;
-
-    const where = [];
-    const params = [];
-
-    if (view === 'interesting' || view === 'unread') {
-      where.push('a.read_at IS NULL');
-    } else if (view !== 'all') {
-      return res.status(400).json({ error: `unknown view "${view}"` });
-    }
-    if (dupes !== '1') where.push('a.duplicate_of IS NULL');
-    if (topic) {
-      where.push(`EXISTS (SELECT 1 FROM article_topics at
-        JOIN topics t ON t.id = at.topic_id
-        WHERE at.article_id = a.id AND t.name = ? COLLATE NOCASE)`);
-      params.push(topic);
-    }
-    if (feedId) {
-      where.push('a.feed_id = ?');
-      params.push(Number(feedId));
-    }
-    if (q) {
-      where.push('(a.title LIKE ? OR a.summary LIKE ? OR a.content LIKE ?)');
-      const like = `%${q}%`;
-      params.push(like, like, like);
-    }
-
-    const sortKey = sort ?? (view === 'interesting' ? 'score' : 'date');
-    const orderBy =
-      sortKey === 'score'
-        ? 'a.score DESC, COALESCE(a.published_at, a.created_at) DESC'
-        : 'COALESCE(a.published_at, a.created_at) DESC';
-    if (!['score', 'date'].includes(sortKey)) {
-      return res.status(400).json({ error: `unknown sort "${sort}"` });
-    }
-
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const lim = Math.min(Math.max(Number(limit) || 50, 1), 200);
-    const off = Math.max(Number(offset) || 0, 0);
+    const query = articleQuery(req.query);
+    if (query.error) return res.status(400).json({ error: query.error });
+    const { whereSql, params, orderBy, lim, off } = query;
 
     const rows = db.prepare(`
       SELECT ${ARTICLE_COLUMNS}

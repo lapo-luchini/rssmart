@@ -48,6 +48,9 @@
       <label class="dupes-toggle">
         <input type="checkbox" v-model="dupes" @change="reload"> repeats
       </label>
+      <label class="dupes-toggle" title="hide articles still waiting for classification">
+        <input type="checkbox" v-model="enrichedOnly" @change="reload"> classified only
+      </label>
     </div>
   </nav>
 
