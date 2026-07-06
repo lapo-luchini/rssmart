@@ -19,10 +19,13 @@ export function parseJsonReply(content) {
 
 /** Thin client for a (possibly remote) Ollama instance. */
 export class Ollama {
-  constructor({ url, chatModel, embedModel, timeoutMs = 60_000 }) {
+  constructor({ url, chatModel, embedModel, embedPrefixes, timeoutMs = 60_000 }) {
     this.url = url.replace(/\/+$/, '');
     this.chatModel = chatModel;
     this.embedModel = embedModel;
+    // Retrieval-tuned models use task prefixes (asymmetric: documents vs
+    // queries) — model-specific, so they ride in the config.
+    this.embedPrefixes = { document: '', query: '', ...embedPrefixes };
     this.timeoutMs = timeoutMs;
     // Thinking models waste time and leak "thought" keys into the JSON;
     // ask Ollama to disable it. Cleared if the server rejects the param.
@@ -85,11 +88,11 @@ export class Ollama {
     return parseJsonReply(data.message?.content);
   }
 
-  /** Embed a text; returns a Float32Array. */
-  async embed(text) {
+  /** Embed a text; returns a Float32Array. kind: 'document' | 'query'. */
+  async embed(text, kind = 'document') {
     const data = await this.#post('/api/embed', {
       model: this.embedModel,
-      input: text,
+      input: (this.embedPrefixes[kind] ?? '') + text,
     });
     const vec = data.embeddings?.[0];
     if (!Array.isArray(vec) || vec.length === 0) {

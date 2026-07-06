@@ -4,7 +4,7 @@ import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
 import { syncFeeds, ingestAll } from '../src/ingest.js';
 import { Ollama } from '../src/llm.js';
-import { enrichPending } from '../src/enrich.js';
+import { enrichPending, syncEmbeddingSpace, reembedMissing } from '../src/enrich.js';
 import { recomputeScores } from '../src/scoring.js';
 import { createApp } from '../src/server.js';
 import { startScheduler } from '../src/scheduler.js';
@@ -58,6 +58,13 @@ if (mode === 'cron') {
   const info = (...args) => verbose && console.log(...args);
 
   syncFeeds(db, config.feeds);
+  const space = syncEmbeddingSpace(db, config);
+  if (space.changed) {
+    console.error(
+      `embedding model changed (${space.from} -> ${config.ollama.embedModel}): ` +
+        `${space.cleared} stored vector(s) cleared, re-embedding`,
+    );
+  }
 
   // Ingest (network-bound) and enrichment (Ollama-bound) run concurrently.
   // The whole run has a time budget; whatever enrichment doesn't finish
@@ -89,7 +96,15 @@ if (mode === 'cron') {
   const llm = new Ollama(config.ollama);
   const enrichPromise = !acquireLease(db, owner)
     ? Promise.resolve({ skipped: true, reason: 'another rssmart process holds the classification lease' })
-    : enrichPending(db, config, llm, {
+    : (async () => {
+        // articles missing vectors in the current space come first, so
+        // duplicate detection below compares against a populated space
+        const re = await reembedMissing(db, config, llm, {
+          deadline,
+          onItem: () => acquireLease(db, owner),
+        });
+        if (re.reembedded) info(`re-embedded ${re.reembedded} article(s)`);
+        return enrichPending(db, config, llm, {
     deadline,
     waitForMore: () => !ingestDone,
     onItem(item) {
@@ -105,7 +120,8 @@ if (mode === 'cron') {
       );
       if (values.debug) info(`    ${item.summary}`);
     },
-  });
+        });
+      })();
   const [ingest, enrich] = await Promise.all([ingestPromise, enrichPromise]);
   releaseLease(db, owner);
 
@@ -131,6 +147,13 @@ if (mode === 'cron') {
   const allFeedsFailed = ingest.feedsFailed > 0 && ingest.feedsOk === 0;
   process.exit(allFeedsFailed ? 1 : 0);
 } else {
+  const space = syncEmbeddingSpace(db, config);
+  if (space.changed) {
+    console.log(
+      `embedding model changed (${space.from} -> ${config.ollama.embedModel}): ` +
+        `${space.cleared} stored vector(s) cleared, the scheduler will re-embed`,
+    );
+  }
   const app = createApp(db, config);
   const port = Number(values.port) || config.server.port;
   app.listen(port, config.server.host, () => {

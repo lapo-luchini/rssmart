@@ -9,6 +9,7 @@ const DEFAULTS = {
     url: 'http://localhost:11434',
     chatModel: 'llama3.1',
     embedModel: 'nomic-embed-text',
+    embedPrefixes: { document: '', query: '' },
     timeoutMs: 60_000,
   },
   enrich: {
@@ -71,7 +72,14 @@ export function loadConfig(path) {
   const config = {
     ...DEFAULTS,
     ...user,
-    ollama: { ...DEFAULTS.ollama, ...user.ollama },
+    ollama: {
+      ...DEFAULTS.ollama,
+      ...user.ollama,
+      embedPrefixes: {
+        ...DEFAULTS.ollama.embedPrefixes,
+        ...user.ollama?.embedPrefixes,
+      },
+    },
     enrich: { ...DEFAULTS.enrich, ...user.enrich },
     cron: { ...DEFAULTS.cron, ...user.cron },
     scheduler: { ...DEFAULTS.scheduler, ...user.scheduler },

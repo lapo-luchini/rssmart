@@ -1,5 +1,5 @@
 import { ingestAll } from './ingest.js';
-import { enrichPending } from './enrich.js';
+import { enrichPending, reembedMissing } from './enrich.js';
 import { recomputeScores } from './scoring.js';
 import { Ollama } from './llm.js';
 import { acquireLease, releaseLease } from './lease.js';
@@ -42,28 +42,39 @@ export function startScheduler(db, config, {
     }
   };
 
+  const hasClassifierWork = () => db.prepare(`
+    SELECT COUNT(*) AS c FROM articles
+    WHERE (status = 'pending' AND enrich_attempts < ?)
+       OR (status = 'enriched' AND (embedding IS NULL OR text_embedding IS NULL))
+  `).get(config.enrich.maxAttempts).c > 0;
+
+  // One lease-guarded batch: re-embed vectors missing in the current
+  // embedding space first, then classify pending articles.
+  const classifyBatch = async () => {
+    const started = Date.now();
+    const deadline = started + batchMs;
+    const heartbeat = () => acquireLease(db, owner);
+
+    const re = await reembedMissing(db, config, llm, { deadline, onItem: heartbeat });
+    if (re.reembedded) log(`scheduler: re-embedded ${plural(re.reembedded, 'article')}`);
+
+    const r = await enrichPending(db, config, llm, { deadline, onItem: heartbeat });
+    if (r.enriched || r.failed) {
+      recomputeScores(db, config);
+      const avg = (Date.now() - started) / (r.enriched + r.failed) / 1000;
+      log(`scheduler: classified ${plural(r.enriched, 'article')} (avg ${avg.toFixed(1)}s each)` +
+        (r.failed ? `, ${r.failed} failed` : ''));
+    }
+  };
+
   let enriching = false;
   const enrichTick = async () => {
     if (enriching) return;
     enriching = true;
     try {
-      const { c } = db.prepare(`
-        SELECT COUNT(*) AS c FROM articles
-        WHERE status = 'pending' AND enrich_attempts < ?
-      `).get(config.enrich.maxAttempts);
-      if (c > 0 && acquireLease(db, owner)) {
+      if (hasClassifierWork() && acquireLease(db, owner)) {
         try {
-          const started = Date.now();
-          const r = await enrichPending(db, config, llm, {
-            deadline: Date.now() + batchMs,
-            onItem: () => acquireLease(db, owner), // heartbeat per article
-          });
-          if (r.enriched || r.failed) {
-            recomputeScores(db, config);
-            const avg = (Date.now() - started) / (r.enriched + r.failed) / 1000;
-            log(`scheduler: classified ${plural(r.enriched, 'article')} (avg ${avg.toFixed(1)}s each)` +
-              (r.failed ? `, ${r.failed} failed` : ''));
-          }
+          await classifyBatch();
         } finally {
           releaseLease(db, owner);
         }

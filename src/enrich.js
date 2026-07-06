@@ -111,6 +111,87 @@ async function articleText(db, article, enrichCfg) {
 }
 
 /**
+ * Embeddings from different models live in different vector spaces and
+ * must never be compared. The model that produced the stored vectors is
+ * recorded in meta; when the configured embedModel differs (or vectors
+ * predate the record), all vectors are cleared and articles get re-embedded
+ * by reembedMissing. Duplicate marks from the old space are kept: they were
+ * real matches when made, and re-deriving them would be O(N²).
+ */
+export function syncEmbeddingSpace(db, config) {
+  const current = config.ollama.embedModel;
+  const stored = db
+    .prepare("SELECT value FROM meta WHERE key = 'embed_model'")
+    .get()?.value;
+  if (stored === current) return { changed: false };
+
+  const record = () => db.prepare(`
+    INSERT INTO meta (key, value) VALUES ('embed_model', ?)
+    ON CONFLICT (key) DO UPDATE SET value = excluded.value
+  `).run(current);
+
+  const { c } = db.prepare(`
+    SELECT COUNT(*) AS c FROM articles
+    WHERE embedding IS NOT NULL OR text_embedding IS NOT NULL
+  `).get();
+  if (c === 0) {
+    record();
+    return { changed: false };
+  }
+  db.exec('UPDATE articles SET embedding = NULL, text_embedding = NULL');
+  record();
+  return { changed: true, from: stored ?? 'unknown', cleared: c };
+}
+
+/**
+ * Re-embed enriched articles that lack vectors in the current embedding
+ * space (after an embedModel change). Embeddings only — no LLM
+ * classification, so this runs at dozens of articles per second.
+ */
+export async function reembedMissing(db, config, llm, { deadline, onItem } = {}) {
+  const result = { reembedded: 0, failed: 0, errors: [] };
+  const pendingCount = () => db.prepare(`
+    SELECT COUNT(*) AS c FROM articles
+    WHERE status = 'enriched' AND (embedding IS NULL OR text_embedding IS NULL)
+  `).get().c;
+  if (pendingCount() === 0) return result;
+  if (!(await llm.available())) {
+    return { ...result, skipped: true, reason: `ollama not reachable at ${llm.url}` };
+  }
+
+  const tried = [];
+  const next = db.prepare(`
+    SELECT id, title, summary, content, full_content FROM articles
+    WHERE status = 'enriched' AND (embedding IS NULL OR text_embedding IS NULL)
+      AND id NOT IN (SELECT value FROM json_each(?))
+    ORDER BY COALESCE(published_at, created_at) DESC LIMIT 1
+  `);
+  const save = db.prepare(
+    'UPDATE articles SET embedding = ?, text_embedding = ? WHERE id = ?',
+  );
+
+  while (!deadline || Date.now() < deadline) {
+    const article = next.get(JSON.stringify(tried));
+    if (!article) break;
+    tried.push(article.id);
+    try {
+      const text = stripHtml(article.full_content ?? article.content);
+      const vec = await llm.embed(
+        `${article.title}\n${article.summary ?? sampleText(text, 500)}`,
+      );
+      const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
+      save.run(Buffer.from(vec.buffer), Buffer.from(textVec.buffer), article.id);
+      result.reembedded++;
+      onItem?.({ id: article.id, done: result.reembedded });
+    } catch (err) {
+      result.failed++;
+      result.errors.push({ id: article.id, error: err.message });
+    }
+  }
+  return result;
+}
+
+/**
  * duplicate_of always points to a group root, never to another repeat —
  * that keeps groups single-level for bundling. If the matched article's
  * root is the article itself (a re-enriched original matching one of its
