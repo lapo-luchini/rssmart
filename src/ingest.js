@@ -52,9 +52,37 @@ function scheduleNextFetch(db, feed, config, { failed = false } = {}) {
   `).run(minutes, feed.id);
 }
 
+/**
+ * Fetch feed XML honoring its declared charset. rss-parser's parseURL
+ * assumes UTF-8, which turns latin-1 feeds (still common on Italian sites)
+ * into U+FFFD mojibake at storage time.
+ */
+export async function fetchFeedXml(url, timeoutMs = 30_000) {
+  const res = await fetch(url, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: {
+      'user-agent': 'rssmart/1.0 (personal RSS reader)',
+      accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8',
+    },
+  });
+  if (!res.ok) throw new Error(`Status code ${res.status}`);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  const head = bytes.subarray(0, 512).toString('latin1');
+  const charset =
+    /charset=["']?([\w-]+)/i.exec(res.headers.get('content-type') ?? '')?.[1] ??
+    /<\?xml[^>]*encoding=["']([\w-]+)["']/i.exec(head)?.[1] ??
+    'utf-8';
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch {
+    return bytes.toString('utf8'); // unknown label: best effort
+  }
+}
+
 /** Fetch one feed and insert its new items. Returns the new-article count. */
 export async function ingestFeed(db, feed, parser) {
-  const parsed = await parser.parseURL(feed.url);
+  const parsed = await parser.parseString(await fetchFeedXml(feed.url));
 
   const insert = db.prepare(`
     INSERT OR IGNORE INTO articles

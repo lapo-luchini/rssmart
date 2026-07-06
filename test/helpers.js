@@ -37,15 +37,20 @@ function listen(server) {
   });
 }
 
-/** HTTP server serving RSS XML per path; routes is a mutable Map. */
+/** HTTP server serving RSS per path; routes maps to XML strings or, for
+ *  encoding tests, {body: Buffer, type: string}. */
 export async function startRssServer(routes = new Map()) {
   const server = http.createServer((req, res) => {
-    const xml = routes.get(req.url);
-    if (!xml) {
+    const route = routes.get(req.url);
+    if (!route) {
       res.writeHead(404).end('not found');
       return;
     }
-    res.writeHead(200, { 'content-type': 'application/rss+xml' }).end(xml);
+    if (typeof route === 'object' && route.body) {
+      res.writeHead(200, { 'content-type': route.type ?? 'text/xml' }).end(route.body);
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/rss+xml' }).end(route);
   });
   const url = await listen(server);
   return { url, routes, close: () => new Promise((r) => server.close(r)) };

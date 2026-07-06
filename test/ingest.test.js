@@ -55,6 +55,28 @@ test('ingestAll inserts items once and is idempotent', async () => {
   }
 });
 
+test('latin-1 feeds are decoded per their declared charset', async () => {
+  const db = tempDb();
+  const rss = await startRssServer();
+  const xml = `<?xml version="1.0" encoding="ISO-8859-1"?>` +
+    rssXml({ title: 'Perché no', items: [{ title: 'Steam Machine è un ritorno', description: 'città però' }] })
+      .replace('<?xml version="1.0" encoding="UTF-8"?>', '');
+  // serve actual latin-1 bytes, charset declared only in the XML prolog
+  rss.routes.set('/latin.xml', { body: Buffer.from(xml, 'latin1'), type: 'text/xml' });
+
+  try {
+    syncFeeds(db, [{ url: `${rss.url}/latin.xml` }]);
+    const r = await ingestAll(db, testConfig());
+    assert.equal(r.added, 1);
+    const art = db.prepare('SELECT title, content FROM articles').get();
+    assert.equal(art.title, 'Steam Machine è un ritorno');
+    assert.match(art.content, /città però/);
+    assert.equal(db.prepare('SELECT title FROM feeds').get().title, 'Perché no');
+  } finally {
+    await rss.close();
+  }
+});
+
 test('javascript: links from feeds are dropped, not stored', async () => {
   const db = tempDb();
   const rss = await startRssServer();

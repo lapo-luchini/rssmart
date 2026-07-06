@@ -104,6 +104,7 @@ export async function fetchArticleText(
     const article = new Readability(dom.window.document).parse();
     if (!article?.textContent?.trim()) return null;
     return {
+      title: article.title?.trim() || null,
       html: sanitizeHtml(article.content),
       text: article.textContent.replace(/\s+/g, ' ').trim(),
     };
