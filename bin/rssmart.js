@@ -109,9 +109,10 @@ if (mode === 'cron') {
   const [ingest, enrich] = await Promise.all([ingestPromise, enrichPromise]);
   releaseLease(db, owner);
 
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   info(
-    `ingest: ${ingest.added} new article(s) from ${ingest.feedsOk} feed(s)` +
-      (ingest.feedsFailed ? `, ${ingest.feedsFailed} feed(s) failed` : ''),
+    `ingest: ${plural(ingest.added, 'new article')} from ${plural(ingest.feedsOk, 'feed')}` +
+      (ingest.feedsFailed ? `, ${plural(ingest.feedsFailed, 'feed')} failed` : ''),
   );
   if (enrich.skipped) {
     // a held lease is normal coexistence with a serve scheduler, not an error
@@ -119,7 +120,7 @@ if (mode === 'cron') {
     else console.error(`enrich skipped: ${enrich.reason}; articles stay pending`);
   } else {
     info(
-      `enrich: ${enrich.enriched} enriched (${enrich.duplicates} duplicate(s)), ${enrich.failed} failed` +
+      `enrich: ${enrich.enriched} enriched (${plural(enrich.duplicates, 'duplicate')}), ${enrich.failed} failed` +
         (enrich.timedOut ? ' — time budget reached, the rest next run' : ''),
     );
   }

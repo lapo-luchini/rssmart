@@ -69,7 +69,9 @@ test('startScheduler fetches due feeds and classifies pending articles', async (
     const config = testConfig();
     config.ollama.url = ollama.url;
 
+    const logs = [];
     const stop = startScheduler(db, config, {
+      log: (m) => logs.push(m),
       fetchEveryMs: 40,
       enrichEveryMs: 40,
       batchMs: 5000,
@@ -88,6 +90,10 @@ test('startScheduler fetches due feeds and classifies pending articles', async (
     assert.equal(art.status, 'enriched', 'article ingested and classified by the scheduler');
     assert.ok(art.summary);
     assert.equal(acquireLease(db, 'outsider'), true, 'lease released when idle');
+    assert.ok(
+      logs.some((m) => /classified 1 article \(avg \d+(\.\d+)?s each\)/.test(m)),
+      `singular form + avg timing in log, got: ${JSON.stringify(logs)}`,
+    );
   } finally {
     await ollama.close();
     await rss.close();

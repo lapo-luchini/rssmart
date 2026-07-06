@@ -14,6 +14,8 @@ import { acquireLease, releaseLease } from './lease.js';
  *    wins; the other skips and retries later)
  * Returns a stop() function.
  */
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
 export function startScheduler(db, config, {
   log = () => {},
   fetchEveryMs = 60_000,
@@ -30,7 +32,7 @@ export function startScheduler(db, config, {
     try {
       const r = await ingestAll(db, config, { dueOnly: true });
       if (r.feedsOk + r.feedsFailed > 0) {
-        log(`scheduler: ${r.added} new article(s) from ${r.feedsOk} feed(s)` +
+        log(`scheduler: ${plural(r.added, 'new article')} from ${plural(r.feedsOk, 'feed')}` +
           (r.feedsFailed ? `, ${r.feedsFailed} failed` : ''));
       }
     } catch (err) {
@@ -51,13 +53,15 @@ export function startScheduler(db, config, {
       `).get(config.enrich.maxAttempts);
       if (c > 0 && acquireLease(db, owner)) {
         try {
+          const started = Date.now();
           const r = await enrichPending(db, config, llm, {
             deadline: Date.now() + batchMs,
             onItem: () => acquireLease(db, owner), // heartbeat per article
           });
           if (r.enriched || r.failed) {
             recomputeScores(db, config);
-            log(`scheduler: classified ${r.enriched} article(s)` +
+            const avg = (Date.now() - started) / (r.enriched + r.failed) / 1000;
+            log(`scheduler: classified ${plural(r.enriched, 'article')} (avg ${avg.toFixed(1)}s each)` +
               (r.failed ? `, ${r.failed} failed` : ''));
           }
         } finally {
