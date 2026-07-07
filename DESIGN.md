@@ -106,6 +106,20 @@ Two paths, with very different scaling:
   origin-page fetching refuses private/loopback targets (SSRF) unless
   `enrich.allowPrivateFetch` is set. Residual, accepted: DNS-rebinding
   TOCTOU on page fetches — firewall the process if that ever matters.
+- **The topic vocabulary is unbounded.** It reached 283 by 2026-07-07 and
+  only grows — nothing merges, retires, or caps it. Two knock-on costs: the
+  Topics tab becomes less browsable, and the full topic list rides in every
+  classification prompt, so it competes with the article text and the
+  reader's guidelines/notes for the model's context window. `contextTokens`
+  (src/enrich.js) sizes `num_ctx` from the actual assembled prompt — topics
+  + guidelines + note + content — so a large vocabulary no longer risks
+  silent truncation (fixed 2026-07-07; it previously assumed a flat 1000-
+  token headroom, which 283 topics alone already exceeded). The list still
+  keeps growing unbounded, though. Deferred fix: cap what's shown to the
+  model to, say, the ~100 most-used topics, letting rarely-assigned ones
+  fade out of the *suggestion* list (they'd remain valid on articles
+  already tagged with them — this only changes what the classifier is
+  nudged toward, not stored data).
 
 ## Deferred ideas
 

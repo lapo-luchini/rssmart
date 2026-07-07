@@ -22,6 +22,35 @@ test('sampleText keeps short text whole, long text keeps head and tail', () => {
   assert.ok(sampled.length < 1100, 'stays near budget');
 });
 
+test('num_ctx grows with a large topic vocabulary, not just article length', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  try {
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+
+    seedArticle(db, { title: 'Baseline, no topics yet' });
+    await enrichPending(db, config, llm);
+    const baseline = stub.calls.chat[0].options.num_ctx;
+
+    // simulate a large existing vocabulary (the real DB has 283+ and growing)
+    const insertTopic = db.prepare('INSERT INTO topics (name) VALUES (?)');
+    for (let i = 0; i < 800; i++) insertTopic.run(`topic number ${i} of the classification vocabulary`);
+
+    stub.calls.chat.length = 0;
+    seedArticle(db, { title: 'Second article, huge vocabulary now' });
+    await enrichPending(db, config, llm);
+    const withManyTopics = stub.calls.chat[0].options.num_ctx;
+
+    assert.ok(
+      withManyTopics > baseline,
+      `num_ctx should grow with the topic list (${baseline} -> ${withManyTopics})`,
+    );
+  } finally {
+    await stub.close();
+  }
+});
+
 test('cosine similarity basics', () => {
   assert.equal(cosine([1, 0], [1, 0]), 1);
   assert.equal(cosine([1, 0], [0, 1]), 0);

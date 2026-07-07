@@ -57,9 +57,17 @@ export function sampleText(text, budget) {
   return `${text.slice(0, head)}\n[... middle of the article omitted ...]\n${text.slice(-tail)}`;
 }
 
-/** Context window needed for the prompt (~3 chars/token) plus headroom. */
-function contextTokens(maxInputChars) {
-  return Math.max(4096, Math.ceil((maxInputChars / 3 + 1000) / 1024) * 1024);
+/**
+ * Context window needed to fit an actual prompt (~3 chars/token) plus a
+ * fixed headroom for the model's own JSON reply (topics + 50-word summary
+ * + depth digit is a few hundred tokens at most). Must be sized from the
+ * real prompt, not just the article-content budget: the topic list,
+ * guidelines and reclassify notes all add to it and can be as large as the
+ * article text once the topic vocabulary grows (see DESIGN.md).
+ */
+function contextTokens(promptChars) {
+  const outputHeadroom = 300;
+  return Math.max(4096, Math.ceil((promptChars / 3 + outputHeadroom) / 1024) * 1024);
 }
 
 function normalizeTopics(topics) {
@@ -227,15 +235,16 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     : null;
 
   const { maxInputChars } = enrichCfg;
-  const reply = await llm.chatJSON(
-    SYSTEM,
-    classifyPrompt(existing, article.title, text, maxInputChars, {
-      guidelines,
-      previous,
-      note: article.enrich_note,
-    }),
-    { numCtx: contextTokens(maxInputChars) },
-  );
+  const prompt = classifyPrompt(existing, article.title, text, maxInputChars, {
+    guidelines,
+    previous,
+    note: article.enrich_note,
+  });
+  // Sized from the actual prompt (topics + guidelines + note + content),
+  // not just the article-content budget — see contextTokens' comment.
+  const reply = await llm.chatJSON(SYSTEM, prompt, {
+    numCtx: contextTokens(SYSTEM.length + prompt.length),
+  });
   // Models occasionally drift on key names ("topic" for "topics").
   const topics = normalizeTopics(reply.topics ?? reply.topic);
   if (topics.length === 0) {
