@@ -240,10 +240,16 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     previous,
     note: article.enrich_note,
   });
-  // Sized from the actual prompt (topics + guidelines + note + content),
-  // not just the article-content budget — see contextTokens' comment.
+  // Sized for maxInputChars (the worst case content already caps sampleText
+  // to) rather than this article's actual, usually much shorter, text —
+  // changing num_ctx between requests makes Ollama reload the model
+  // (measured ~1.5s per change vs ~0.4s when it's unchanged), and actual
+  // article length varies on every single article. Topics/guidelines/notes
+  // still count for real, since they grow slowly and must never truncate.
+  const contentChars = Math.min(text.length, maxInputChars);
+  const worstCaseChars = SYSTEM.length + prompt.length + (maxInputChars - contentChars);
   const reply = await llm.chatJSON(SYSTEM, prompt, {
-    numCtx: contextTokens(SYSTEM.length + prompt.length),
+    numCtx: contextTokens(worstCaseChars),
   });
   // Models occasionally drift on key names ("topic" for "topics").
   const topics = normalizeTopics(reply.topics ?? reply.topic);
