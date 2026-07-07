@@ -109,6 +109,13 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   classification, and the article jumps the queue. For corrections that
   should apply to *everything*, edit the **classification guidelines** in
   the Topics tab: that text rides along with every classification request.
+- Check **semantic** next to the search box to rank results by meaning
+  instead of matching words — "microwave power grid" can find an article
+  that never uses those words. It embeds your query with the same model
+  used to store article vectors and ranks by cosine similarity; only
+  classified articles are searchable (pending ones have no vector yet),
+  and results show a match-strength badge. Falls back to a clear error
+  if Ollama is unreachable rather than silently returning nothing.
 - **Topics** and **Feeds** tabs (right side of the tab bar) replace the
   article list with their own views: Topics shows every learned topic with
   its preference, votes and article count (click through to its articles);

@@ -1,13 +1,16 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { tempDb, testConfig } from './helpers.js';
+import { tempDb, testConfig, startOllamaStub } from './helpers.js';
 import { createApp } from '../src/server.js';
 import { recomputeScores } from '../src/scoring.js';
+
+const vec = (...values) => Buffer.from(Float32Array.from(values).buffer);
 
 let db;
 let base;
 let server;
 let ids;
+let ollamaStub;
 
 function seed() {
   db.prepare("INSERT INTO feeds (id, url, title) VALUES (1, 'http://f', 'Feed One')").run();
@@ -42,20 +45,38 @@ function seed() {
             '2026-06-30T00:00:00Z', '2026-06-30T10:00:00Z')
   `).run().lastInsertRowid);
   recomputeScores(db, testConfig());
+
+  // Distinguishable text_embeddings for the semantic search tests: liked
+  // and fresh are "tech"-like, sporty is orthogonal ("sports"-like), dupe
+  // is a closer match than its own group's root (fresh).
+  const setVec = db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?');
+  setVec.run(vec(1, 0, 0, 0), out.liked);
+  setVec.run(vec(0.9, 0.1, 0, 0), out.fresh);
+  setVec.run(vec(1, 0, 0, 0), out.dupe);
+  setVec.run(vec(0, 1, 0, 0), out.sporty);
+
   return out;
 }
 
 before(async () => {
   db = tempDb();
   ids = seed();
-  const app = createApp(db, testConfig());
+  ollamaStub = await startOllamaStub();
+  ollamaStub.embed = (input) =>
+    input.includes('sports') ? [0, 1, 0, 0] : [1, 0, 0, 0];
+  const config = testConfig();
+  config.ollama.url = ollamaStub.url;
+  const app = createApp(db, config);
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
   base = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => server.close());
+after(async () => {
+  server.close();
+  await ollamaStub.close();
+});
 
 const get = async (path) => {
   const res = await fetch(base + path);
@@ -127,6 +148,47 @@ test('topic, feed, search filters', async () => {
 
   const byQ = await get('/api/articles?view=all&q=Already');
   assert.deepEqual(byQ.body.articles.map((a) => a.title), ['Already read']);
+});
+
+test('semantic search ranks by meaning, bundles duplicates, excludes unembedded articles', async () => {
+  const sports = await get(`/api/articles?view=all&semantic=1&q=${encodeURIComponent('sports team wins')}`);
+  assert.equal(sports.status, 200);
+  assert.equal(sports.body.articles[0].id, ids.sporty, 'closest embedding ranked first');
+  assert.ok(sports.body.articles[0].similarity > 0.9);
+  assert.ok(
+    !sports.body.articles.some((a) => a.title === 'Awaiting classification'),
+    'articles without an embedding are never candidates',
+  );
+
+  const tech = await get(`/api/articles?view=all&semantic=1&q=${encodeURIComponent('tech news')}`);
+  const techIds = tech.body.articles.map((a) => a.id);
+  assert.ok(techIds.includes(ids.liked));
+  assert.ok(
+    !techIds.includes(ids.fresh) || !techIds.includes(ids.dupe),
+    'fresh/dupe stay one bundled group even in semantic mode',
+  );
+  assert.ok(techIds.includes(ids.dupe) || techIds.includes(ids.fresh));
+
+  // semantic=1 without a query just behaves like a normal (non-semantic) list
+  const noQuery = await get('/api/articles?view=all&semantic=1');
+  assert.ok(!('similarity' in (noQuery.body.articles[0] ?? {})));
+});
+
+test('semantic search reports a clear error when Ollama is unreachable', async () => {
+  const cfg = testConfig();
+  cfg.ollama.url = 'http://127.0.0.1:1';
+  const app = createApp(db, cfg);
+  const tempServer = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    const res = await fetch(`http://127.0.0.1:${tempServer.address().port}/api/articles?view=all&semantic=1&q=x`);
+    assert.equal(res.status, 502);
+    const body = await res.json();
+    assert.match(body.error, /semantic search unavailable/);
+  } finally {
+    tempServer.close();
+  }
 });
 
 test('article detail includes content; unknown id -> 404', async () => {

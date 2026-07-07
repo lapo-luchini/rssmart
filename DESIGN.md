@@ -52,6 +52,19 @@ day-one spec was retired for exactly that reason; it's in git history).
   documents + instructed queries; nomic v1.5: `search_document:` /
   `search_query:`). Current model: qwen3-embedding:0.6b (multilingual —
   half the feeds are Italian; nomic v1.5 was English-centric).
+- **Semantic search (src/search.js) reuses the taste-learning embeddings,
+  no vector index.** The query is embedded with the same model and the
+  `query` task prefix, then ranked by brute-force cosine against
+  `text_embedding` — the same math the vote kNN already does (see above),
+  so it needed no sqlite-vec at this scale (~5k articles), just the
+  qwen3-embedding switch that gave stored vectors real task prefixes.
+  Only enriched articles are candidates; duplicate groups collapse to
+  their best *textual* match, which can differ from the group's
+  highest-*scoring* member picked in normal browsing. An unreachable
+  Ollama surfaces as a 502 with a clear message rather than silently
+  falling back to text search — searching by meaning and searching by
+  literal words return different results, so a silent fallback would be
+  misleading about what was actually searched.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
@@ -140,9 +153,3 @@ Two paths, with very different scaling:
   without an LLM round-trip.
 - An LLM-updated *draft* of guidelines proposed from accumulated notes,
   applied only on explicit reader approval.
-- Semantic search: embed the query (same model), cosine against the stored
-  text_embeddings, top-k — the same math as the vote kNN, so no sqlite-vec
-  needed until the same ~100k-article horizon. Caveat: nomic-embed-text
-  wants asymmetric prefixes (`search_document:` / `search_query:`); stored
-  embeddings are unprefixed, so proper quality needs a one-off re-embed
-  pass. Fall back to LIKE when Ollama is down.

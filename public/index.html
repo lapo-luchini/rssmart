@@ -40,11 +40,16 @@
         <option value="">all feeds</option>
         <option v-for="f in feeds" :key="f.id" :value="f.id">{{ f.title || f.url }}</option>
       </select>
-      <select v-model="sort" @change="reload" aria-label="Sort order">
+      <select v-model="sort" @change="reload" aria-label="Sort order" v-if="!(semantic && q)">
         <option value="score">by interest</option>
         <option value="date">by date</option>
       </select>
+      <em v-else class="feed-notice">sorted by relevance</em>
       <input type="search" v-model="q" placeholder="search…" aria-label="Search articles">
+      <label class="dupes-toggle" v-if="q"
+             title="rank results by meaning instead of matching words (uses the local LLM; only classified articles are searchable)">
+        <input type="checkbox" v-model="semantic" @change="reload"> semantic
+      </label>
       <label class="dupes-toggle" title="show every version of a news item as its own card">
         <input type="checkbox" v-model="dupes" @change="reload"> all versions
       </label>
@@ -151,6 +156,7 @@
         </span>
         <span class="source">{{ a.feed_title || 'feed' }}</span>
         <time :datetime="a.published_at || a.created_at">{{ ago(a.published_at || a.created_at) }}</time>
+        <span v-if="a.similarity !== undefined" class="flag" title="semantic match strength for this search">{{ Math.round(a.similarity * 100) }}% match</span>
         <button v-if="a.versions > 1 && !dupes" class="flag flag-link"
                 :title="'this news appears in ' + a.versions + ' articles'"
                 @click="toggleVersions(a)">{{ expandedVersions[a.id] ? 'hide versions' : `${a.versions - 1} more ${a.versions === 2 ? 'version' : 'versions'}` }}</button>

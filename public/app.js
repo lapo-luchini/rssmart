@@ -14,6 +14,7 @@ createApp({
       topic: '',
       feedId: '',
       q: '',
+      semantic: false,
       sort: 'date',
       dupes: false,
       enrichedOnly: false,
@@ -64,6 +65,7 @@ createApp({
     },
 
     emptyMessage() {
+      if (this.semantic && this.q) return 'No semantically similar articles found — try different wording, or note that only classified articles are searchable.';
       if (this.q || this.topic || this.feedId) return 'Nothing matches these filters.';
       if (this.view === 'all') return 'No articles yet. Add feeds in the Feeds tab and run: rssmart cron';
       return 'All caught up. New articles arrive on the next cron run.';
@@ -97,6 +99,7 @@ createApp({
       if (this.topic) p.set('topic', this.topic);
       if (this.feedId) p.set('feed_id', this.feedId);
       if (this.q) p.set('q', this.q);
+      if (this.semantic && this.q) p.set('semantic', '1');
       if (this.dupes) p.set('dupes', '1');
       if (this.enrichedOnly) p.set('status', 'enriched');
       return p;

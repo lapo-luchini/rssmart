@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { recomputeScores, topicPrefs } from './scoring.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
+import { Ollama } from './llm.js';
+import { semanticSearch } from './search.js';
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -23,8 +25,32 @@ function rowToArticle(row) {
   return { ...row, topics: row.topics ? row.topics.split('|') : [] };
 }
 
-/** Translate list-endpoint query params into SQL; returns {error} on bad input. */
-function articleQuery(query) {
+// topic/feed/text filters: none of these validate input, they just narrow
+// the result set, so they carry no early-return branches of their own.
+function pushMatchFilters(where, params, { topic, feedId, q, skipTextFilter }) {
+  if (topic) {
+    where.push(`EXISTS (SELECT 1 FROM article_topics at
+      JOIN topics t ON t.id = at.topic_id
+      WHERE at.article_id = a.id AND t.name = ? COLLATE NOCASE)`);
+    params.push(topic);
+  }
+  if (feedId) {
+    where.push('a.feed_id = ?');
+    params.push(Number(feedId));
+  }
+  if (q && !skipTextFilter) {
+    where.push('(a.title LIKE ? OR a.summary LIKE ? OR a.content LIKE ?)');
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+  }
+}
+
+/**
+ * Translate list-endpoint query params into SQL; returns {error} on bad
+ * input. skipTextFilter omits the title/summary/content LIKE clause —
+ * used for semantic search, which ranks by meaning instead and would
+ * otherwise also demand a literal text match.
+ */
+function articleQuery(query, { skipTextFilter = false } = {}) {
   const {
     view = 'interesting', topic, feed_id: feedId, q, sort, status,
     dupes = '0', limit = '50', offset = '0',
@@ -45,20 +71,7 @@ function articleQuery(query) {
     where.push('a.status = ?');
     params.push(status);
   }
-  if (topic) {
-    where.push(`EXISTS (SELECT 1 FROM article_topics at
-      JOIN topics t ON t.id = at.topic_id
-      WHERE at.article_id = a.id AND t.name = ? COLLATE NOCASE)`);
-    params.push(topic);
-  }
-  if (feedId) {
-    where.push('a.feed_id = ?');
-    params.push(Number(feedId));
-  }
-  if (q) {
-    where.push('(a.title LIKE ? OR a.summary LIKE ? OR a.content LIKE ?)');
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
-  }
+  pushMatchFilters(where, params, { topic, feedId, q, skipTextFilter });
 
   const sortKey = sort ?? (view === 'interesting' ? 'score' : 'date');
   if (!['score', 'date'].includes(sortKey)) {
@@ -83,14 +96,46 @@ const VERSIONS_COL = `
    WHERE COALESCE(d.duplicate_of, d.id) = COALESCE(a.duplicate_of, a.id)) AS versions
 `;
 
+// Fetch full article rows for a ranked list of ids, in that same order.
+// Semantic search ranks in JS (cosine, not SQL-sortable), so the rows
+// pulled back by `id IN (...)` need reordering to match.
+function fetchInRankOrder(db, ranked) {
+  if (ranked.length === 0) return [];
+  const ids = ranked.map((r) => r.id);
+  const rows = db.prepare(`
+    SELECT ${ARTICLE_COLUMNS}, ${VERSIONS_COL}
+    FROM articles a JOIN feeds f ON f.id = a.feed_id
+    WHERE a.id IN (${ids.map(() => '?').join(',')})
+  `).all(...ids);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return ranked.map((r) => ({ ...rowToArticle(byId.get(r.id)), similarity: r.similarity }));
+}
+
 export function createApp(db, config) {
   const app = express();
   app.use(express.json({ limit: '2mb' })); // OPML imports ride in JSON
+  const llm = new Ollama(config.ollama);
 
-  app.get('/api/articles', (req, res) => {
-    const query = articleQuery(req.query);
+  app.get('/api/articles', async (req, res) => {
+    const q = (req.query.q ?? '').trim();
+    const isSemantic = req.query.semantic === '1' && q;
+
+    const query = articleQuery(req.query, { skipTextFilter: isSemantic });
     if (query.error) return res.status(400).json({ error: query.error });
     const { whereSql, params, grouped, orderBy, lim, off } = query;
+
+    if (isSemantic) {
+      let ranked;
+      try {
+        ranked = await semanticSearch(db, llm, q, { whereSql, params, grouped });
+      } catch (err) {
+        return res.status(502).json({ error: `semantic search unavailable: ${err.message}` });
+      }
+      return res.json({
+        total: ranked.length,
+        articles: fetchInRankOrder(db, ranked.slice(off, off + lim)),
+      });
+    }
 
     // Grouped mode: one card per duplicate group — its best-scoring member
     // among the articles matching the filters.
