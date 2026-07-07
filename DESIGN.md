@@ -110,16 +110,26 @@ Two paths, with very different scaling:
   only grows — nothing merges, retires, or caps it. Two knock-on costs: the
   Topics tab becomes less browsable, and the full topic list rides in every
   classification prompt, so it competes with the article text and the
-  reader's guidelines/notes for the model's context window. `contextTokens`
-  (src/enrich.js) sizes `num_ctx` from the actual assembled prompt — topics
-  + guidelines + note + content — so a large vocabulary no longer risks
-  silent truncation (fixed 2026-07-07; it previously assumed a flat 1000-
-  token headroom, which 283 topics alone already exceeded). The list still
-  keeps growing unbounded, though. Deferred fix: cap what's shown to the
-  model to, say, the ~100 most-used topics, letting rarely-assigned ones
-  fade out of the *suggestion* list (they'd remain valid on articles
+  reader's guidelines/notes for the model's context window (see `num_ctx`
+  sizing below — a large vocabulary no longer risks silent truncation, but
+  the list itself keeps growing regardless). Deferred fix: cap what's shown
+  to the model to, say, the ~100 most-used topics, letting rarely-assigned
+  ones fade out of the *suggestion* list (they'd remain valid on articles
   already tagged with them — this only changes what the classifier is
   nudged toward, not stored data).
+- **`num_ctx` must stay stable across requests, not just "large enough".**
+  Changing `num_ctx` between calls makes Ollama reload the model — measured
+  ~1.5s per change vs ~0.4s when unchanged, on this setup. `contextTokens`
+  (src/enrich.js) therefore sizes it from `maxInputChars` (the configured
+  worst-case content length, which `sampleText` caps every article to
+  anyway) plus the real topic list/guidelines/note lengths, never from an
+  article's actual, highly variable, length. An earlier version (fixed
+  2026-07-07, same day as a first fix that sized `num_ctx` from a flat
+  1000-token headroom the topic list alone had already exceeded) sized it
+  from the real assembled prompt, which inadvertently made `num_ctx` change
+  on nearly every article and paid the reload tax constantly. Any future
+  change to the prompt must keep this invariant: base the size estimate on
+  worst-case bounds, not on what happens to be in front of you this call.
 
 ## Deferred ideas
 
