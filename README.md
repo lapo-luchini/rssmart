@@ -33,6 +33,13 @@ pnpm install
 cp config.example.yaml config.yaml   # then edit; config.yaml is gitignored
 ```
 
+Runs on both **Node.js** and **[Bun](https://bun.sh)**: `src/db.js` picks
+`bun:sqlite` under Bun and `better-sqlite3` under Node automatically, so
+`bun bin/rssmart.js serve` / `bun bin/rssmart.js cron` work exactly like
+their `node` equivalents (including `bun run cron` / `bun run serve` via
+the package.json scripts). No config needed — just use whichever
+`node`/`bun` binary is on your `PATH`.
+
 Configure in `config.yaml`:
 
 - `ollama.url` — your Ollama instance, e.g. `http://192.168.1.10:11434`.

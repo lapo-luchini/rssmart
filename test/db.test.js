@@ -1,7 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb } from './helpers.js';
-import { repairDuplicateGroups } from '../src/db.js';
+import { repairDuplicateGroups, openDb } from '../src/db.js';
+
+test('openDb sets a non-zero busy_timeout so concurrent writers wait rather than fail immediately', () => {
+  // better-sqlite3 waits out lock contention by default; bun:sqlite
+  // doesn't unless told to (observed as an immediate SQLITE_BUSY under
+  // real concurrent cron + serve writers) — this pins the fix in place.
+  const db = tempDb();
+  const { timeout } = db.prepare('PRAGMA busy_timeout').get();
+  assert.ok(timeout >= 5000, `expected a multi-second busy_timeout, got ${timeout}`);
+});
 
 test('repairDuplicateGroups breaks cycles and flattens chains', () => {
   const db = tempDb();

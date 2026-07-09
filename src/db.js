@@ -1,6 +1,15 @@
-import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+
+// Bun ships a native SQLite driver (bun:sqlite) with an API modeled closely
+// on better-sqlite3 — prepare/get/all/run/transaction/exec all match,
+// including multi-statement exec() and BLOB round-tripping via Buffer-
+// compatible Uint8Array. Loading the driver only for the runtime that's
+// actually running means a Bun install never needs to compile the
+// better-sqlite3 native addon, and a Node install never touches bun:sqlite.
+const Database = typeof Bun !== 'undefined'
+  ? (await import('bun:sqlite')).Database
+  : (await import('better-sqlite3')).default;
 
 const MIGRATIONS = [
   // v1 — initial schema
@@ -131,20 +140,42 @@ export function repairDuplicateGroups(db) {
   `);
 }
 
+// bun:sqlite has no .pragma() convenience method (better-sqlite3's is just
+// sugar over this same pattern, which is why it exists at all: whether a
+// given pragma form returns a row is inconsistent — journal_mode does even
+// when "setting" it, foreign_keys doesn't). bun:sqlite's .get() tolerates
+// either case; better-sqlite3 statically classifies each statement as
+// data-returning or not and throws if you call the wrong one of get()/run(),
+// so fall back to run() on that specific error rather than guess per pragma.
+function pragma(db, statement) {
+  const stmt = db.prepare(`PRAGMA ${statement}`);
+  try {
+    return stmt.get();
+  } catch (err) {
+    if (!/does not return data/i.test(err.message)) throw err;
+    return stmt.run();
+  }
+}
+
 /** Open (creating if necessary) the SQLite database and apply migrations. */
 export function openDb(path) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  pragma(db, 'journal_mode = WAL');
+  pragma(db, 'foreign_keys = ON');
+  // better-sqlite3 waits out lock contention by default; bun:sqlite does
+  // not (observed: an immediate SQLITE_BUSY under concurrent cron + serve
+  // writers, a supported scenario the enrichment lease already relies on
+  // being safe). Set it explicitly so both drivers behave the same way.
+  pragma(db, 'busy_timeout = 5000');
 
-  const version = db.pragma('user_version', { simple: true });
+  const version = pragma(db, 'user_version').user_version;
   for (let v = version; v < MIGRATIONS.length; v++) {
     db.transaction(() => {
       const migration = MIGRATIONS[v];
       if (typeof migration === 'function') migration(db);
       else db.exec(migration);
-      db.pragma(`user_version = ${v + 1}`);
+      pragma(db, `user_version = ${v + 1}`);
     })();
   }
   return db;

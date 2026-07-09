@@ -65,6 +65,35 @@ day-one spec was retired for exactly that reason; it's in git history).
   falling back to text search — searching by meaning and searching by
   literal words return different results, so a silent fallback would be
   misleading about what was actually searched.
+- **The SQLite driver is chosen at runtime, not hardcoded.** `src/db.js`
+  loads `bun:sqlite` under Bun and `better-sqlite3` under Node (`typeof Bun
+  !== 'undefined'`, resolved once via a top-level dynamic import so
+  `openDb()` itself stays synchronous — no call site elsewhere needed to
+  change). The two APIs are close enough (prepare/get/all/run/transaction/
+  exec, multi-statement exec, `RETURNING`, BLOB round-tripping via
+  Buffer-compatible Uint8Array — all verified against a real Bun 1.3.14)
+  that nothing outside db.js knows or cares which driver is loaded. Added
+  2026-07-09 because bun:sqlite avoids compiling a native addon under Bun;
+  verified against real Ollama, real feeds, and a live concurrent
+  cron+serve stress test, not just the test suite. Two real driver
+  differences it papers over: bun:sqlite has no `.pragma()` convenience
+  method (`.prepare('PRAGMA ...').get()` works on both, except—) and
+  better-sqlite3 itself throws on `.get()` for pragma forms it statically
+  classifies as non-data-returning (`foreign_keys = ON`), so `pragma()`
+  falls back to `.run()` on that specific error rather than guessing per
+  pragma. `bun test` cannot run more than one `node:test`-based file per
+  invocation ([oven-sh/bun#5090](https://github.com/oven-sh/bun/issues/5090));
+  this project's suite still runs fine under Bun one file at a time, or
+  under `node --test` (`pnpm test`) as usual either way.
+- **`busy_timeout` is set explicitly, not left to the driver's default.**
+  better-sqlite3 waits out lock contention by default; bun:sqlite does not
+  — discovered as a real `SQLITE_BUSY` crash under genuine concurrent
+  cron + serve writers against the live database, a scenario the
+  enrichment lease already assumes is safe (WAL allows it; it just needs
+  both connections to wait for each other rather than fail immediately).
+  `openDb()` now sets `PRAGMA busy_timeout = 5000` unconditionally so both
+  drivers behave the same way, rather than relying on an implicit default
+  that turned out to differ.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
@@ -109,11 +138,11 @@ Two paths, with very different scaling:
 - **Nothing prunes articles.** The archive grows forever (~6 KB of
   embeddings per article plus text). Fine for years at current intake;
   see retention above.
-- **DB access is single-process-friendly.** better-sqlite3 + WAL; the
-  enrichment lease (soft, TTL 90 s) prevents duplicated LLM work between a
-  serve scheduler and cron runs, not corruption (which WAL already
-  prevents). A tiny read-then-write race in the lease is accepted: worst
-  case is briefly duplicated classification work.
+- **DB access is single-process-friendly.** WAL mode (either driver, see
+  below); the enrichment lease (soft, TTL 90 s) prevents duplicated LLM
+  work between a serve scheduler and cron runs, not corruption (which WAL
+  already prevents). A tiny read-then-write race in the lease is accepted:
+  worst case is briefly duplicated classification work.
 - **Feed-content trust boundary.** Feed HTML is sanitized (scripts, event
   handlers, `javascript:` URLs stripped at every write path) and
   origin-page fetching refuses private/loopback targets (SSRF) unless

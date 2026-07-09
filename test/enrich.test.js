@@ -76,8 +76,10 @@ test('enrichPending classifies, summarizes and embeds pending articles', async (
     assert.equal(art.status, 'enriched');
     assert.equal(art.summary, 'Kernel patch released.');
     assert.equal(art.depth, 4);
-    assert.ok(art.embedding instanceof Buffer && art.embedding.length > 0);
-    assert.ok(art.text_embedding instanceof Buffer && art.text_embedding.length > 0);
+    // Uint8Array, not the more specific Buffer check: bun:sqlite returns
+    // BLOB columns as plain Uint8Array, and that's all bufToVec ever needs.
+    assert.ok(art.embedding instanceof Uint8Array && art.embedding.length > 0);
+    assert.ok(art.text_embedding instanceof Uint8Array && art.text_embedding.length > 0);
     assert.equal(bufToVec(art.embedding).length, 8);
 
     const topics = db.prepare(`

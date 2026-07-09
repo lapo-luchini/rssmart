@@ -14,11 +14,14 @@ let ollamaStub;
 
 function seed() {
   db.prepare("INSERT INTO feeds (id, url, title) VALUES (1, 'http://f', 'Feed One')").run();
+  // Positional placeholders, not named (@x) ones bound from an object:
+  // better-sqlite3 and bun:sqlite disagree on the object-binding convention,
+  // while positional ? params work identically on both (and match every
+  // other query in this codebase).
   const insArt = db.prepare(`
     INSERT INTO articles (feed_id, guid, title, content, summary, status,
                           published_at, vote, read_at, duplicate_of)
-    VALUES (1, @guid, @title, @content, @summary, 'enriched',
-            @published_at, @vote, @read_at, @duplicate_of)
+    VALUES (1, ?, ?, ?, ?, 'enriched', ?, ?, ?, ?)
   `);
   const insTopic = db.prepare('INSERT INTO topics (name) VALUES (?) RETURNING id');
   const link = db.prepare('INSERT INTO article_topics VALUES (?, ?)');
@@ -26,18 +29,25 @@ function seed() {
   const tech = insTopic.get('tech').id;
   const sports = insTopic.get('sports').id;
 
-  const base = {
-    content: 'body', summary: 'sum', vote: 0, read_at: null, duplicate_of: null,
+  const insert = (overrides) => {
+    const a = {
+      content: 'body', summary: 'sum', vote: 0, read_at: null, duplicate_of: null,
+      ...overrides,
+    };
+    return Number(insArt.run(
+      a.guid, a.title, a.content, a.summary, a.published_at, a.vote, a.read_at, a.duplicate_of,
+    ).lastInsertRowid);
   };
+
   const out = {};
-  out.liked = Number(insArt.run({ ...base, guid: 'g1', title: 'Liked tech story', published_at: '2026-07-01T00:00:00Z', vote: 1 }).lastInsertRowid);
+  out.liked = insert({ guid: 'g1', title: 'Liked tech story', published_at: '2026-07-01T00:00:00Z', vote: 1 });
   link.run(out.liked, tech);
-  out.fresh = Number(insArt.run({ ...base, guid: 'g2', title: 'Fresh tech story', published_at: '2026-07-03T00:00:00Z' }).lastInsertRowid);
+  out.fresh = insert({ guid: 'g2', title: 'Fresh tech story', published_at: '2026-07-03T00:00:00Z' });
   link.run(out.fresh, tech);
-  out.sporty = Number(insArt.run({ ...base, guid: 'g3', title: 'Sports story', published_at: '2026-07-04T00:00:00Z' }).lastInsertRowid);
+  out.sporty = insert({ guid: 'g3', title: 'Sports story', published_at: '2026-07-04T00:00:00Z' });
   link.run(out.sporty, sports);
-  out.readOne = Number(insArt.run({ ...base, guid: 'g4', title: 'Already read', published_at: '2026-07-02T00:00:00Z', read_at: '2026-07-02T10:00:00Z' }).lastInsertRowid);
-  out.dupe = Number(insArt.run({ ...base, guid: 'g5', title: 'Fresh tech story (copy)', published_at: '2026-07-03T01:00:00Z', duplicate_of: out.fresh }).lastInsertRowid);
+  out.readOne = insert({ guid: 'g4', title: 'Already read', published_at: '2026-07-02T00:00:00Z', read_at: '2026-07-02T10:00:00Z' });
+  out.dupe = insert({ guid: 'g5', title: 'Fresh tech story (copy)', published_at: '2026-07-03T01:00:00Z', duplicate_of: out.fresh });
   // one unclassified article, marked read so unread-view assertions stay put
   out.pending = Number(db.prepare(`
     INSERT INTO articles (feed_id, guid, title, content, status, published_at, read_at)
