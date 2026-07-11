@@ -320,6 +320,15 @@ day-one spec was retired for exactly that reason; it's in git history).
   the position doubles as a legend for "these are the amplified versions
   of the buttons next to them," independent of which exact key triggers
   each one.
+- **Triage's vote buttons show the article's already-cast vote (fixed
+  2026-07-11).** Going `←` back to a previously-voted article showed no
+  indication of what was voted — same underlying data the main list's
+  vote buttons already use (`article.vote`, kept current via
+  `Object.assign(article, updated)` in `triageVote`), just never
+  surfaced in the triage UI. Added `:class="{ on: triageCurrent.vote
+  === N }"` per button and reused the exact `.on` green/red treatment
+  the main list's `.vote.up.on`/`.vote.down.on` already has, rather than
+  inventing a new visual language for the same concept.
 - **Triage's full-article view is inline, not the reader overlay.**
   Reuses the same `GET /api/articles/:id/reader` endpoint the reader
   overlay uses (see above), but renders the result below the triage card

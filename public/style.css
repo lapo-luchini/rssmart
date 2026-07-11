@@ -585,6 +585,13 @@ body {
 .triage-controls .less:hover,
 .triage-controls .never:hover { border-color: var(--down); color: var(--down); }
 
+/* Shows the article's already-cast vote (e.g. after going back) the same
+   way the main list's vote buttons do. */
+.triage-controls .more.on,
+.triage-controls .wow.on { color: #fff; background: var(--up); border-color: var(--up); }
+.triage-controls .less.on,
+.triage-controls .never.on { color: #fff; background: var(--down); border-color: var(--down); }
+
 /* Wider than .triage-card on purpose: more horizontal room means fewer
    wrapped lines per paragraph, so reading the full article costs less
    vertical (scroll) space, not just more of it. */
