@@ -44,13 +44,16 @@ function pushMatchFilters(where, params, { topic, feedId, q, skipTextFilter }) {
   }
 }
 
+// Newest first is the universal tiebreaker/secondary key for every sort.
+const BY_DATE = 'COALESCE(a.published_at, a.created_at) DESC';
+
 /**
  * Translate list-endpoint query params into SQL; returns {error} on bad
  * input. skipTextFilter omits the title/summary/content LIKE clause —
  * used for semantic search, which ranks by meaning instead and would
  * otherwise also demand a literal text match.
  */
-function articleQuery(query, { skipTextFilter = false } = {}) {
+function articleQuery(query, config, { skipTextFilter = false } = {}) {
   const {
     view = 'interesting', topic, feed_id: feedId, q, sort, status,
     dupes = '0', limit = '50', offset = '0',
@@ -73,18 +76,27 @@ function articleQuery(query, { skipTextFilter = false } = {}) {
   }
   pushMatchFilters(where, params, { topic, feedId, q, skipTextFilter });
 
-  const sortKey = sort ?? (view === 'interesting' ? 'score' : 'date');
-  if (!['score', 'date'].includes(sortKey)) {
+  const sortKey = sort ?? (view === 'interesting' ? 'hot' : 'date');
+  if (!['hot', 'score', 'date'].includes(sortKey)) {
     return { error: `unknown sort "${sort}"` };
   }
+
+  // "hot" blends interest with freshness (à la Hacker News) so an old
+  // article can't outrank a fresh one on score alone; computed at query
+  // time from published_at, so it's always current with no stored/stale
+  // column. orderParams must be spliced in right after the WHERE params —
+  // it's the only sort with a bound value of its own.
+  const orderBy = { hot: 'a.score - ? * (julianday(\'now\') - julianday(COALESCE(a.published_at, a.created_at))) DESC, ' + BY_DATE,
+    score: 'a.score DESC, ' + BY_DATE,
+    date: BY_DATE }[sortKey];
+  const orderParams = sortKey === 'hot' ? [config.scoring.hotDecayPerDay] : [];
 
   return {
     whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '',
     params,
+    orderParams,
     grouped: dupes !== '1', // default: bundle repeats, show best of each group
-    orderBy: sortKey === 'score'
-      ? 'a.score DESC, COALESCE(a.published_at, a.created_at) DESC'
-      : 'COALESCE(a.published_at, a.created_at) DESC',
+    orderBy,
     lim: Math.min(Math.max(Number(limit) || 50, 1), 200),
     off: Math.max(Number(offset) || 0, 0),
   };
@@ -120,9 +132,9 @@ export function createApp(db, config) {
     const q = (req.query.q ?? '').trim();
     const isSemantic = req.query.semantic === '1' && q;
 
-    const query = articleQuery(req.query, { skipTextFilter: isSemantic });
+    const query = articleQuery(req.query, config, { skipTextFilter: isSemantic });
     if (query.error) return res.status(400).json({ error: query.error });
-    const { whereSql, params, grouped, orderBy, lim, off } = query;
+    const { whereSql, params, orderParams, grouped, orderBy, lim, off } = query;
 
     if (isSemantic) {
       let ranked;
@@ -152,7 +164,7 @@ export function createApp(db, config) {
     const rows = db.prepare(`
       SELECT ${ARTICLE_COLUMNS}, ${VERSIONS_COL}
       FROM ${source} ORDER BY ${orderBy} LIMIT ? OFFSET ?
-    `).all(...params, lim, off);
+    `).all(...params, ...orderParams, lim, off);
 
     const { total } = db.prepare(grouped
       ? `SELECT COUNT(*) AS total FROM (

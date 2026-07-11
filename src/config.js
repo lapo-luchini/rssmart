@@ -44,6 +44,13 @@ const DEFAULTS = {
     // vote pushes the due time back by this many seconds, and it only
     // actually runs once voting has paused for that long.
     recomputeDebounceSec: 120,
+    // "hot" sort blends interest with freshness (à la Hacker News) so an
+    // old article can't bury a fresh one just by having a slightly higher
+    // score: rank = score - hotDecayPerDay * age_in_days. At the default,
+    // a day of age costs 0.05 — enough to cancel a solidly good score
+    // (~0.3) within a week, so freshness dominates unless something is
+    // genuinely exceptional.
+    hotDecayPerDay: 0.05,
   },
   server: {
     host: '0.0.0.0',

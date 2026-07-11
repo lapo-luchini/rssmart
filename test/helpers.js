@@ -132,8 +132,14 @@ export function testConfig(overrides = {}) {
     },
     cron: { maxRunMs: 300_000 },
     scheduler: { enabled: true, minIntervalMin: 15, maxIntervalMin: 1440 },
-    // topics-only by default so scoring tests exercise one signal at a time
-    scoring: { knn: 20, weights: { topics: 1, embedding: 0, depth: 0, feed: 0 }, recomputeDebounceSec: 120 },
+    // topics-only by default so scoring tests exercise one signal at a time;
+    // hotDecayPerDay: 0 makes "hot" sort collapse to exactly "score" sort so
+    // existing fixed-date fixtures aren't affected by real elapsed time —
+    // tests of the decay itself override this explicitly
+    scoring: {
+      knn: 20, weights: { topics: 1, embedding: 0, depth: 0, feed: 0 },
+      recomputeDebounceSec: 120, hotDecayPerDay: 0,
+    },
     server: { host: '127.0.0.1', port: 0 },
     ...overrides,
   };

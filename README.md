@@ -101,9 +101,11 @@ run (after 5 failed attempts an article is parked as unclassifiable).
 ## Web UI
 
 - **Unread** (default): unread articles, newest first, repeats hidden.
-- **Interesting**: unread, sorted by learned interest score. **All** shows
-  everything. Plus topic + feed filters, full-text search, sort selector,
-  and a "repeats" toggle.
+- **Interesting**: unread, sorted "hot" — interest blended with freshness
+  (`scoring.hotDecayPerDay`), so an old article can't bury a fresh one just
+  by having a slightly higher score. Pure "by interest" and "by date" are
+  also selectable. **All** shows everything. Plus topic + feed filters,
+  full-text search, and a "repeats" toggle.
 - Every tab has its own hash route (`#/unread`, `#/interesting`, `#/all`,
   `#/topics`, `#/feeds`) — bookmarkable, and back/forward works.
 - ▲ / ▼ vote to teach it: one click = interesting (±1), a second click = WOW

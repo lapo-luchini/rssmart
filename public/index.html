@@ -41,6 +41,7 @@
         <option v-for="f in feeds" :key="f.id" :value="f.id">{{ f.title || f.url }}</option>
       </select>
       <select v-model="sort" @change="reload" aria-label="Sort order" v-if="!(semantic && q)">
+        <option value="hot" title="interest, but a fresh article doesn't need as high a score to compete with an old one">hot</option>
         <option value="score">by interest</option>
         <option value="date">by date</option>
       </select>

@@ -201,7 +201,7 @@ createApp({
     setView(v) {
       this.panel = null;
       this.view = v;
-      this.sort = v === 'interesting' ? 'score' : 'date';
+      this.sort = v === 'interesting' ? 'hot' : 'date';
       this.syncHash();
       this.reload();
     },

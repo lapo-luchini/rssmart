@@ -201,6 +201,37 @@ test('semantic search reports a clear error when Ollama is unreachable', async (
   }
 });
 
+test('hot sort blends score with freshness, reordering vs plain score sort', async () => {
+  // liked: score 1/3, published 2026-07-01 (oldest of the two).
+  // sporty: score 0, published 2026-07-04 (3 days fresher).
+  // Comparing the two, only their 3-day *relative* gap matters (the decay
+  // term is additive/linear), so this holds regardless of what "today"
+  // actually is when the test runs: at decay=0.15/day, 3 days is worth
+  // 0.45 — enough to flip sporty (0 - 0) above liked (0.333 - 0.45·gap)
+  // even though liked clearly wins on score alone.
+  const cfg = testConfig();
+  cfg.scoring.hotDecayPerDay = 0.15;
+  const app = createApp(db, cfg);
+  const tempServer = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  const base2 = `http://127.0.0.1:${tempServer.address().port}`;
+  try {
+    const plain = await fetch(`${base2}/api/articles?view=all&sort=score`).then((r) => r.json());
+    const plainIdx = (id) => plain.articles.findIndex((a) => a.id === id);
+    assert.ok(plainIdx(ids.liked) < plainIdx(ids.sporty), 'plain score sort: liked (higher score) wins');
+
+    const hot = await fetch(`${base2}/api/articles?view=all&sort=hot`).then((r) => r.json());
+    const hotIdx = (id) => hot.articles.findIndex((a) => a.id === id);
+    assert.ok(hotIdx(ids.sporty) < hotIdx(ids.liked), 'hot sort: the fresher article overtakes the older, higher-scored one');
+
+    const bad = await fetch(`${base2}/api/articles?sort=bogus`);
+    assert.equal(bad.status, 400);
+  } finally {
+    tempServer.close();
+  }
+});
+
 test('article detail includes content; unknown id -> 404', async () => {
   const ok = await get(`/api/articles/${ids.fresh}`);
   assert.equal(ok.body.content, 'body');

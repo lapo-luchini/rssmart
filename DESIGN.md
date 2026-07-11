@@ -99,6 +99,18 @@ day-one spec was retired for exactly that reason; it's in git history).
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
   editable, never auto-updated: text the reader owns stays auditable;
   an LLM silently rewriting its own instructions would drift.
+- **"Interesting" defaults to a time-decayed "hot" sort, not pure score
+  (2026-07-11).** Plain score-sort has no forgetting: an old article
+  needs only a marginally higher score than everything published since
+  to sit at #1 forever, and the corpus only grows. Confirmed live before
+  fixing it — the top score-sorted result was over a year old. `hot`
+  (`a.score - hotDecayPerDay * age_in_days`, computed at query time from
+  `published_at` via SQLite's `julianday()`, no stored/stale column) is
+  additive/linear rather than a Hacker-News-style power-law-over-age: our
+  `score` is a signed preference strength in roughly [-1, 1], not a
+  monotonically-growing raw vote count starting at 1, so a divisive decay
+  doesn't translate the same way. Plain "by interest" and "by date"
+  remain selectable; only "Interesting"'s default changed.
 
 ## How the cosine math actually runs
 
