@@ -26,7 +26,7 @@
       <button role="tab" :aria-selected="panel === 'triage'"
               :class="{ active: panel === 'triage' }"
               title="fast, keyboard-driven voting through your unread backlog"
-              @click="openPanel('triage')">⚡ Triage</button>
+              @click="openPanel('triage')">⚡Triage</button>
       <span class="tab-spacer" aria-hidden="true"></span>
       <button role="tab" :aria-selected="panel === 'topics'"
               :class="{ active: panel === 'topics' }"
@@ -146,21 +146,29 @@
       <div class="story-meta">
         <span class="source">{{ triageCurrent.feed_title || 'feed' }}</span>
         <time>{{ ago(triageCurrent.published_at || triageCurrent.created_at) }}</time>
+        <a v-if="triageCurrent.url" class="mark" :href="triageCurrent.url" target="_blank" rel="noopener">open original ↗</a>
       </div>
-      <h2 class="triage-title" title="read full article" @click="openReader(triageCurrent)">{{ triageCurrent.title }}</h2>
+      <h2 class="triage-title" title="read full article" @click="toggleTriageContent">{{ triageCurrent.title }}</h2>
       <p class="triage-summary" v-if="triageCurrent.summary">{{ triageCurrent.summary }}</p>
       <p class="notice" v-else>Not classified yet — no summary available.</p>
       <div class="chips" v-if="triageCurrent.topics.length">
         <span class="chip" v-for="t in triageCurrent.topics" :key="t" :style="chipStyle(t)">{{ t }}</span>
       </div>
       <div class="triage-controls">
-        <button @click="triageVote(-2)" title="never (↓)">▼▼<br>never</button>
-        <button @click="triageVote(-1)" title="less like this (←)">◀<br>less</button>
-        <button @click="triageSkip()" title="skip, no vote (space)">○<br>skip</button>
-        <button @click="triageVote(1)" title="more like this (→)">▶<br>more</button>
-        <button @click="triageVote(2)" title="WOW (↑)">▲▲<br>WOW</button>
+        <button class="back" v-if="triagePos > 0" @click="triageBack" title="← or ⌫">←<br>back</button>
+        <button class="wow" @click="triageVote(2)" title="Page Up">▲▲<br>WOW</button>
+        <button class="more" @click="triageVote(1)" title="↑">▲<br>more</button>
+        <button class="less" @click="triageVote(-1)" title="↓">▼<br>less</button>
+        <button class="never" @click="triageVote(-2)" title="Page Down">▼▼<br>never</button>
+        <button class="skip" @click="triageSkip()" title="→, space or enter">→<br>skip</button>
       </div>
-      <button class="mark triage-back" v-if="triagePos > 0" @click="triageBack">← back (⌫)</button>
+      <div v-if="triageExpanded" class="triage-content">
+        <p v-if="triageContentLoading" class="notice">Loading…</p>
+        <p v-else-if="!triageContent" class="notice">No content available.</p>
+        <div v-else v-html="triageContent" class="reader-body"></div>
+        <em v-if="triageContentSource === 'feed'" class="feed-notice"
+            title="the full article couldn't be fetched or extracted; showing the feed's own summary">feed excerpt only</em>
+      </div>
     </div>
   </section>
 

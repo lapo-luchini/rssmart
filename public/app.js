@@ -30,6 +30,10 @@ createApp({
       triageProcessed: 0,
       triageLoading: false,
       triageBusy: false,
+      triageExpanded: false,
+      triageContent: '',
+      triageContentSource: null,
+      triageContentLoading: false,
       topicSort: { key: 'pref', dir: -1 },
       feedSort: { key: null, dir: -1 }, // null = server order (active first)
       feedForm: { url: '', title: '' },
@@ -249,6 +253,7 @@ createApp({
         const data = await this.api(`/api/articles?view=unread&sort=date&limit=${TRIAGE_BATCH}&offset=0`);
         this.triageQueue = data.articles;
         this.triagePos = 0;
+        this.collapseTriageContent();
       } catch (err) {
         this.error = `Cannot load triage queue: ${err.message}`;
       } finally {
@@ -259,6 +264,7 @@ createApp({
     async triageAdvance() {
       this.triageProcessed++;
       this.triagePos++;
+      this.collapseTriageContent();
       if (this.triagePos >= this.triageQueue.length) await this.loadTriageBatch();
     },
 
@@ -304,6 +310,43 @@ createApp({
       if (this.triagePos > 0) {
         this.triagePos--;
         this.triageProcessed = Math.max(this.triageProcessed - 1, 0);
+        this.collapseTriageContent();
+      }
+    },
+
+    collapseTriageContent() {
+      this.triageExpanded = false;
+      this.triageContent = '';
+      this.triageContentSource = null;
+    },
+
+    // On-demand full text inline in the triage card itself (not a separate
+    // overlay) — triage is about screen-estate-efficient rapid voting, so
+    // the extra text goes below the vote row rather than taking over the
+    // view. Unlike openReader, this does NOT mark the article read: reading
+    // ahead of a vote/skip shouldn't fast-track it out of the queue.
+    async toggleTriageContent() {
+      if (this.triageExpanded) {
+        this.collapseTriageContent();
+        return;
+      }
+      const article = this.triageCurrent;
+      if (!article) return;
+      this.triageExpanded = true;
+      this.triageContent = '';
+      this.triageContentSource = null;
+      this.triageContentLoading = true;
+      try {
+        const data = await this.api(`/api/articles/${article.id}/reader`);
+        if (this.triageCurrent !== article) return; // advanced while loading
+        this.triageContent = data.html;
+        this.triageContentSource = data.source;
+      } catch (err) {
+        if (this.triageCurrent !== article) return;
+        this.error = `Cannot load article: ${err.message}`;
+        this.triageExpanded = false;
+      } finally {
+        if (this.triageCurrent === article) this.triageContentLoading = false;
       }
     },
 
@@ -318,13 +361,15 @@ createApp({
       if (this.panel !== 'triage') return;
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
       const actions = {
-        ArrowUp: () => this.triageVote(2),
-        ArrowRight: () => this.triageVote(1),
-        ArrowLeft: () => this.triageVote(-1),
-        ArrowDown: () => this.triageVote(-2),
+        ArrowUp: () => this.triageVote(1),
+        PageUp: () => this.triageVote(2),
+        ArrowDown: () => this.triageVote(-1),
+        PageDown: () => this.triageVote(-2),
+        ArrowLeft: () => this.triageBack(),
+        Backspace: () => this.triageBack(),
+        ArrowRight: () => this.triageSkip(),
         ' ': () => this.triageSkip(),
         Enter: () => this.triageSkip(),
-        Backspace: () => this.triageBack(),
         Escape: () => this.setView(this.view),
       };
       if (actions[e.key]) {

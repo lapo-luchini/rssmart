@@ -108,12 +108,18 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   full-text search, and a "repeats" toggle.
 - Every tab has its own hash route (`#/unread`, `#/interesting`, `#/all`,
   `#/triage`, `#/topics`, `#/feeds`) — bookmarkable, and back/forward works.
-- **⚡ Triage**: a fast, keyboard-driven way to vote through your unread
+- **⚡Triage**: a fast, keyboard-driven way to vote through your unread
   backlog — one article at a time (title, summary, topics), no clicking
-  into anything. `→` interesting, `↑` WOW, `←` less interesting, `↓` never,
-  `space`/`enter` skip (marks read without voting), `⌫` go back, `esc` exit.
-  Aimed squarely at the sparsity problem: a smarter algorithm can't beat
-  more training data, and this is the fastest way to generate it.
+  into anything. `↑` more interesting, `↓` less interesting, `PgUp` WOW,
+  `PgDn` never, `←`/`⌫` back, `→`/`space`/`enter` skip (marks read without
+  voting), `esc` exit. The on-screen buttons form a cross matching this
+  layout: PgUp/PgDn are the outer top/bottom buttons, back/skip flank the
+  middle two. Click the title (or tap it) to expand the full extracted
+  article inline, below the vote buttons, without leaving triage or
+  marking it read — and **open original ↗** next to the byline is a real
+  new-tab link for the cases where the extraction isn't enough. Aimed
+  squarely at the sparsity problem: a smarter algorithm can't beat more
+  training data, and this is the fastest way to generate it.
 - ▲ / ▼ vote to teach it: one click = interesting (±1), a second click = WOW
   (±2, counts double in every signal), a third clears. Expanding a story
   marks it read. Topic chips and each story's left edge are tinted by

@@ -536,10 +536,16 @@ body {
   margin-bottom: 2rem;
 }
 
+/* A cross layout mirrors the keyboard: ↑/↓ for normal votes flanked by
+   ←/→ for back/skip at the same reach, PgUp/PgDn for the extreme votes
+   further out top/bottom — the shape doubles as a legend. */
 .triage-controls {
-  display: flex;
+  display: grid;
+  grid-template-columns: 4.4rem 4.4rem 4.4rem;
+  grid-template-rows: repeat(4, auto);
+  gap: 0.5rem;
   justify-content: center;
-  gap: 0.7rem;
+  margin: 0 auto;
 }
 
 .triage-controls button {
@@ -557,13 +563,30 @@ body {
 }
 
 .triage-controls button:active { transform: scale(0.94); }
-.triage-controls button:nth-child(1):hover, .triage-controls button:nth-child(2):hover { border-color: var(--down); color: var(--down); }
-.triage-controls button:nth-child(4):hover, .triage-controls button:nth-child(5):hover { border-color: var(--up); color: var(--up); }
 
-.triage-back {
-  display: block;
+.triage-controls .wow   { grid-column: 2; grid-row: 1; }
+.triage-controls .more  { grid-column: 2; grid-row: 2; }
+.triage-controls .less  { grid-column: 2; grid-row: 3; }
+.triage-controls .never { grid-column: 2; grid-row: 4; }
+.triage-controls .back  { grid-column: 1; grid-row: 2 / span 2; align-self: center; }
+.triage-controls .skip  { grid-column: 3; grid-row: 2 / span 2; align-self: center; }
+
+.triage-controls .more:hover,
+.triage-controls .wow:hover { border-color: var(--up); color: var(--up); }
+.triage-controls .less:hover,
+.triage-controls .never:hover { border-color: var(--down); color: var(--down); }
+
+.triage-content {
   margin: 1.5rem auto 0;
+  max-width: 34rem;
+  padding: 0.9rem 1.1rem;
+  background: #fff;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  text-align: left;
 }
+
+.triage-content .feed-notice { display: block; margin-top: 0.6rem; }
 
 /* ---- reader overlay: full-text reading without leaving the tab --------- */
 

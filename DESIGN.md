@@ -127,6 +127,33 @@ day-one spec was retired for exactly that reason; it's in git history).
   passive scrolling — this is a narrower, session-scoped exception to
   "only explicit votes train" (skip itself still isn't a training
   signal, it just clears the article from the unread queue).
+- **Triage keybindings mirror physical key layout, not vote magnitude
+  (revised 2026-07-11).** The original scheme put magnitude on two
+  different axes (←/→ for ±1, ↑/↓ for WOW/never) with no consistent
+  direction — reported as unintuitive. Now ↑/↓ are the normal-magnitude
+  votes, PgUp/PgDn (physically further, a bigger reach) are their WOW/never
+  extremes, and ←/→ are back/skip — no vote maps to left-right at all
+  anymore. The `.triage-controls` CSS grid places six buttons in a
+  matching cross shape (PgUp/PgDn outermost, back/skip flanking the middle
+  two rows) so the layout doubles as a legend, not just an arbitrary
+  button row.
+- **Triage's full-article view is inline, not the reader overlay.**
+  Reuses the same `GET /api/articles/:id/reader` endpoint the reader
+  overlay uses (see above), but renders the result inside the triage card itself
+  (below the vote row), not as a full-screen takeover — triage is
+  explicitly about using screen space efficiently for rapid voting, so a
+  modal would work against its own premise. Unlike the reader overlay,
+  expanding does *not* mark the article read: previewing the full text
+  ahead of a vote/skip shouldn't fast-track it out of the queue by itself
+  (voting/skipping already does that, per the entry above). The expand
+  state resets on advance/back/new-batch since it's a per-card, transient
+  peek, not something that should carry across cards. A real "open
+  original ↗" link sits next to the byline regardless of expand state,
+  for the cases where the extraction isn't enough — same reasoning as the
+  reader overlay's own escape hatch: an occasional, deliberate new-tab
+  open doesn't reintroduce the wrong-tab-focus annoyance that motivated
+  replacing the *default* open action with the overlay in the first
+  place, since that annoyance scales with frequency of use, not existence.
 - **In-page reader overlay (2026-07-11), not an iframe.** Opening an article
   in a new tab and closing it with Ctrl-W left the reader on whatever tab
   happened to be next, not the tab they came from — reported as a real
