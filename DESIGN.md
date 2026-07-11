@@ -341,6 +341,24 @@ day-one spec was retired for exactly that reason; it's in git history).
   annoyance that motivated replacing the *default* open action with the
   overlay in the first place, since that annoyance scales with frequency
   of use, not existence.
+- **Triage's batch fetch filters to `status=enriched` (fixed 2026-07-11).**
+  It previously reused the exact same `view=unread&sort=date` query as the
+  Unread tab, with no status filter — meaning a freshly-ingested,
+  not-yet-classified article (no summary/topics/depth) could and did land
+  in the queue, hitting the "Not classified yet" fallback instead of
+  something triage-able. Confirmed live: a pending article routinely lands
+  within the top 10 of the queue's own date ordering, since classification
+  lags ingestion by at least a few seconds and freshness is exactly what
+  sorts an article to the front. Considered switching to `hot` sort
+  (`Interesting`'s own default) while fixing this, and deliberately didn't:
+  triage's whole point is generating *more, diverse* votes to fight
+  scoring sparsity, and hot-sorting would concentrate votes on whatever
+  the model already scores well — an exploitation-only feedback loop that
+  reinforces existing bias instead of correcting blind spots the model is
+  currently wrong about. Date order approximates unbiased sampling
+  (publication timing has nothing to do with the model's current scoring)
+  and keeps triage meaningfully different from just a faster way to browse
+  the already-hot-sorted Interesting tab.
 - **In-page reader overlay (2026-07-11), not an iframe.** Opening an article
   in a new tab and closing it with Ctrl-W left the reader on whatever tab
   happened to be next, not the tab they came from — reported as a real

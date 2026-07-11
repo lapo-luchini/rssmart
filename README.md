@@ -130,10 +130,12 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   full-text search, and a "repeats" toggle.
 - Every tab has its own hash route (`#/unread`, `#/interesting`, `#/all`,
   `#/triage`, `#/topics`, `#/feeds`) — bookmarkable, and back/forward works.
-- **⚡Triage**: a fast, keyboard-driven way to vote through your unread
-  backlog — one article at a time (title, summary, topics), no clicking
-  into anything. `↑` more interesting, `↓` less interesting, `w` WOW,
-  `n` never, `←`/`⌫` back, `→`/`space`/`enter` skip (marks read without
+- **⚡Triage**: a fast, keyboard-driven way to vote through your unread,
+  *classified* backlog (not-yet-classified articles are excluded — triage
+  runs on title/summary/topics, which a pending article doesn't have yet)
+  — one article at a time, no clicking into anything. `↑` more interesting,
+  `↓` less interesting, `w` WOW, `n` never, `←`/`⌫` back, `→`/`space`/`enter`
+  skip (marks read without
   voting), `esc` exit (`PgUp`/`PgDn` were tried for WOW/never first, but
   those are needed to actually scroll a long preview). The on-screen
   buttons form a cross matching this layout: w/n are the outer top/bottom

@@ -246,11 +246,15 @@ createApp({
     // Triage: a fast, keyboard-driven mode for blasting through the unread
     // backlog. Each vote/skip marks the article read, so the *next* batch
     // fetch (still just view=unread, offset 0) naturally excludes whatever
-    // was just processed — no offset bookkeeping needed.
+    // was just processed — no offset bookkeeping needed. status=enriched
+    // excludes not-yet-classified (or unclassifiable) articles: triage's
+    // whole premise is voting off title/summary/topics, none of which
+    // exist yet for a pending article, and a fresh one is often the very
+    // newest — exactly the position a date-sorted queue surfaces first.
     async loadTriageBatch() {
       this.triageLoading = true;
       try {
-        const data = await this.api(`/api/articles?view=unread&sort=date&limit=${TRIAGE_BATCH}&offset=0`);
+        const data = await this.api(`/api/articles?view=unread&sort=date&status=enriched&limit=${TRIAGE_BATCH}&offset=0`);
         this.triageQueue = data.articles;
         this.triagePos = 0;
         this.collapseTriageContent();
