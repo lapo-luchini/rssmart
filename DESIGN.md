@@ -236,6 +236,31 @@ day-one spec was retired for exactly that reason; it's in git history).
     entry above) already gives semantic search a path into full-body
     content, so the LIKE-search regression is softened by an existing
     feature rather than a wholly new gap.
+- **Vue is fetched directly, not installed as an npm dependency
+  (`scripts/vendor.js`, 2026-07-11).** Only one file was ever used from the
+  `vue` package — the self-contained `dist/vue.esm-browser.prod.js` browser
+  build — but `vue`'s own `package.json` depends on `@vue/server-renderer`
+  (SSR, unused: no server-side rendering here), which pulls in
+  `@vue/compiler-sfc` (SFC compilation, unused: no `.vue` files, no
+  bundler), which drags in `@vue/compiler-core`/`-dom`/`-ssr`,
+  `@babel/parser` and `@babel/types`. Traced the whole chain with `pnpm
+  why` before touching anything: confirmed none of it is reachable from
+  any code path here, only the one vendored file is. That's ~28MB of
+  `node_modules` (measured live: 148.2MB -> 118.8MB after removing `vue`
+  and pruning the 21 packages `pnpm why` showed as now-orphaned) bought
+  for zero runtime benefit. `scripts/vendor.js` now fetches that one
+  pinned-version file directly from a CDN and verifies it against a
+  pinned SHA-256 before writing it — a compromised CDN response gets
+  rejected rather than silently becoming the JS every visitor's browser
+  runs. Skips the fetch (and the network requirement) entirely when the
+  file's already vendored and its hash still matches, so a normal
+  reinstall doesn't need network access — only a first-time setup or an
+  explicit version bump does. Trade-off made consciously: this moves from
+  "always resolved via npm/pnpm's lockfile" to "one direct HTTPS fetch at
+  install time," which is a small step away from the vendoring script's
+  original "never depend on a CDN" framing — but that framing was really
+  about the *running app* never phoning a CDN (still true), not the
+  one-time setup step.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly

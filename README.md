@@ -33,6 +33,12 @@ pnpm install
 cp config.example.yaml config.yaml   # then edit; config.yaml is gitignored
 ```
 
+`pnpm install` needs network access once: its `postinstall` step
+(`scripts/vendor.js`) fetches the frontend's Vue build directly from a CDN,
+checksum-verified, rather than installing the full `vue` npm package (whose
+own dependency chain — SSR, SFC compilation, none of it used here — is
+~28MB for a single 170KB file). Already-vendored installs skip the fetch.
+
 Runs on both **Node.js (24+)** and **[Bun](https://bun.sh)**: `src/db.js`
 picks `bun:sqlite` under Bun and `better-sqlite3` under Node automatically,
 so `bun bin/rssmart.js serve` / `bun bin/rssmart.js cron` work exactly like
