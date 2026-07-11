@@ -337,6 +337,29 @@ day-one spec was retired for exactly that reason; it's in git history).
   `disableIframePageLoading`, all `true`) to restore jsdom's original
   no-external-loading posture; re-verified 0 hits afterward. Full test
   suite (78 tests) passes on both Node 24 and Bun after the swap.
+  **Follow-up: the size win doesn't hold on a compressed filesystem.**
+  A user-reported `du -Ls node_modules` on a ZFS pool with compression
+  enabled showed the swap making things *worse* (27.4MB -> 34.9MB), the
+  opposite of every measurement above. Root cause, found by reproducing
+  the same commits/tool-versions repeatedly (ruled out: pnpm vs npm,
+  pnpm 11.2.2 vs 11.8.0, stale build artifacts from an unrelated earlier
+  manual rebuild, non-pinned npm resolution) and eventually by the user's
+  own `du -ALs` (apparent size) test: `du` without `-A`/`--apparent-size`
+  reports actual on-disk blocks, which under ZFS compression reflects
+  *post-compression* size, not logical byte count. jsdom's tree happens
+  to compress better than happy-dom's (likely `@types/node`'s dense
+  `.d.ts` files, pulled in as a plain, unbounded `>=20.0.0` runtime
+  dependency of happy-dom alongside `ws`/`@types/ws` — real WebSocket
+  code and TypeScript types this project has no use for at runtime,
+  since it's plain JS). With `-A`, the user's own numbers flip back to
+  matching every other measurement (38.9MB -> 28.9MB, a decrease). Kept
+  happy-dom anyway on explicit request: fewer packages (77 -> 55) and
+  smaller logical size hold regardless of filesystem, and matter for
+  install time/audit surface even where on-disk compressed bytes don't
+  clearly win. Lesson for future size comparisons: `du` without
+  `--apparent-size` is filesystem-compression-dependent and can disagree
+  with every other measure of "size" — check which one a reported number
+  actually is before trusting it.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
