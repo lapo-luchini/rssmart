@@ -193,13 +193,19 @@ export function createApp(db, config) {
     if (!Number.isInteger(vote) || vote < -2 || vote > 2) {
       return res.status(400).json({ error: 'vote must be an integer from -2 to 2' });
     }
-    const { changes } = db
-      .prepare('UPDATE articles SET vote = ? WHERE id = ?')
-      .run(vote, req.params.id);
+    // Casting a real vote (not retracting one) implies the article was
+    // read — you can't rate what you haven't seen. Retraction (vote = 0)
+    // leaves read_at alone: it doesn't mean you un-read it.
+    const { changes } = db.prepare(`
+      UPDATE articles
+      SET vote = ?,
+          read_at = CASE WHEN ? != 0 THEN COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ELSE read_at END
+      WHERE id = ?
+    `).run(vote, vote, req.params.id);
     if (!changes) return res.status(404).json({ error: 'not found' });
     recomputeScores(db, config);
     const row = db.prepare(`
-      SELECT id, vote, score,
+      SELECT id, vote, read_at, score,
              score_topics, score_embedding, score_depth, score_feed
       FROM articles WHERE id = ?
     `).get(req.params.id);

@@ -214,18 +214,23 @@ test('voting validates input, persists and recomputes scores', async () => {
     assert.equal(bad.status, 400, `vote ${vote} rejected`);
   }
 
-  const before = (await get(`/api/articles/${ids.sporty}`)).body.score;
-  assert.equal(before, 0);
+  const articleBefore = (await get(`/api/articles/${ids.sporty}`)).body;
+  assert.equal(articleBefore.score, 0);
+  assert.equal(articleBefore.read_at, null, 'sporty starts unread');
+
   const { status, body } = await post(`/api/articles/${ids.sporty}/vote`, { vote: 1 });
   assert.equal(status, 200);
   assert.equal(body.vote, 1);
   assert.ok(body.score > 0, 'sports preference rose after upvote');
   assert.ok('score_topics' in body && 'score_embedding' in body, 'components returned');
+  assert.ok(body.read_at, 'casting a real vote marks the article read — you can\'t rate what you never read');
 
   const wow = await post(`/api/articles/${ids.sporty}/vote`, { vote: 2 });
   assert.ok(wow.body.score > body.score, 'a WOW vote outweighs a plain upvote');
+  assert.equal(wow.body.read_at, body.read_at, 'an already-read article keeps its original read_at');
 
-  await post(`/api/articles/${ids.sporty}/vote`, { vote: 0 }); // restore
+  const retracted = await post(`/api/articles/${ids.sporty}/vote`, { vote: 0 }); // restore
+  assert.equal(retracted.body.read_at, body.read_at, 'retracting a vote does not un-read the article');
 });
 
 test('feed management: add, disable, stats, OPML round-trip', async () => {
