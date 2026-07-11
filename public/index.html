@@ -145,7 +145,7 @@
       <p class="triage-progress">{{ triageProcessed }} processed this session</p>
       <div class="story-meta">
         <span class="source">{{ triageCurrent.feed_title || 'feed' }}</span>
-        <time>{{ ago(triageCurrent.published_at || triageCurrent.created_at) }}</time>
+        <time :title="fullDate(triageCurrent.published_at || triageCurrent.created_at)">{{ ago(triageCurrent.published_at || triageCurrent.created_at) }}</time>
         <a v-if="triageCurrent.url" class="mark" :href="triageCurrent.url" target="_blank" rel="noopener"
            title="open in a new tab (o)">open original ↗</a>
       </div>
@@ -197,7 +197,7 @@
           </span>
         </span>
         <span class="source">{{ a.feed_title || 'feed' }}</span>
-        <time :datetime="a.published_at || a.created_at">{{ ago(a.published_at || a.created_at) }}</time>
+        <time :datetime="a.published_at || a.created_at" :title="fullDate(a.published_at || a.created_at)">{{ ago(a.published_at || a.created_at) }}</time>
         <span v-if="a.similarity !== undefined" class="flag" title="semantic match strength for this search">{{ Math.round(a.similarity * 100) }}% match</span>
         <button v-if="a.versions > 1 && !dupes" class="flag flag-link"
                 :title="'this news appears in ' + a.versions + ' articles'"
@@ -250,7 +250,7 @@
           <span class="score" :style="{ color: tint(v.score, 55) }">{{ fmtScore(v.score) }}</span>
           <a class="version-title" :href="v.url" target="_blank" rel="noopener">{{ v.title }}</a>
           <span class="source">{{ v.feed_title }}</span>
-          <time>{{ ago(v.published_at || v.created_at) }}</time>
+          <time :title="fullDate(v.published_at || v.created_at)">{{ ago(v.published_at || v.created_at) }}</time>
         </div>
       </div>
     </article>
@@ -283,7 +283,7 @@
       <h1 class="reader-title">{{ readerArticle.title }}</h1>
       <div class="story-meta reader-meta">
         <span class="source">{{ readerArticle.feed_title || 'feed' }}</span>
-        <time>{{ ago(readerArticle.published_at || readerArticle.created_at) }}</time>
+        <time :title="fullDate(readerArticle.published_at || readerArticle.created_at)">{{ ago(readerArticle.published_at || readerArticle.created_at) }}</time>
         <em v-if="readerSource === 'feed'" class="feed-notice"
             title="the full article couldn't be fetched or extracted; showing the feed's own summary">feed excerpt only</em>
       </div>

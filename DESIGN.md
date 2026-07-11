@@ -266,6 +266,15 @@ day-one spec was retired for exactly that reason; it's in git history).
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
   editable, never auto-updated: text the reader owns stays auditable;
   an LLM silently rewriting its own instructions would drift.
+- **Relative "ago" times get an exact-date tooltip (2026-07-11).** `3788d`
+  is technically correct but not legible — reported live against a
+  genuinely old article. `fullDate()` (`public/app.js`) formats the same
+  timestamp as `YYYY-MM-DD HH:MM` in the *browser's* local timezone (plain
+  `Date` getters, not the UTC variants) — ISO8601's field order, since
+  that's the unambiguous one, but a space instead of `T` and no
+  seconds/offset, since this is for a human glancing at a tooltip, not a
+  machine parsing a value (the `datetime` attribute already carries the
+  real ISO8601 string for that).
 - **Hardened `classifyPrompt` against indirect prompt injection
   (2026-07-11).** Article title/content is untrusted, third-party text
   (RSS feed or fetched origin page) interpolated directly into the

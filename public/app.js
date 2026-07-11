@@ -670,5 +670,16 @@ createApp({
       if (s < 129600) return `${Math.round(s / 3600)}h`;
       return `${Math.round(s / 86400)}d`;
     },
+
+    // Tooltip for the relative "ago" times: exact date/time, local timezone,
+    // ISO8601 field order (year-month-day, then hour:minute) but with a
+    // space instead of "T" and no seconds/offset — easier to read at a
+    // glance than either raw ISO8601 or a locale-dependent format.
+    fullDate(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    },
   },
 }).mount('#app');
