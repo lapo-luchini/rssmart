@@ -15,6 +15,9 @@
   "keywords": [],
   "author": "Lapo Luchini <lapo@lapo.it>",
   "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
     "better-sqlite3": "^12.11.1",
@@ -27,5 +30,8 @@
   "type": "module",
   "bin": {
     "rssmart": "bin/rssmart.js"
+  },
+  "allowScripts": {
+    "file:.pnpm/better-sqlite3@12.11.1/node_modules/better-sqlite3": true
   }
 }

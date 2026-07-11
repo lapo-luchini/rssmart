@@ -7,11 +7,16 @@ ollama:
   url: http://localhost:11434   # your network-local Ollama instance
   chatModel: llama3.1           # any instruct model, for topics + summaries
   embedModel: qwen3-embedding:0.6b  # embeddings: dedup, taste, (search)
-  # Changing embedModel is safe: the change is detected on the next run,
-  # stored vectors are cleared and articles are re-embedded automatically.
+  # Changing embedModel (or embedDimensions below) is safe: the change is
+  # detected on the next run, stored vectors are cleared and articles are
+  # re-embedded automatically.
   # Retrieval models use task prefixes; set them per your model's card
   # (qwen3: plain documents, instructed queries; nomic v1.5 would want
   # document: "search_document: " and query: "search_query: ").
+  # embedDimensions: 512  # optional Matryoshka truncation — halves storage
+                          # on top of float16, little accuracy loss, only
+                          # if your model supports it (qwen3-embedding does;
+                          # check any other model's card before assuming)
   embedPrefixes:
     document: ""
     query: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "

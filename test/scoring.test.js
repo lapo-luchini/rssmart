@@ -10,7 +10,7 @@ import {
 } from '../src/scoring.js';
 import { openDb } from '../src/db.js';
 
-const vecBuf = (...values) => Buffer.from(Float32Array.from(values).buffer);
+const vecBuf = (...values) => Buffer.from(Float16Array.from(values).buffer);
 
 function seed(db, articles) {
   db.prepare("INSERT INTO feeds (id, url) VALUES (1, 'http://f')").run();

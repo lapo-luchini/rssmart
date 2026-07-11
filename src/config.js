@@ -10,6 +10,10 @@ const DEFAULTS = {
     chatModel: 'llama3.1',
     embedModel: 'nomic-embed-text',
     embedPrefixes: { document: '', query: '' },
+    // Matryoshka-style dimension truncation (halves embedding storage on
+    // top of the float16 format): opt-in, since not every embedding model
+    // supports it. null/omitted asks for the model's native dimension.
+    embedDimensions: null,
     timeoutMs: 60_000,
   },
   enrich: {

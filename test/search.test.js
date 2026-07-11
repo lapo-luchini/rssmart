@@ -4,7 +4,7 @@ import { tempDb, startOllamaStub, testConfig } from './helpers.js';
 import { semanticSearch } from '../src/search.js';
 import { Ollama } from '../src/llm.js';
 
-const vec = (...values) => Buffer.from(Float32Array.from(values).buffer);
+const vec = (...values) => Buffer.from(Float16Array.from(values).buffer);
 
 function seedArticle(db, id, embedding, extra = {}) {
   db.prepare("INSERT OR IGNORE INTO feeds (id, url) VALUES (1, 'http://f')").run();

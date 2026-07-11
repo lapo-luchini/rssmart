@@ -51,7 +51,44 @@ day-one spec was retired for exactly that reason; it's in git history).
   because every retrieval model spells them differently (qwen3: plain
   documents + instructed queries; nomic v1.5: `search_document:` /
   `search_query:`). Current model: qwen3-embedding:0.6b (multilingual —
-  half the feeds are Italian; nomic v1.5 was English-centric).
+  half the feeds are Italian; nomic v1.5 was English-centric). The version
+  key is now a composite (`embedModel::embedDimensions::f16`, since
+  2026-07-11), not just the bare model name — see the next entry for why.
+- **Embeddings stored as float16 at half the model's native dimension
+  (2026-07-11), cutting the two embedding columns from 47.2MB to a
+  projected ~11.8MB.** Two independent, stacking changes:
+  - **Storage precision: float32 -> float16.** `Ollama.embed()`
+    (`src/llm.js`) now returns a `Float16Array`; `bufToVec` (`src/enrich.js`)
+    reads it back with a `/2` byte-width divisor instead of `/4`. Needs
+    native `Float16Array`, which Node only gained in v24 — bumped the
+    project's minimum Node version (`package.json` `engines`, `.nvmrc`)
+    rather than hand-roll IEEE 754 half-precision conversion: prototyped a
+    hand-rolled version first, cross-checked it against Bun's native
+    implementation (Bun already had `Float16Array`/`DataView.getFloat16`)
+    over ~2000 values, and it produced one real 1-ULP rounding mismatch —
+    exactly the class of subtle bug a native implementation avoids for
+    free. `better-sqlite3`'s native addon is ABI-tied to the Node version
+    it was built under, so upgrading needs one rebuild
+    (`npm rebuild better-sqlite3` under the new Node) — not a code change,
+    but a real one-time step, documented in the README.
+  - **Dimension: model-native (1024 for qwen3-embedding:0.6b) -> 512,
+    configurable (`ollama.embedDimensions`).** qwen3-embedding supports
+    Matryoshka Representation Learning (MRL): querying Ollama's
+    `/api/embed` with `dimensions: 512` genuinely returns a shorter
+    vector, not a client-side truncation. Verified live against the real
+    Ollama instance before relying on it: both 1024 and 512-dim outputs
+    are L2-normalized (norm 1.0), the same text at both dimensions has
+    cosine ≈ 1.0 (direction preserved), and two unrelated articles shift
+    only slightly (0.3775 -> 0.3870) — no sign of the truncation degrading
+    ranking behavior. `embedDimensions` defaults to `null` (model's native
+    dimension) since not every embedding model supports MRL — it's an
+    explicit opt-in per model, not assumed.
+  - Both changes are folded into `syncEmbeddingSpace`'s version key
+    (`embedModel::embedDimensions::f16`) so upgrading always invalidates
+    old vectors and triggers `reembedMissing`, even for an install whose
+    `embedModel`/`embedDimensions` config didn't change — the trailing
+    `::f16` is a fixed marker for the code's current storage format, not
+    something read from config.
 - **Semantic search (src/search.js) reuses the taste-learning embeddings,
   no vector index.** The query is embedded with the same model and the
   `query` task prefix, then ranked by brute-force cosine against
@@ -263,9 +300,11 @@ day-one spec was retired for exactly that reason; it's in git history).
 
 ## How the cosine math actually runs
 
-All in RAM, brute force, plain JS loops over `Float32Array`s. SQLite is
-storage only — embeddings are BLOBs (768 × 4 bytes ≈ 3 KB, two per
-article), there is no vector index (no sqlite-vec/vss).
+All in RAM, brute force, plain JS loops over `Float16Array`s (`Float32Array`
+before 2026-07-11 — see the embedding storage entry below). SQLite is
+storage only — embeddings are BLOBs (dimension × 2 bytes, two per article;
+1 KB each at this deployment's configured 512 dims), there is no vector
+index (no sqlite-vec/vss).
 
 Two paths, with very different scaling:
 
@@ -277,7 +316,7 @@ Two paths, with very different scaling:
 
 2. **kNN vote scoring** (`recomputeScores`): loads *all* text embeddings
    and compares every article against every voted article —
-   O(N articles × V votes × 768) — and runs on **every vote** plus after
+   O(N articles × V votes × dims) — and runs on **every vote** plus after
    every classification batch. This is the path with a real ceiling.
 
 ## Known limits (as of ~5k articles, 2026-07)

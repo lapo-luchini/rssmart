@@ -6,7 +6,7 @@ import { Ollama } from '../src/llm.js';
 
 function seedEnriched(db, title, withVectors = true) {
   db.prepare("INSERT OR IGNORE INTO feeds (id, url) VALUES (1, 'http://f')").run();
-  const blob = withVectors ? Buffer.from(Float32Array.from([1, 0]).buffer) : null;
+  const blob = withVectors ? Buffer.from(Float16Array.from([1, 0]).buffer) : null;
   return Number(db.prepare(`
     INSERT INTO articles (feed_id, guid, title, content, summary, status, embedding, text_embedding)
     VALUES (1, ?, ?, 'body text', 'a summary', 'enriched', ?, ?)
@@ -27,7 +27,7 @@ test('syncEmbeddingSpace records, detects changes, clears stale vectors', () => 
   // model changed: vectors cleared
   config.ollama.embedModel = 'model-b';
   const r = syncEmbeddingSpace(db, config);
-  assert.deepEqual(r, { changed: true, from: 'model-a', cleared: 1 });
+  assert.deepEqual(r, { changed: true, from: 'model-a::default::f16', cleared: 1 });
   const art = db.prepare('SELECT embedding, text_embedding FROM articles').get();
   assert.equal(art.embedding, null);
   assert.equal(art.text_embedding, null);

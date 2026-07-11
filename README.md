@@ -33,12 +33,15 @@ pnpm install
 cp config.example.yaml config.yaml   # then edit; config.yaml is gitignored
 ```
 
-Runs on both **Node.js** and **[Bun](https://bun.sh)**: `src/db.js` picks
-`bun:sqlite` under Bun and `better-sqlite3` under Node automatically, so
-`bun bin/rssmart.js serve` / `bun bin/rssmart.js cron` work exactly like
+Runs on both **Node.js (24+)** and **[Bun](https://bun.sh)**: `src/db.js`
+picks `bun:sqlite` under Bun and `better-sqlite3` under Node automatically,
+so `bun bin/rssmart.js serve` / `bun bin/rssmart.js cron` work exactly like
 their `node` equivalents (including `bun run cron` / `bun run serve` via
 the package.json scripts). No config needed — just use whichever
-`node`/`bun` binary is on your `PATH`.
+`node`/`bun` binary is on your `PATH`. Node 24 is required for native
+`Float16Array` (embeddings are stored as float16 — see below); if you're
+on an older Node, install 24 via `nvm install 24` and rebuild the native
+addon once: `nvm use 24 && npm rebuild better-sqlite3`.
 
 Configure in `config.yaml`:
 
@@ -46,6 +49,11 @@ Configure in `config.yaml`:
 - `ollama.chatModel` — any instruct model, e.g. `llama3.1`, `qwen3`.
 - `ollama.embedModel` — an embedding model, e.g. `nomic-embed-text`
   (`ollama pull nomic-embed-text`).
+- `ollama.embedDimensions` — optional Matryoshka-style truncation (e.g. `512`
+  for a 1024-dim model): halves embedding storage on top of the float16
+  format, with little accuracy loss — only if your model supports it
+  (check its card; qwen3-embedding does). Omit to use the model's native
+  dimension.
 - `enrich.dupThreshold` — cosine similarity above which a story counts as a
   repeat (default 0.87; raise it if distinct stories get flagged).
 - `enrich.fetchMinChars` — link-only feeds (e.g. Hacker News) carry almost no

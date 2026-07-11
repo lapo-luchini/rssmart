@@ -166,7 +166,7 @@ test('new repeats point to the group root; re-enriched originals stay roots', as
   stub.chat = () => ({ topics: ['news'], summary: 'Same event.' });
   stub.embed = () => [1, 0, 0, 0]; // everything matches everything
 
-  const vecBlob = Buffer.from(Float32Array.from([1, 0, 0, 0]).buffer);
+  const vecBlob = Buffer.from(Float16Array.from([1, 0, 0, 0]).buffer);
   const a = seedArticle(db, { title: 'Original', published: '2026-07-01T00:00:00Z' });
   const b = seedArticle(db, { title: 'Copy', published: '2026-07-02T00:00:00Z' });
   db.prepare("UPDATE articles SET status='enriched', embedding=? WHERE id = ?").run(vecBlob, a);

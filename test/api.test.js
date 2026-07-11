@@ -4,7 +4,7 @@ import { tempDb, testConfig, startOllamaStub } from './helpers.js';
 import { createApp } from '../src/server.js';
 import { recomputeScores } from '../src/scoring.js';
 
-const vec = (...values) => Buffer.from(Float32Array.from(values).buffer);
+const vec = (...values) => Buffer.from(Float16Array.from(values).buffer);
 
 let db;
 let base;

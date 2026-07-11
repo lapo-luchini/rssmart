@@ -16,7 +16,7 @@ export function cosine(a, b) {
 }
 
 export function bufToVec(buf) {
-  return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+  return new Float16Array(buf.buffer, buf.byteOffset, buf.byteLength / 2);
 }
 
 const SYSTEM = 'You are a news classification assistant. Always answer with a single JSON object and nothing else.';
@@ -147,15 +147,19 @@ export async function getReaderContent(db, article, config) {
 }
 
 /**
- * Embeddings from different models live in different vector spaces and
- * must never be compared. The model that produced the stored vectors is
- * recorded in meta; when the configured embedModel differs (or vectors
- * predate the record), all vectors are cleared and articles get re-embedded
- * by reembedMissing. Duplicate marks from the old space are kept: they were
- * real matches when made, and re-deriving them would be O(N²).
+ * Embeddings from different models (or dimensions, or storage precision)
+ * live in different vector spaces and must never be compared. The version
+ * key that produced the stored vectors is recorded in meta; when the
+ * configured version differs (or vectors predate the record), all vectors
+ * are cleared and articles get re-embedded by reembedMissing. Duplicate
+ * marks from the old space are kept: they were real matches when made, and
+ * re-deriving them would be O(N²). The trailing "::f16" isn't config-driven
+ * — it's a fixed marker for the storage format bufToVec assumes, bumped
+ * once (2026-07-11, float32 -> float16) so upgrading always invalidates
+ * old vectors even for installs whose model/dimensions didn't change.
  */
 export function syncEmbeddingSpace(db, config) {
-  const current = config.ollama.embedModel;
+  const current = `${config.ollama.embedModel}::${config.ollama.embedDimensions ?? 'default'}::f16`;
   const stored = db
     .prepare("SELECT value FROM meta WHERE key = 'embed_model'")
     .get()?.value;
