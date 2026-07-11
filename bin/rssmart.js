@@ -9,6 +9,7 @@ import { recomputeScores, clearScheduledRecompute } from '../src/scoring.js';
 import { createApp } from '../src/server.js';
 import { startScheduler } from '../src/scheduler.js';
 import { acquireLease, releaseLease } from '../src/lease.js';
+import { log, logError } from '../src/log.js';
 
 const USAGE = `Usage: rssmart <mode> [options]
 
@@ -55,12 +56,12 @@ if (mode === 'cron') {
   // Cron etiquette: silent on success, errors on stderr. --verbose/--debug
   // narrate progress for manual runs.
   const verbose = values.verbose || values.debug;
-  const info = (...args) => verbose && console.log(...args);
+  const info = (...args) => verbose && log(...args);
 
   syncFeeds(db, config.feeds);
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {
-    console.error(
+    logError(
       `embedding model changed (${space.from} -> ${config.ollama.embedModel}): ` +
         `${space.cleared} stored vector(s) cleared, re-embedding`,
     );
@@ -72,7 +73,7 @@ if (mode === 'cron') {
   if (values['max-run'] !== undefined) {
     const minutes = Number(values['max-run']);
     if (!Number.isFinite(minutes) || minutes < 0) {
-      console.error(`invalid --max-run "${values['max-run']}": minutes required (0 = no limit)`);
+      logError(`invalid --max-run "${values['max-run']}": minutes required (0 = no limit)`);
       process.exit(2);
     }
     config.cron.maxRunMs = minutes === 0 ? null : minutes * 60_000;
@@ -83,7 +84,7 @@ if (mode === 'cron') {
   const ingestPromise = ingestAll(db, config, {
     dueOnly: !values['all-feeds'],
     onFeed(f) {
-      if (f.error) console.error(`[${f.index}/${f.total}] feed ${f.url}: ${f.error}`);
+      if (f.error) logError(`[${f.index}/${f.total}] feed ${f.url}: ${f.error}`);
       else info(`[${f.index}/${f.total}] feed ${f.url}: ${f.added} new`);
     },
   }).finally(() => {
@@ -110,7 +111,7 @@ if (mode === 'cron') {
     onItem(item) {
       acquireLease(db, owner); // heartbeat
       if (item.error) {
-        console.error(`[${item.index}/${item.total}] article #${item.id} "${item.title}": ${item.error}`);
+        logError(`[${item.index}/${item.total}] article #${item.id} "${item.title}": ${item.error}`);
         return;
       }
       info(
@@ -133,7 +134,7 @@ if (mode === 'cron') {
   if (enrich.skipped) {
     // a held lease is normal coexistence with a serve scheduler, not an error
     if (/lease/.test(enrich.reason)) info(`enrich skipped: ${enrich.reason}`);
-    else console.error(`enrich skipped: ${enrich.reason}; articles stay pending`);
+    else logError(`enrich skipped: ${enrich.reason}; articles stay pending`);
   } else {
     info(
       `enrich: ${enrich.enriched} enriched (${plural(enrich.duplicates, 'duplicate')}), ${enrich.failed} failed` +
@@ -150,7 +151,7 @@ if (mode === 'cron') {
 } else {
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {
-    console.log(
+    log(
       `embedding model changed (${space.from} -> ${config.ollama.embedModel}): ` +
         `${space.cleared} stored vector(s) cleared, the scheduler will re-embed`,
     );
@@ -158,10 +159,10 @@ if (mode === 'cron') {
   const app = createApp(db, config);
   const port = Number(values.port) || config.server.port;
   app.listen(port, config.server.host, () => {
-    console.log(`rssmart serving on http://${config.server.host}:${port}`);
+    log(`rssmart serving on http://${config.server.host}:${port}`);
   });
   if (config.scheduler.enabled) {
-    startScheduler(db, config, { log: console.log });
-    console.log('internal scheduler active: fetching due feeds, classifying pending articles');
+    startScheduler(db, config, { log });
+    log('internal scheduler active: fetching due feeds, classifying pending articles');
   }
 }

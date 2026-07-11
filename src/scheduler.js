@@ -3,6 +3,7 @@ import { enrichPending, reembedMissing } from './enrich.js';
 import { recomputeScores, recomputeIfDue, clearScheduledRecompute } from './scoring.js';
 import { Ollama } from './llm.js';
 import { acquireLease, releaseLease } from './lease.js';
+import { logError } from './log.js';
 
 /**
  * The serve-internal scheduler: independent loops so a deep classification
@@ -40,7 +41,7 @@ export function startScheduler(db, config, {
           (r.feedsFailed ? `, ${r.feedsFailed} failed` : ''));
       }
     } catch (err) {
-      console.error('scheduler fetch:', err.message);
+      logError('scheduler fetch:', err.message);
     } finally {
       fetching = false;
     }
@@ -85,7 +86,7 @@ export function startScheduler(db, config, {
         }
       }
     } catch (err) {
-      console.error('scheduler enrich:', err.message);
+      logError('scheduler enrich:', err.message);
     } finally {
       enriching = false;
     }
@@ -97,7 +98,7 @@ export function startScheduler(db, config, {
         log('scheduler: recomputed scores (debounced after recent votes)');
       }
     } catch (err) {
-      console.error('scheduler score:', err.message);
+      logError('scheduler score:', err.message);
     }
   };
 

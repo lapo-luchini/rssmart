@@ -94,6 +94,19 @@ day-one spec was retired for exactly that reason; it's in git history).
   `openDb()` now sets `PRAGMA busy_timeout = 5000` unconditionally so both
   drivers behave the same way, rather than relying on an implicit default
   that turned out to differ.
+- **Log lines carry an ISO8601 timestamp (`src/log.js`), `--help` usage text
+  doesn't.** `log()`/`logError()` wrap `console.log`/`console.error` with
+  `new Date().toISOString()` prepended, and every real log call site in
+  `bin/rssmart.js` and `src/scheduler.js` goes through them — needed once
+  `cron` and `serve` can run concurrently and interleave output, or output
+  gets piped/aggregated (systemd, a log file) where wall-clock order isn't
+  otherwise recoverable. `startScheduler`'s injectable `log` option is
+  untouched by this — it still receives plain, untimestamped messages
+  (`test/scheduler.test.js` asserts on them directly), and only gets a
+  timestamp because `bin/rssmart.js` wires in the real `log()` as its
+  concrete implementation at runtime. The one exception is the bare
+  `console.log(USAGE)` for `--help`: that's static text for a human reading
+  it, not a log event, so it stays unprefixed.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly

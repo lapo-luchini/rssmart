@@ -78,7 +78,10 @@ running scheduler never classify the same queue twice.
 `cron` follows cron etiquette: silent when all is well, problems on stderr
 (so real cron only emails you on failure). To watch it work when running
 manually, add `--verbose` (per-feed and per-article progress) or `--debug`
-(also prints the generated summaries).
+(also prints the generated summaries). Every log line (cron and serve,
+including the internal scheduler's) is prefixed with an ISO8601 timestamp
+(`src/log.js`), so output from concurrent processes can be interleaved and
+ordered correctly.
 
 If you prefer system cron over the internal scheduler, e.g. every 30 minutes:
 
