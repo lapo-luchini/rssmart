@@ -111,6 +111,22 @@ day-one spec was retired for exactly that reason; it's in git history).
   monotonically-growing raw vote count starting at 1, so a divisive decay
   doesn't translate the same way. Plain "by interest" and "by date"
   remain selectable; only "Interesting"'s default changed.
+- **Triage mode (2026-07-11) attacks the sparsity problem by generating
+  more votes, not by making the algorithm cleverer with fewer.** Only ~43
+  votes exist across ~6000 articles; a smarter model trained on the same
+  43 votes is a smaller win than 10x-ing the vote count. It's built
+  entirely on the existing `/vote` and `/read` endpoints — no backend
+  changes — as a client-only mode (`public/app.js`): fetch one batch of
+  `view=unread&sort=date` (newest first, matching Unread's own default),
+  step through it one card at a time, and once the batch is exhausted
+  just re-fetch the same query at offset 0 — everything just processed
+  is now `read`, so it naturally falls out and the "next batch" is
+  whatever's now at the front, no offset bookkeeping needed. Skipping (no
+  vote) still marks the article read, deliberately: a purpose-built
+  triage *session* is an explicit "I reviewed this" action, unlike
+  passive scrolling — this is a narrower, session-scoped exception to
+  "only explicit votes train" (skip itself still isn't a training
+  signal, it just clears the article from the unread queue).
 
 ## How the cosine math actually runs
 

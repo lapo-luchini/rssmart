@@ -107,7 +107,13 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   also selectable. **All** shows everything. Plus topic + feed filters,
   full-text search, and a "repeats" toggle.
 - Every tab has its own hash route (`#/unread`, `#/interesting`, `#/all`,
-  `#/topics`, `#/feeds`) — bookmarkable, and back/forward works.
+  `#/triage`, `#/topics`, `#/feeds`) — bookmarkable, and back/forward works.
+- **⚡ Triage**: a fast, keyboard-driven way to vote through your unread
+  backlog — one article at a time (title, summary, topics), no clicking
+  into anything. `→` interesting, `↑` WOW, `←` less interesting, `↓` never,
+  `space`/`enter` skip (marks read without voting), `⌫` go back, `esc` exit.
+  Aimed squarely at the sparsity problem: a smarter algorithm can't beat
+  more training data, and this is the fastest way to generate it.
 - ▲ / ▼ vote to teach it: one click = interesting (±1), a second click = WOW
   (±2, counts double in every signal), a third clears. Expanding a story
   marks it read. Topic chips and each story's left edge are tinted by

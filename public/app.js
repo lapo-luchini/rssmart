@@ -1,6 +1,7 @@
 import { createApp } from './vendor/vue.esm-browser.prod.js';
 
 const LIMIT = 50;
+const TRIAGE_BATCH = 30;
 
 createApp({
   data() {
@@ -23,7 +24,12 @@ createApp({
       topics: [],
       feeds: [],
       feedsDetailed: [],
-      panel: null, // null = article list, 'topics' | 'feeds' = content tabs
+      panel: null, // null = article list, 'topics' | 'feeds' | 'triage' = content tabs
+      triageQueue: [],
+      triagePos: 0,
+      triageProcessed: 0,
+      triageLoading: false,
+      triageBusy: false,
       topicSort: { key: 'pref', dir: -1 },
       feedSort: { key: null, dir: -1 }, // null = server order (active first)
       feedForm: { url: '', title: '' },
@@ -70,6 +76,10 @@ createApp({
       if (this.view === 'all') return 'No articles yet. Add feeds in the Feeds tab and run: rssmart cron';
       return 'All caught up. New articles arrive on the next cron run.';
     },
+
+    triageCurrent() {
+      return this.triageQueue[this.triagePos] ?? null;
+    },
   },
 
   watch: {
@@ -84,6 +94,7 @@ createApp({
     // back/forward, and a reload stays on the current tab.
     this.applyRoute(location.hash, { replace: true });
     window.addEventListener('hashchange', () => this.applyRoute(location.hash));
+    window.addEventListener('keydown', this.handleTriageKey);
     this.reload();
     this.loadSidebarData();
   },
@@ -189,12 +200,13 @@ createApp({
 
     applyRoute(hash, { replace = false } = {}) {
       const route = hash.replace(/^#\//, '');
-      if (replace && !['interesting', 'unread', 'all', 'topics', 'feeds'].includes(route)) {
+      const routes = ['interesting', 'unread', 'all', 'triage', 'topics', 'feeds'];
+      if (replace && !routes.includes(route)) {
         history.replaceState(null, '', `#/${this.currentRoute()}`);
         return;
       }
       if (route === this.currentRoute()) return;
-      if (route === 'topics' || route === 'feeds') this.openPanel(route);
+      if (['triage', 'topics', 'feeds'].includes(route)) this.openPanel(route);
       else if (['interesting', 'unread', 'all'].includes(route)) this.setView(route);
     },
 
@@ -216,6 +228,97 @@ createApp({
         this.api('/api/guidelines')
           .then((g) => (this.guidelines = g.text))
           .catch(() => {});
+      }
+      if (name === 'triage') {
+        this.triageProcessed = 0;
+        this.loadTriageBatch();
+      }
+    },
+
+    // Triage: a fast, keyboard-driven mode for blasting through the unread
+    // backlog. Each vote/skip marks the article read, so the *next* batch
+    // fetch (still just view=unread, offset 0) naturally excludes whatever
+    // was just processed — no offset bookkeeping needed.
+    async loadTriageBatch() {
+      this.triageLoading = true;
+      try {
+        const data = await this.api(`/api/articles?view=unread&sort=date&limit=${TRIAGE_BATCH}&offset=0`);
+        this.triageQueue = data.articles;
+        this.triagePos = 0;
+      } catch (err) {
+        this.error = `Cannot load triage queue: ${err.message}`;
+      } finally {
+        this.triageLoading = false;
+      }
+    },
+
+    async triageAdvance() {
+      this.triageProcessed++;
+      this.triagePos++;
+      if (this.triagePos >= this.triageQueue.length) await this.loadTriageBatch();
+    },
+
+    async triageVote(value) {
+      const article = this.triageCurrent;
+      if (!article || this.triageBusy) return;
+      this.triageBusy = true;
+      try {
+        const updated = await this.api(`/api/articles/${article.id}/vote`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ vote: value }),
+        });
+        Object.assign(article, updated);
+        await this.triageAdvance();
+      } catch (err) {
+        this.error = `Vote failed: ${err.message}`;
+      } finally {
+        this.triageBusy = false;
+      }
+    },
+
+    async triageSkip() {
+      const article = this.triageCurrent;
+      if (!article || this.triageBusy) return;
+      this.triageBusy = true;
+      try {
+        const updated = await this.api(`/api/articles/${article.id}/read`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ read: true }),
+        });
+        article.read_at = updated.read_at;
+        await this.triageAdvance();
+      } catch (err) {
+        this.error = `Update failed: ${err.message}`;
+      } finally {
+        this.triageBusy = false;
+      }
+    },
+
+    triageBack() {
+      if (this.triagePos > 0) {
+        this.triagePos--;
+        this.triageProcessed = Math.max(this.triageProcessed - 1, 0);
+      }
+    },
+
+    handleTriageKey(e) {
+      if (this.panel !== 'triage') return;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      const actions = {
+        ArrowUp: () => this.triageVote(2),
+        ArrowRight: () => this.triageVote(1),
+        ArrowLeft: () => this.triageVote(-1),
+        ArrowDown: () => this.triageVote(-2),
+        ' ': () => this.triageSkip(),
+        Enter: () => this.triageSkip(),
+        Backspace: () => this.triageBack(),
+        Escape: () => this.setView(this.view),
+      };
+      if (actions[e.key]) {
+        e.preventDefault();
+        actions[e.key]();
       }
     },
 

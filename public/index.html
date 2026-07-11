@@ -23,6 +23,10 @@
               :aria-selected="!panel && view === v.id"
               :class="{ active: !panel && view === v.id }"
               @click="setView(v.id)">{{ v.label }}</button>
+      <button role="tab" :aria-selected="panel === 'triage'"
+              :class="{ active: panel === 'triage' }"
+              title="fast, keyboard-driven voting through your unread backlog"
+              @click="openPanel('triage')">⚡ Triage</button>
       <span class="tab-spacer" aria-hidden="true"></span>
       <button role="tab" :aria-selected="panel === 'topics'"
               :class="{ active: panel === 'topics' }"
@@ -130,6 +134,34 @@
       <button class="mark" type="button" @click="refreshFeeds">fetch all now</button>
       <em v-if="feedNotice" class="feed-notice">{{ feedNotice }}</em>
     </form>
+  </section>
+
+  <section class="triage-panel" v-if="panel === 'triage'">
+    <p v-if="triageLoading" class="notice">Loading…</p>
+    <p v-else-if="!triageCurrent" class="notice">
+      All caught up — nothing left to triage.
+    </p>
+    <div v-else class="triage-card">
+      <p class="triage-progress">{{ triageProcessed }} processed this session</p>
+      <div class="story-meta">
+        <span class="source">{{ triageCurrent.feed_title || 'feed' }}</span>
+        <time>{{ ago(triageCurrent.published_at || triageCurrent.created_at) }}</time>
+      </div>
+      <h2 class="triage-title">{{ triageCurrent.title }}</h2>
+      <p class="triage-summary" v-if="triageCurrent.summary">{{ triageCurrent.summary }}</p>
+      <p class="notice" v-else>Not classified yet — no summary available.</p>
+      <div class="chips" v-if="triageCurrent.topics.length">
+        <span class="chip" v-for="t in triageCurrent.topics" :key="t" :style="chipStyle(t)">{{ t }}</span>
+      </div>
+      <div class="triage-controls">
+        <button @click="triageVote(-2)" title="never (↓)">▼▼<br>never</button>
+        <button @click="triageVote(-1)" title="less like this (←)">◀<br>less</button>
+        <button @click="triageSkip()" title="skip, no vote (space)">○<br>skip</button>
+        <button @click="triageVote(1)" title="more like this (→)">▶<br>more</button>
+        <button @click="triageVote(2)" title="WOW (↑)">▲▲<br>WOW</button>
+      </div>
+      <button class="mark triage-back" v-if="triagePos > 0" @click="triageBack">← back (⌫)</button>
+    </div>
   </section>
 
   <main v-if="!panel">
