@@ -129,6 +129,7 @@ export function testConfig(overrides = {}) {
       fetchMinChars: 500,
       allowPrivateFetch: true, // test stubs listen on loopback
       maxInputChars: 8000,
+      maxArticleChars: 50_000,
     },
     cron: { maxRunMs: 300_000 },
     scheduler: { enabled: true, minIntervalMin: 15, maxIntervalMin: 1440 },

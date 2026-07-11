@@ -89,11 +89,17 @@ async function guardedFetch(url, { timeoutMs, allowPrivate }) {
  * Fetch an article's origin page and extract its readable content
  * (Firefox reader mode via @mozilla/readability). Returns
  * { html, text } or null when the page can't be fetched or parsed —
- * callers fall back to the RSS-provided content.
+ * callers fall back to the RSS-provided content. maxChars caps both
+ * fields: some URLs extract as a huge, mostly-irrelevant blob rather than
+ * a single article — seen live as an 8-article, ~47MB blowup from
+ * FreeBSD's newsflash page, where every #anchor for a distinct
+ * announcement fetches the exact same full-history page since fragments
+ * never reach the server. The cap is a blanket safety net for that whole
+ * class of problem, not a fix specific to one site.
  */
 export async function fetchArticleText(
   url,
-  { timeoutMs = 20_000, allowPrivate = false } = {},
+  { timeoutMs = 20_000, allowPrivate = false, maxChars = 50_000 } = {},
 ) {
   const res = await guardedFetch(url, { timeoutMs, allowPrivate });
   if (!res) return null;
@@ -114,10 +120,12 @@ export async function fetchArticleText(
     const dom = new JSDOM(decodeBytes(bytes, charset), { url });
     const article = new Readability(dom.window.document).parse();
     if (!article?.textContent?.trim()) return null;
+    const html = sanitizeHtml(article.content);
+    const text = article.textContent.replace(/\s+/g, ' ').trim();
     return {
       title: article.title?.trim() || null,
-      html: sanitizeHtml(article.content),
-      text: article.textContent.replace(/\s+/g, ' ').trim(),
+      html: maxChars && html.length > maxChars ? html.slice(0, maxChars) : html,
+      text: maxChars && text.length > maxChars ? text.slice(0, maxChars) : text,
     };
   } catch {
     return null;

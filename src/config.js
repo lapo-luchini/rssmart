@@ -20,6 +20,11 @@ const DEFAULTS = {
     fetchMinChars: 500,
     allowPrivateFetch: false,
     maxInputChars: 32_000,
+    // Hard cap on fetched origin-page text/html, regardless of how well it
+    // extracted — a safety net against pages that aren't really one article
+    // (e.g. an anchor into a shared listing/archive page), not just a
+    // quality heuristic. See fetchArticleText in src/fetchpage.js.
+    maxArticleChars: 50_000,
   },
   cron: {
     maxRunMs: 300_000,

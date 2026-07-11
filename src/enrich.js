@@ -102,12 +102,13 @@ function findDuplicate(vec, articleId, recent, threshold) {
 async function articleText(db, article, enrichCfg) {
   if (article.full_content) return stripHtml(article.full_content);
   const rssText = stripHtml(article.content);
-  const { fetchMinChars, allowPrivateFetch } = enrichCfg;
+  const { fetchMinChars, allowPrivateFetch, maxArticleChars } = enrichCfg;
   if (!article.url || !fetchMinChars || rssText.length >= fetchMinChars) {
     return rssText;
   }
   const page = await fetchArticleText(article.url, {
     allowPrivate: allowPrivateFetch,
+    maxChars: maxArticleChars,
   });
   // Keep the page only when extraction actually beat the feed's own text —
   // Readability sometimes grabs a footer or sidebar instead of the article.
@@ -135,6 +136,7 @@ export async function getReaderContent(db, article, config) {
 
   const page = await fetchArticleText(article.url, {
     allowPrivate: config.enrich.allowPrivateFetch,
+    maxChars: config.enrich.maxArticleChars,
   }).catch(() => null);
 
   if (!page || stripHtml(page.html).length <= stripHtml(rssHtml).length) {

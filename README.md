@@ -53,6 +53,11 @@ Configure in `config.yaml`:
   article's origin page is fetched and its readable content extracted
   (Firefox reader mode) for classification, summarizing, and the expanded
   view. Set 0 to disable.
+- `enrich.maxArticleChars` (default 50000) — hard cap on a fetched origin
+  page's stored text/html, regardless of how well it extracted. Guards
+  against pages that aren't really a single article (e.g. an `#anchor`
+  into a shared listing/archive page, which fetches the same huge page
+  every time since fragments never reach the server).
 
 ## Usage
 

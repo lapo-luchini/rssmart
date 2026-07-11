@@ -113,6 +113,14 @@ const MIGRATIONS = [
   // pages (iso-8859-1/windows-1252, still common) were decoded as UTF-8
   // regardless, replacing every affected character with U+FFFD.
   (db) => repairMojibake(db),
+  // v10 — cap fetched article size (fetchArticleText's maxChars, default
+  // 50,000): some URLs extract as a huge, mostly-irrelevant blob rather
+  // than one article — seen live as an 8-row, ~47MB blowup from FreeBSD's
+  // newsflash page, where every #anchor for a distinct announcement
+  // fetches the exact same full-history page since fragments never reach
+  // the server. Clear anything already over the cap so it's naturally
+  // re-fetched, now bounded, next time.
+  (db) => repairOversizedContent(db),
 ];
 
 /**
@@ -127,6 +135,18 @@ export function repairMojibake(db) {
     UPDATE articles SET full_content = NULL
     WHERE full_content LIKE '%' || char(65533) || '%'
   `);
+}
+
+/**
+ * Null out full_content stored before fetchArticleText capped its size
+ * (see maxChars there). full_content is a lazy cache, not authoritative
+ * data, so clearing an oversized row is enough — it's naturally re-fetched
+ * and re-capped next time it's requested. The threshold here is the
+ * migration's own fixed one-time cleanup bar, independent of whatever
+ * enrich.maxArticleChars is configured to later.
+ */
+export function repairOversizedContent(db, { maxChars = 50_000 } = {}) {
+  db.prepare('UPDATE articles SET full_content = NULL WHERE LENGTH(full_content) > ?').run(maxChars);
 }
 
 /**

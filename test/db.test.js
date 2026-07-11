@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb } from './helpers.js';
-import { repairDuplicateGroups, repairMojibake, openDb } from '../src/db.js';
+import { repairDuplicateGroups, repairMojibake, repairOversizedContent, openDb } from '../src/db.js';
 
 test('openDb sets a non-zero busy_timeout so concurrent writers wait rather than fail immediately', () => {
   // better-sqlite3 waits out lock contention by default; bun:sqlite
@@ -64,4 +64,27 @@ test('repairMojibake nulls out full_content corrupted by a wrong-charset decode'
   // idempotent
   repairMojibake(db);
   assert.equal(fullContent(2), '<p>Perfectly good extracted text.</p>');
+});
+
+test('repairOversizedContent nulls out full_content stored before the size cap existed', () => {
+  const db = tempDb();
+  db.prepare("INSERT INTO feeds (id, url) VALUES (1, 'http://f')").run();
+  const ins = db.prepare(
+    'INSERT INTO articles (id, feed_id, guid, title, full_content) VALUES (?, 1, ?, ?, ?)',
+  );
+  ins.run(1, 'g1', 'Huge', 'x'.repeat(200));
+  ins.run(2, 'g2', 'Fits', 'x'.repeat(100));
+  ins.run(3, 'g3', 'No content', null);
+
+  repairOversizedContent(db, { maxChars: 100 });
+
+  const fullContent = (id) =>
+    db.prepare('SELECT full_content FROM articles WHERE id = ?').get(id).full_content;
+  assert.equal(fullContent(1), null, 'oversized content cleared for re-fetch');
+  assert.equal(fullContent(2), 'x'.repeat(100), 'content exactly at the cap is left alone');
+  assert.equal(fullContent(3), null);
+
+  // idempotent
+  repairOversizedContent(db, { maxChars: 100 });
+  assert.equal(fullContent(2), 'x'.repeat(100));
 });

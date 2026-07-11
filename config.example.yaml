@@ -34,6 +34,10 @@ enrich:
                         # Reading is fast — 32k costs ~25% more time than 8k —
                         # but very large values degrade small models'
                         # instruction-following before they cost time
+  maxArticleChars: 50000  # hard cap on a fetched origin page's stored text/
+                          # html, no matter how well it extracted — a safety
+                          # net against pages that aren't really one article
+                          # (e.g. an anchor into a shared listing/archive page)
 
 cron:
   maxRunMs: 300000    # time budget per cron run; unfinished classification

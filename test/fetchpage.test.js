@@ -112,6 +112,25 @@ test('fetchArticleText extracts readable content, drops chrome and scripts', asy
   }
 });
 
+test('fetchArticleText caps html/text at maxChars — a safety net for pages that are not really one article', async () => {
+  const site = await startPageServer();
+  try {
+    const uncapped = await fetchArticleText(`${site.url}/article`, { allowPrivate: true });
+    assert.ok(uncapped.text.length > 100, 'sanity: the fixture is long enough to matter');
+
+    const capped = await fetchArticleText(`${site.url}/article`, { allowPrivate: true, maxChars: 50 });
+    assert.equal(capped.text.length, 50);
+    assert.equal(capped.html.length, 50);
+    assert.equal(capped.text, uncapped.text.slice(0, 50));
+
+    // 0/undefined means no cap, same as omitting the option entirely
+    const noCap = await fetchArticleText(`${site.url}/article`, { allowPrivate: true, maxChars: 0 });
+    assert.equal(noCap.text, uncapped.text);
+  } finally {
+    await site.close();
+  }
+});
+
 test('fetchArticleText decodes non-UTF-8 pages per their declared charset', async () => {
   const site = await startPageServer();
   try {

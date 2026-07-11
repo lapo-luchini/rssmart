@@ -127,10 +127,33 @@ day-one spec was retired for exactly that reason; it's in git history).
   cleared row is just re-fetched, now correctly decoded, next time it's
   requested. Known limitation, not fixed: articles ingested before the
   *earlier* `fetchFeedXml` fix can still have mojibake baked into `title`/
-  `content` themselves — those come from the RSS feed at ingest time with
-  no automatic re-fetch path, and nulling a `NOT NULL` `title` isn't an
-  option, so repairing them would mean re-ingesting old feed history,
-  which is a separate, bigger, unrequested change.
+  `content` themselves — attempted a one-off re-ingest repair (re-fetch
+  each affected feed, patch any article whose guid is still present), but
+  0 of the 19 affected articles were fixable: all from the same feed,
+  already outside its rolling window by the time this was tried. RSS feeds
+  only carry recent items, so this class of repair only works within a
+  narrow post-bug-fix time window — not attempted again since it's a
+  one-time data-quality issue on old rows, not a recurring one (the
+  ingest-time bug itself has been fixed since 2026-07-06).
+- **Fetched article size is hard-capped, not just quality-scored
+  (`enrich.maxArticleChars`, default 50,000 chars, fixed 2026-07-11).**
+  `fetchArticleText`'s "keep the extraction if it beats the feed's own
+  text" heuristic assumes a bad extraction is short (a footer/nav grab);
+  it has no defense against an extraction that's *wrong but long*. Found
+  live: FreeBSD's `#anchor`-per-announcement newsflash page — fragments
+  never reach the server, so every one of 8 distinct RSS items fetched the
+  exact same full multi-year announcement archive, each stored as a
+  ~6MB `full_content` (48MB total, 73% of the column). A length-ratio
+  heuristic (distrust a "win" that's implausibly longer than the feed
+  text) would only patch this one shape of the problem; a flat cap bounds
+  *any* pathological extraction, this one included, with one line. A v10
+  migration (`repairOversizedContent` in `src/db.js`) nulls out
+  `full_content` already over the cap so it's re-fetched, now bounded,
+  next time — confirmed live: the 8 FreeBSD rows dropped from 6MB to
+  50,000 chars each on re-fetch, and `full_content`'s total column size
+  fell from 64.5MB to ~10.5MB once refetched. 50,000 was picked as
+  generous headroom for genuinely long-form articles while still
+  bounding worst-case damage to a small multiple of that per row.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
