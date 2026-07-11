@@ -156,12 +156,12 @@
         <span class="chip" v-for="t in triageCurrent.topics" :key="t" :style="chipStyle(t)">{{ t }}</span>
       </div>
       <div class="triage-controls">
-        <button class="back" v-if="triagePos > 0" @click="triageBack" title="← or ⌫">←<br>back</button>
-        <button class="wow" @click="triageVote(2)" title="Page Up">▲▲<br>WOW</button>
-        <button class="more" @click="triageVote(1)" title="↑">▲<br>more</button>
-        <button class="less" @click="triageVote(-1)" title="↓">▼<br>less</button>
-        <button class="never" @click="triageVote(-2)" title="Page Down">▼▼<br>never</button>
-        <button class="skip" @click="triageSkip()" title="→, space or enter">→<br>skip</button>
+        <button class="back" v-if="triagePos > 0" @click="triageBack" title="← or ⌫">← back</button>
+        <button class="wow" @click="triageVote(2)" title="Page Up">▲▲ WOW</button>
+        <button class="more" @click="triageVote(1)" title="↑">▲ more</button>
+        <button class="less" @click="triageVote(-1)" title="↓">▼ less</button>
+        <button class="never" @click="triageVote(-2)" title="Page Down">▼▼ never</button>
+        <button class="skip" @click="triageSkip()" title="→, space or enter">→ skip</button>
       </div>
     </div>
     <div v-if="triageExpanded" class="triage-content">
