@@ -179,6 +179,22 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   columns — SQLite stores the BLOB as-is), which is why full-text search only
   matches title/summary, not article bodies; use **semantic** search (embeds
   a sample of the full text) to search by meaning instead.
+- Example size breakdown for a real ~6,000-article database (28.1 MB total,
+  after `VACUUM`; run `VACUUM` yourself after a large backfill or config
+  change — SQLite doesn't reclaim freed pages from the file on its own):
+
+  | column | size | notes |
+  |---|---|---|
+  | `embedding` + `text_embedding` | 11.8 MB | two float16 vectors/article (see `ollama.embedDimensions`) |
+  | `content` | 3.6 MB | brotli-compressed RSS text |
+  | `full_content` | 2.8 MB | brotli-compressed, only for articles with a fetched/cached copy |
+  | `summary` | 1.3 MB | LLM-generated |
+  | indexes | ~1.2 MB | |
+  | every other column (id, dates, scores, status, vote…) + per-row overhead | ~7.4 MB | many small columns, none individually significant |
+
+  Actual numbers scale with corpus size and how much of it has cached
+  `full_content`/embeddings, but the *shape* — embeddings and article text
+  dominate, everything else is small — should hold generally.
 - Origin-page fetching refuses article links that resolve to private, loopback
   or link-local addresses (feed content is third-party input; this prevents a
   malicious feed from probing your LAN). `enrich.allowPrivateFetch: true`
