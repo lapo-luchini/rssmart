@@ -157,10 +157,10 @@
       </div>
       <div class="triage-controls">
         <button class="back" v-if="triagePos > 0" @click="triageBack" title="← or ⌫">← back</button>
-        <button class="wow" @click="triageVote(2)" title="w">▲▲ WOW</button>
+        <button class="wow" @click="triageVote(2)" title="Shift+↑">▲▲ WOW</button>
         <button class="more" @click="triageVote(1)" title="↑">▲ more</button>
         <button class="less" @click="triageVote(-1)" title="↓">▼ less</button>
-        <button class="never" @click="triageVote(-2)" title="n">▼▼ never</button>
+        <button class="never" @click="triageVote(-2)" title="Shift+↓">▼▼ never</button>
         <button class="skip" @click="triageSkip()" title="→, space or enter">→ skip</button>
       </div>
     </div>

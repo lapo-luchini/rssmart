@@ -371,11 +371,22 @@ createApp({
       }
       if (this.panel !== 'triage') return;
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      // Shift+arrow "escalates" the same direction to its extreme (WOW/never)
+      // rather than reaching for unrelated keys — keeps the hand resting on
+      // the arrow cluster throughout a triage session.
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.triageVote(e.shiftKey ? 2 : 1);
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        this.triageVote(e.shiftKey ? -2 : -1);
+        return;
+      }
+
       const actions = {
-        ArrowUp: () => this.triageVote(1),
-        w: () => this.triageVote(2),
-        ArrowDown: () => this.triageVote(-1),
-        n: () => this.triageVote(-2),
         ArrowLeft: () => this.triageBack(),
         Backspace: () => this.triageBack(),
         ArrowRight: () => this.triageSkip(),

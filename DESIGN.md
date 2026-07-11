@@ -295,23 +295,31 @@ day-one spec was retired for exactly that reason; it's in git history).
   "only explicit votes train" (skip itself still isn't a training
   signal, it just clears the article from the unread queue).
 - **Triage keybindings mirror physical key layout, not vote magnitude
-  (revised 2026-07-11).** The original scheme put magnitude on two
-  different axes (←/→ for ±1, ↑/↓ for WOW/never) with no consistent
-  direction — reported as unintuitive. Now ↑/↓ are the normal-magnitude
-  votes and ←/→ are back/skip — no vote maps to left-right at all anymore.
-  The WOW/never extremes were bound to PgUp/PgDn at first (physically
-  further, matching "a bigger reach"), but that broke actually reading a
-  long inline preview: PgUp/PgDn's native job is paging through it, and
-  our own `preventDefault` was stealing that. Landed on plain letter keys
-  instead — `w`/`n` (WOW/never) — alongside the already-letter-based
-  `p`/`o` (preview/open-original, see below): letters never scroll the
-  page, so they can't collide with reading a long preview the way any
-  navigation key (PgUp/PgDn, Home/End, even bare arrows to a lesser
-  extent) can. The `.triage-controls` CSS grid still places six buttons in
-  a cross shape (w/n outermost, back/skip flanking the middle two rows) —
-  it's no longer literally arrow-shaped for the outer pair, but the
-  position still doubles as a legend for "these are the amplified
-  versions of the buttons next to them."
+  (three iterations, all 2026-07-11).** The original scheme put magnitude
+  on two different axes (←/→ for ±1, ↑/↓ for WOW/never) with no consistent
+  direction — reported as unintuitive. Landed on: ↑/↓ normal-magnitude
+  votes, ←/→ back/skip, **Shift+↑/Shift+↓** for the WOW/never extremes —
+  no vote maps to left-right at all. Two intermediate attempts were tried
+  and rejected first:
+  - **PgUp/PgDn** (physically further, matching "a bigger reach") broke
+    actually reading a long inline preview — PgUp/PgDn's native job is
+    paging through it, and our own `preventDefault` was stealing that.
+  - **Plain letters `w`/`n`** (alongside the already-letter-based `p`/`o`
+    for preview/open-original) fixed the scroll collision — letters never
+    scroll the page — but were reported as still unintuitive: reaching
+    across to the letter row breaks the hand's resting position on the
+    arrow cluster mid-session, which is exactly the ergonomic property
+    triage is supposed to protect (rapid, sustained voting).
+  - **Shift+arrow** resolves both: no native scroll behavior to steal
+    (unlike PgUp/PgDn), and it's the *same* physical key as the
+    corresponding normal vote, just held with a modifier — the hand never
+    leaves the arrow cluster. "Shift = escalate the same action" reads as
+    a more natural mnemonic than an unrelated letter, too.
+  The `.triage-controls` CSS grid still places six buttons in a cross
+  shape (WOW/never outermost, back/skip flanking the middle two rows) —
+  the position doubles as a legend for "these are the amplified versions
+  of the buttons next to them," independent of which exact key triggers
+  each one.
 - **Triage's full-article view is inline, not the reader overlay.**
   Reuses the same `GET /api/articles/:id/reader` endpoint the reader
   overlay uses (see above), but renders the result below the triage card

@@ -542,12 +542,13 @@ body {
 }
 
 /* A cross layout mirrors the keyboard: ↑/↓ for normal votes flanked by
-   ←/→ for back/skip at the same reach, w/n (WOW/never) for the extreme
-   votes further out top/bottom — the shape doubles as a legend even
-   though w/n aren't literal arrows (PgUp/PgDn were, but those are needed
-   to actually scroll a long preview). Each button is a single line (icon
-   + label side by side): wider, but far shorter, so
-   the whole cross costs much less vertical space. */
+   ←/→ for back/skip at the same reach, Shift+↑/Shift+↓ (WOW/never) for
+   the extreme votes further out top/bottom — same physical keys as
+   more/less, just escalated, so the hand never leaves the arrow cluster
+   (PgUp/PgDn were tried first, but those are needed to actually scroll a
+   long preview). Each button is a single line (icon + label side by
+   side): wider, but far shorter, so the whole cross costs much less
+   vertical space. */
 .triage-controls {
   display: grid;
   grid-template-columns: repeat(3, 6rem);

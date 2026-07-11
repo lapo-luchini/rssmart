@@ -134,12 +134,14 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   *classified* backlog (not-yet-classified articles are excluded — triage
   runs on title/summary/topics, which a pending article doesn't have yet)
   — one article at a time, no clicking into anything. `↑` more interesting,
-  `↓` less interesting, `w` WOW, `n` never, `←`/`⌫` back, `→`/`space`/`enter`
-  skip (marks read without
-  voting), `esc` exit (`PgUp`/`PgDn` were tried for WOW/never first, but
-  those are needed to actually scroll a long preview). The on-screen
-  buttons form a cross matching this layout: w/n are the outer top/bottom
-  buttons, back/skip flank the middle two. `p` (or click the title) expands
+  `↓` less interesting, `Shift+↑` WOW, `Shift+↓` never, `←`/`⌫` back,
+  `→`/`space`/`enter` skip (marks read without voting), `esc` exit
+  (`PgUp`/`PgDn` and plain `w`/`n` were both tried for WOW/never first —
+  PgUp/PgDn are needed to scroll a long preview, and `w`/`n` pull the hand
+  off the arrow cluster; Shift+arrow escalates the same key, no reach).
+  The on-screen buttons form a cross matching this layout: WOW/never are
+  the outer top/bottom buttons, back/skip flank the middle two. `p` (or
+  click the title) expands
   the full extracted article inline below the vote buttons — wider than
   the card itself, so long paragraphs cost fewer scrolled lines — without
   leaving triage or marking it read; `o` (or **open original ↗** next to
