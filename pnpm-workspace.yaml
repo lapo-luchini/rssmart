@@ -1,2 +1,12 @@
 allowBuilds:
   better-sqlite3: true
+
+# happy-dom depends on @types/node, @types/ws, @types/whatwg-mimetype as
+# plain (non-dev) dependencies -- pure TypeScript .d.ts packages nothing
+# ever `require()`s at runtime in a plain-JS project like this one. Routed
+# to a local stub instead of an npm placeholder package, since the whole
+# point is fewer external things to trust, not more.
+overrides:
+  "@types/node": "link:./stubs/empty-package"
+  "@types/ws": "link:./stubs/empty-package"
+  "@types/whatwg-mimetype": "link:./stubs/empty-package"

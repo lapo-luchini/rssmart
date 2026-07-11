@@ -360,6 +360,31 @@ day-one spec was retired for exactly that reason; it's in git history).
   `--apparent-size` is filesystem-compression-dependent and can disagree
   with every other measure of "size" — check which one a reported number
   actually is before trusting it.
+  **Follow-up: stripped happy-dom's TypeScript-only dependencies
+  (2026-07-12).** `@types/node` (an unbounded `>=20.0.0` range — the
+  actual source of the size drift above), `@types/ws`, and
+  `@types/whatwg-mimetype` are `.d.ts`-only packages: nothing a plain-JS
+  project like this one ever `require()`s at runtime, since ambient
+  TypeScript types are consumed only by the TypeScript compiler, never
+  by executed JS. Routed all three to a local zero-dependency stub
+  (`stubs/empty-package/`) via `pnpm-workspace.yaml`'s `overrides` —
+  chosen over an existing npm placeholder package (`empty-npm-package`
+  exists and works identically) specifically to avoid adding an external
+  dependency for the sole purpose of removing others. `ws` itself
+  (happy-dom's real WebSocket implementation, statically imported at
+  module load for `window.WebSocket` support) was deliberately left
+  alone: unlike the `@types/*` packages it's genuinely executed code
+  that must resolve successfully even though nothing in this app's
+  script-disabled `fetchArticleText` path ever constructs one — stubbing
+  it would risk a load-time failure for a modest ~150KB, not worth the
+  fragility. `pnpm-workspace.yaml`'s `packageExtensions` (the more
+  surgical, happy-dom-scoped way to patch this) was tried first but
+  silently ignored by pnpm 11.8.0 with no working replacement found in
+  its own settings docs; the project-wide `overrides` key, an older and
+  more stable pnpm feature, worked immediately. Saved ~2.4MB logical
+  size and 2 packages (`@types/node`'s own `undici-types` sub-dependency
+  goes with it); full test suite (78 tests) still passes on both Node 24
+  and Bun.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
