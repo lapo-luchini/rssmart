@@ -47,7 +47,12 @@ the package.json scripts). No config needed — just use whichever
 `node`/`bun` binary is on your `PATH`. Node 24 is required for native
 `Float16Array` (embeddings are stored as float16 — see below); if you're
 on an older Node, install 24 via `nvm install 24` and rebuild the native
-addon once: `nvm use 24 && npm rebuild better-sqlite3`.
+addon once: `nvm use 24 && npm rebuild better-sqlite3`. `bin/rssmart.js`
+checks for `Float16Array` at startup and exits with a clear error if it's
+missing, rather than failing later inside an embed/search call — the
+project is only tested against Node/Bun versions meeting `engines` in
+`package.json`; older-but-Float16-capable runtimes get a warning, not a
+hard stop.
 
 Configure in `config.yaml`:
 

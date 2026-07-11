@@ -10,6 +10,9 @@ import { createApp } from '../src/server.js';
 import { startScheduler } from '../src/scheduler.js';
 import { acquireLease, releaseLease } from '../src/lease.js';
 import { log, logError } from '../src/log.js';
+import { checkRuntime } from '../src/runtime-check.js';
+
+checkRuntime();
 
 const USAGE = `Usage: rssmart <mode> [options]
 

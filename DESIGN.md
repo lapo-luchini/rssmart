@@ -77,6 +77,16 @@ day-one spec was retired for exactly that reason; it's in git history).
     installs and runs fine against an impossible `engines.bun: >=999.0.0`;
     npm's `engine-strict` is off by default too), so both are
     documentation for readers, not a technical gate.
+    **Follow-up (2026-07-12):** `src/runtime-check.js`'s `checkRuntime()`,
+    called first thing in `bin/rssmart.js`, closes that gap at the one
+    point it actually matters: checks `typeof Float16Array` directly
+    (the real dependency, not the version number standing in for it) and
+    exits with a clear message if it's missing, rather than letting the
+    process limp along into a `ReferenceError` — or worse, silently wrong
+    embedding bytes — deep inside an embed/search call. Runtimes that have
+    `Float16Array` but are still below the `engines` minimum get a
+    non-fatal warning instead: the project is only *tested* against those
+    versions, not necessarily broken below them.
   - **Dimension: model-native (1024 for qwen3-embedding:0.6b) -> 512,
     configurable (`ollama.embedDimensions`).** qwen3-embedding supports
     Matryoshka Representation Learning (MRL): querying Ollama's
