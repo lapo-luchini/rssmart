@@ -70,7 +70,13 @@ day-one spec was retired for exactly that reason; it's in git history).
     free. `better-sqlite3`'s native addon is ABI-tied to the Node version
     it was built under, so upgrading needs one rebuild
     (`npm rebuild better-sqlite3` under the new Node) — not a code change,
-    but a real one-time step, documented in the README.
+    but a real one-time step, documented in the README. `engines.bun` in
+    `package.json` (`>=1.3.14`) is the exact Bun version verified to have
+    native `Float16Array`, not a guessed lower bound — neither `engines`
+    field is actually enforced by default (checked live: Bun 1.3.14
+    installs and runs fine against an impossible `engines.bun: >=999.0.0`;
+    npm's `engine-strict` is off by default too), so both are
+    documentation for readers, not a technical gate.
   - **Dimension: model-native (1024 for qwen3-embedding:0.6b) -> 512,
     configurable (`ollama.embedDimensions`).** qwen3-embedding supports
     Matryoshka Representation Learning (MRL): querying Ollama's
