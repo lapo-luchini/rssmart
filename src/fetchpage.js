@@ -1,6 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { JSDOM } from 'jsdom';
+import { Window } from 'happy-dom';
 import { Readability } from '@mozilla/readability';
 import { sanitizeHtml } from './html.js';
 import { charsetFromContentType, decodeBytes } from './charset.js';
@@ -117,16 +117,34 @@ export async function fetchArticleText(
       charsetFromContentType(type) ??
       /<meta[^>]+charset=["']?\s*([\w-]+)/i.exec(head)?.[1] ??
       'utf-8';
-    const dom = new JSDOM(decodeBytes(bytes, charset), { url });
-    const article = new Readability(dom.window.document).parse();
-    if (!article?.textContent?.trim()) return null;
-    const html = sanitizeHtml(article.content);
-    const text = article.textContent.replace(/\s+/g, ' ').trim();
-    return {
-      title: article.title?.trim() || null,
-      html: maxChars && html.length > maxChars ? html.slice(0, maxChars) : html,
-      text: maxChars && text.length > maxChars ? text.slice(0, maxChars) : text,
-    };
+    // Unlike jsdom's plain `new JSDOM(html)`, happy-dom fetches external CSS
+    // and iframe pages by default even with script evaluation off (verified
+    // live) — article HTML comes from arbitrary third-party sites, so all
+    // external loading must be off, matching jsdom's zero-resource default.
+    const window = new Window({
+      url,
+      settings: {
+        disableJavaScriptEvaluation: true,
+        disableJavaScriptFileLoading: true,
+        disableCSSFileLoading: true,
+        disableIframePageLoading: true,
+      },
+    });
+    try {
+      window.document.write(decodeBytes(bytes, charset));
+      await window.happyDOM.waitUntilComplete();
+      const article = new Readability(window.document).parse();
+      if (!article?.textContent?.trim()) return null;
+      const html = sanitizeHtml(article.content);
+      const text = article.textContent.replace(/\s+/g, ' ').trim();
+      return {
+        title: article.title?.trim() || null,
+        html: maxChars && html.length > maxChars ? html.slice(0, maxChars) : html,
+        text: maxChars && text.length > maxChars ? text.slice(0, maxChars) : text,
+      };
+    } finally {
+      await window.happyDOM.close();
+    }
   } catch {
     return null;
   }

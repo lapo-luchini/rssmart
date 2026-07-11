@@ -297,6 +297,36 @@ day-one spec was retired for exactly that reason; it's in git history).
   and the full browser UI (list, vote, expand, reader overlay, triage,
   topics/feeds panels, search) all confirmed working, zero console
   errors, on both runtimes.
+- **jsdom replaced with happy-dom (2026-07-12).** Investigated on request
+  from two angles: first whether Defuddle could replace
+  `@mozilla/readability` (answer: no — Readability itself is 0.15MB with
+  zero dependencies, while Defuddle pulls in 2.75–16.63MB depending on
+  which of its `optionalDependencies` get installed, none of which this
+  app would ever exercise since we already hand it a parsed `Document`
+  rather than an HTML string; not implemented). Then whether jsdom itself
+  — the actual weight, since Readability needs *some* DOM to walk — could
+  be swapped for something lighter. Measured jsdom's real closure at
+  20.43MB across 30 packages vs happy-dom's 11.07MB across 8 — about 46%
+  smaller and a much shallower tree. Verified compatibility by running
+  Readability against both engines on the same real fetched HTML (a
+  Wikipedia article and a structurally denser MDN docs page): identical
+  title and `textContent` length on both, for both pages. Our own jsdom
+  usage was already about as plain as it gets (`new JSDOM(html, {url})`,
+  no `runScripts`/`resources`/`pretendToBeVisual`), which is why the swap
+  worked with only `src/fetchpage.js` changing (`new Window({url})` +
+  `window.document.write(html)` + `await window.happyDOM.waitUntilComplete()`
+  in place of jsdom's single-constructor call, plus an explicit
+  `window.happyDOM.close()` in a `finally`). One real gap found and closed
+  before calling this safe: happy-dom's *defaults* still fetch external
+  CSS and iframe pages even with script evaluation off — verified live
+  with a throwaway HTTP server (2 hits: `style.css` and `frame.html`) —
+  unlike jsdom's zero-resource-loading default. Article HTML comes from
+  arbitrary third-party sites, so `fetchArticleText` now passes an
+  explicit `settings` object (`disableJavaScriptEvaluation`,
+  `disableJavaScriptFileLoading`, `disableCSSFileLoading`,
+  `disableIframePageLoading`, all `true`) to restore jsdom's original
+  no-external-loading posture; re-verified 0 hits afterward. Full test
+  suite (78 tests) passes on both Node 24 and Bun after the swap.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
