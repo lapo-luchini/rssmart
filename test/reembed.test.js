@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
 import { syncEmbeddingSpace, reembedMissing, bufToVec } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
+import { compressText } from '../src/compress.js';
 
 function seedEnriched(db, title, withVectors = true) {
   db.prepare("INSERT OR IGNORE INTO feeds (id, url) VALUES (1, 'http://f')").run();
   const blob = withVectors ? Buffer.from(Float16Array.from([1, 0]).buffer) : null;
   return Number(db.prepare(`
     INSERT INTO articles (feed_id, guid, title, content, summary, status, embedding, text_embedding)
-    VALUES (1, ?, ?, 'body text', 'a summary', 'enriched', ?, ?)
-  `).run(`g-${title}`, title, blob, blob).lastInsertRowid);
+    VALUES (1, ?, ?, ?, 'a summary', 'enriched', ?, ?)
+  `).run(`g-${title}`, title, compressText('body text'), blob, blob).lastInsertRowid);
 }
 
 test('syncEmbeddingSpace records, detects changes, clears stale vectors', () => {

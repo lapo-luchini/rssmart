@@ -197,6 +197,45 @@ day-one spec was retired for exactly that reason; it's in git history).
   fell from 64.5MB to ~10.5MB once refetched. 50,000 was picked as
   generous headroom for genuinely long-form articles while still
   bounding worst-case damage to a small multiple of that per row.
+- **`content`/`full_content` are stored brotli-compressed, not plain text
+  (2026-07-11, `src/compress.js`).** By the time this ran, the size-cap fix
+  and the embedding change (both above) had already brought the DB from
+  131.9MB down to 42.4MB, with `content` + `full_content` at 21.7MB of
+  that. No new dependency: `node:zlib`'s `brotliCompressSync`/`brotliDecompressSync`
+  are built in. Quality 11 (max) throughout — compression happens once per
+  article (ingest, or a cache-miss fetch), never on a hot path, so the
+  extra time versus a lower quality level is irrelevant next to the ratio
+  it buys. The columns stay declared `TEXT` in the schema: SQLite's TEXT
+  affinity only coerces *numeric* input to text, never BLOBs, so storing
+  compressed bytes needs no `ALTER TABLE`/table rebuild — confirmed live
+  before relying on it. A v11 migration (`compressExistingContent` in
+  `src/db.js`) compresses whatever plain text is already stored; unlike
+  `repairMojibake`/`repairOversizedContent`, it is **not** safe to call
+  twice (it can't tell "plain text" from "already compressed," so a
+  second pass would compress the compressed bytes) — safe here only
+  because migrations run exactly once, tracked by `user_version`.
+  Real result: `content` 11.5MB -> 3.6MB, `full_content` 10.2MB -> 2.8MB,
+  DB file 42.4MB -> 28.1MB after `VACUUM`.
+  - **Every read/write site needed updating, not just storage** — this
+    touched `ingestFeed` (compress before INSERT), `articleText` and
+    `getReaderContent` (decompress after SELECT, compress before the
+    cache-write UPDATE), `reembedMissing`'s and `enrichPending`'s own
+    SELECTs (decompress at the row-fetch boundary, before any consumer
+    sees the row), and both `server.js` endpoints that ship `content`/
+    `full_content` in a JSON response. Mapped exhaustively with a
+    dedicated research pass first — a missed site fails quietly and
+    confusingly (Express serializes an un-decompressed `Buffer` as
+    `{"type":"Buffer","data":[...]}`, which `v-html` would then render
+    as garbage, not throw).
+  - **Full-text search lost `content` from its `LIKE` clause** — SQL
+    can't pattern-match inside compressed bytes. Discussed two options
+    (drop `content` from search vs. decompress-and-filter in JS,
+    sacrificing SQL-side pagination); went with dropping it, on the
+    reasoning that `text_embedding` (built from a real sample of the
+    full article text, not just the summary — see the embedding-space
+    entry above) already gives semantic search a path into full-body
+    content, so the LIKE-search regression is softened by an existing
+    feature rather than a wholly new gap.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly

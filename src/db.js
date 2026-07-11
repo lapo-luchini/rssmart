@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { compressText } from './compress.js';
 
 // Bun ships a native SQLite driver (bun:sqlite) with an API modeled closely
 // on better-sqlite3 — prepare/get/all/run/transaction/exec all match,
@@ -121,6 +122,14 @@ const MIGRATIONS = [
   // the server. Clear anything already over the cap so it's naturally
   // re-fetched, now bounded, next time.
   (db) => repairOversizedContent(db),
+  // v11 — compress content/full_content (brotli, see src/compress.js):
+  // these two columns dwarfed the rest of the database (75.7MB of 131.9MB
+  // measured live pre-compression). Still declared TEXT in the schema —
+  // SQLite's TEXT affinity only coerces numeric input, never BLOBs, so
+  // storing compressed bytes there needs no ALTER TABLE. One-time pass
+  // over existing plain-text rows; every write from here on
+  // (ingestFeed, articleText, getReaderContent) stores pre-compressed.
+  (db) => compressExistingContent(db),
 ];
 
 /**
@@ -147,6 +156,31 @@ export function repairMojibake(db) {
  */
 export function repairOversizedContent(db, { maxChars = 50_000 } = {}) {
   db.prepare('UPDATE articles SET full_content = NULL WHERE LENGTH(full_content) > ?').run(maxChars);
+}
+
+/**
+ * One-time brotli-compress every existing plain-text content/full_content
+ * value in place. Runs once (v11); every write after this migration already
+ * stores compressed bytes (ingestFeed, articleText, getReaderContent), so
+ * there's nothing left to catch up on a clean-from-here DB. Unlike
+ * repairMojibake/repairOversizedContent, this is NOT safe to call twice —
+ * it has no way to tell "plain text" from "already compressed", so a second
+ * pass would compress the compressed bytes again. Safe here only because
+ * the migration framework's user_version tracking guarantees it runs once.
+ */
+export function compressExistingContent(db) {
+  const rows = db.prepare(`
+    SELECT id, content, full_content FROM articles
+    WHERE content IS NOT NULL OR full_content IS NOT NULL
+  `).all();
+  const update = db.prepare('UPDATE articles SET content = ?, full_content = ? WHERE id = ?');
+  for (const row of rows) {
+    update.run(
+      row.content != null ? compressText(row.content) : null,
+      row.full_content != null ? compressText(row.full_content) : null,
+      row.id,
+    );
+  }
 }
 
 /**

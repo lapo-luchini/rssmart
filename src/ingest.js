@@ -1,6 +1,7 @@
 import Parser from 'rss-parser';
 import { sanitizeHtml } from './html.js';
 import { charsetFromContentType, decodeBytes } from './charset.js';
+import { compressText } from './compress.js';
 
 // Feed-provided links end up in <a href> in the UI: allow http(s) only.
 const httpUrl = (u) =>
@@ -105,7 +106,7 @@ export async function ingestFeed(db, feed, parser) {
         item.title.trim(),
         item.creator ?? item.author ?? null,
         item.isoDate ?? null,
-        sanitizeHtml(content),
+        compressText(sanitizeHtml(content)),
       );
       added += changes;
     }

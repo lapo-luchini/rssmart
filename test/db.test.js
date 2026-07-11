@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb } from './helpers.js';
-import { repairDuplicateGroups, repairMojibake, repairOversizedContent, openDb } from '../src/db.js';
+import { repairDuplicateGroups, repairMojibake, repairOversizedContent, compressExistingContent, openDb } from '../src/db.js';
+import { decompressText } from '../src/compress.js';
 
 test('openDb sets a non-zero busy_timeout so concurrent writers wait rather than fail immediately', () => {
   // better-sqlite3 waits out lock contention by default; bun:sqlite
@@ -87,4 +88,31 @@ test('repairOversizedContent nulls out full_content stored before the size cap e
   // idempotent
   repairOversizedContent(db, { maxChars: 100 });
   assert.equal(fullContent(2), 'x'.repeat(100));
+});
+
+test('compressExistingContent brotli-compresses plain-text content/full_content in place', () => {
+  const db = tempDb();
+  db.prepare("INSERT INTO feeds (id, url) VALUES (1, 'http://f')").run();
+  const ins = db.prepare(
+    'INSERT INTO articles (id, feed_id, guid, title, content, full_content) VALUES (?, 1, ?, ?, ?, ?)',
+  );
+  ins.run(1, 'g1', 'Both fields', 'the feed teaser', '<p>the extracted body</p>');
+  ins.run(2, 'g2', 'Content only', 'just a teaser', null);
+  ins.run(3, 'g3', 'Neither', null, null);
+
+  compressExistingContent(db);
+
+  const row = (id) => db.prepare('SELECT content, full_content FROM articles WHERE id = ?').get(id);
+  const r1 = row(1);
+  assert.ok(r1.content instanceof Uint8Array, 'stored as bytes, not the original string');
+  assert.equal(decompressText(r1.content), 'the feed teaser');
+  assert.equal(decompressText(r1.full_content), '<p>the extracted body</p>');
+
+  const r2 = row(2);
+  assert.equal(decompressText(r2.content), 'just a teaser');
+  assert.equal(r2.full_content, null);
+
+  const r3 = row(3);
+  assert.equal(r3.content, null);
+  assert.equal(r3.full_content, null);
 });

@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
 import { enrichPending, cosine, bufToVec, sampleText } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
+import { compressText } from '../src/compress.js';
 
 function seedArticle(db, { title, content = 'body', published = null }) {
   db.prepare("INSERT OR IGNORE INTO feeds (id, url) VALUES (1, 'http://f')").run();
   const { lastInsertRowid } = db
     .prepare("INSERT INTO articles (feed_id, guid, title, content, published_at) VALUES (1, ?, ?, ?, ?)")
-    .run(`g-${title}`, title, content, published);
+    .run(`g-${title}`, title, compressText(content), published);
   return Number(lastInsertRowid);
 }
 

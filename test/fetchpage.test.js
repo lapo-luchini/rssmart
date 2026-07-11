@@ -5,6 +5,7 @@ import { fetchArticleText, isPrivateAddress } from '../src/fetchpage.js';
 import { enrichPending, getReaderContent } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
+import { compressText, decompressText } from '../src/compress.js';
 
 const PARAGRAPH =
   'The quick brown fox jumps over the lazy dog while the committee deliberates ' +
@@ -160,12 +161,12 @@ test('thin RSS entries get their origin page fetched for the LLM; failures fall 
       'INSERT INTO articles (feed_id, guid, url, title, content, published_at) VALUES (1, ?, ?, ?, ?, ?)',
     );
     // enrichment runs newest-first: 'thin' has the later date so it goes first
-    const thin = Number(ins.run('g1', `${site.url}/article`, 'Big Announcement', '<a href="#">Comments</a>', '2026-07-02T00:00:00Z').lastInsertRowid);
-    const dead = Number(ins.run('g2', `${site.url}/missing`, 'Gone page', 'Short RSS text only.', '2026-07-01T00:00:00Z').lastInsertRowid);
+    const thin = Number(ins.run('g1', `${site.url}/article`, 'Big Announcement', compressText('<a href="#">Comments</a>'), '2026-07-02T00:00:00Z').lastInsertRowid);
+    const dead = Number(ins.run('g2', `${site.url}/missing`, 'Gone page', compressText('Short RSS text only.'), '2026-07-01T00:00:00Z').lastInsertRowid);
     // page extraction worse than the feed text (the LWN-footer case):
     // the RSS content must win and no full_content must be stored
     const RSS_ANNOUNCEMENT = 'The 7.2-rc2 kernel prepatch is out for testing. Linus said things look very normal, in line with recent releases and slightly smaller than rc2 was in 7.1, so far so good. '.repeat(2);
-    const footer = Number(ins.run('g3', `${site.url}/footer-only`, 'Kernel prepatch', RSS_ANNOUNCEMENT, '2026-06-30T00:00:00Z').lastInsertRowid);
+    const footer = Number(ins.run('g3', `${site.url}/footer-only`, 'Kernel prepatch', compressText(RSS_ANNOUNCEMENT), '2026-06-30T00:00:00Z').lastInsertRowid);
 
     const config = testConfig();
     const llm = new Ollama({ ...config.ollama, url: stub.url });
@@ -182,7 +183,7 @@ test('thin RSS entries get their origin page fetched for the LLM; failures fall 
     assert.ok(!prompts[2].includes('Copyright notices'), 'footer extraction not used');
 
     const rows = db.prepare('SELECT id, full_content FROM articles ORDER BY id').all();
-    assert.ok(rows[0].full_content.includes('ZETAFRAME'), 'page content persisted');
+    assert.ok(decompressText(rows[0].full_content).includes('ZETAFRAME'), 'page content persisted');
     assert.equal(rows[1].full_content, null);
     assert.equal(rows[2].full_content, null, 'worse extraction not persisted');
     assert.equal(rows[0].id, thin);
@@ -199,7 +200,7 @@ function seedArticle(db, { url = null, content = 'body', fullContent = null } = 
   const { lastInsertRowid } = db.prepare(`
     INSERT INTO articles (feed_id, guid, title, url, content, full_content, status)
     VALUES (1, ?, 'Article', ?, ?, ?, 'enriched')
-  `).run(`g-${Math.random()}`, url, content, fullContent);
+  `).run(`g-${Math.random()}`, url, compressText(content), compressText(fullContent));
   return db.prepare(
     'SELECT id, url, content, full_content FROM articles WHERE id = ?',
   ).get(lastInsertRowid);
@@ -231,7 +232,7 @@ test('getReaderContent: a winning live fetch is used and persisted', async () =>
     assert.equal(result.source, 'fetched');
     assert.match(result.html, /ZETAFRAME/);
     const stored = db.prepare('SELECT full_content FROM articles WHERE id = ?').get(article.id);
-    assert.match(stored.full_content, /ZETAFRAME/, 'persisted for future reads');
+    assert.match(decompressText(stored.full_content), /ZETAFRAME/, 'persisted for future reads');
   } finally {
     await site.close();
   }

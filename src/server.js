@@ -7,6 +7,7 @@ import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
 import { semanticSearch } from './search.js';
+import { decompressText } from './compress.js';
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -40,8 +41,12 @@ function pushMatchFilters(where, params, { topic, feedId, q, skipTextFilter }) {
     params.push(Number(feedId));
   }
   if (q && !skipTextFilter) {
-    where.push('(a.title LIKE ? OR a.summary LIKE ? OR a.content LIKE ?)');
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+    // content isn't searchable here: it's stored brotli-compressed (see
+    // src/compress.js), so a SQL LIKE can't match inside it — semantic
+    // search (which embeds a meaningful sample of the full text, see
+    // enrichOne's text_embedding) is the way to search full-body content.
+    where.push('(a.title LIKE ? OR a.summary LIKE ?)');
+    params.push(`%${q}%`, `%${q}%`);
   }
 }
 
@@ -50,9 +55,9 @@ const BY_DATE = 'COALESCE(a.published_at, a.created_at) DESC';
 
 /**
  * Translate list-endpoint query params into SQL; returns {error} on bad
- * input. skipTextFilter omits the title/summary/content LIKE clause —
- * used for semantic search, which ranks by meaning instead and would
- * otherwise also demand a literal text match.
+ * input. skipTextFilter omits the title/summary LIKE clause — used for
+ * semantic search, which ranks by meaning instead and would otherwise
+ * also demand a literal text match.
  */
 function articleQuery(query, config, { skipTextFilter = false } = {}) {
   const {
@@ -198,6 +203,7 @@ export function createApp(db, config) {
       WHERE a.id = ?
     `).get(req.params.id);
     if (!row) return res.status(404).json({ error: 'not found' });
+    row.content = decompressText(row.content);
     res.json(rowToArticle(row));
   });
 

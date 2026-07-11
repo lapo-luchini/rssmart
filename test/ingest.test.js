@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb, rssXml, startRssServer, testConfig } from './helpers.js';
 import { syncFeeds, ingestAll } from '../src/ingest.js';
+import { decompressText } from '../src/compress.js';
 
 test('syncFeeds seeds config feeds without touching UI-managed state', () => {
   const db = tempDb();
@@ -42,8 +43,9 @@ test('ingestAll inserts items once and is idempotent', async () => {
     const art = db.prepare("SELECT * FROM articles WHERE title = 'First post'").get();
     assert.equal(art.status, 'pending');
     assert.ok(art.published_at?.startsWith('2026-07-04'));
-    assert.ok(!art.content.includes('<script>'), 'scripts are stripped');
-    assert.ok(art.content.includes('world'));
+    const content = decompressText(art.content);
+    assert.ok(!content.includes('<script>'), 'scripts are stripped');
+    assert.ok(content.includes('world'));
 
     const feed = db.prepare('SELECT title, html_url, last_status, ok_count FROM feeds').get();
     assert.equal(feed.title, 'My Feed', 'feed title backfilled from RSS');
@@ -70,7 +72,7 @@ test('latin-1 feeds are decoded per their declared charset', async () => {
     assert.equal(r.added, 1);
     const art = db.prepare('SELECT title, content FROM articles').get();
     assert.equal(art.title, 'Steam Machine è un ritorno');
-    assert.match(art.content, /città però/);
+    assert.match(decompressText(art.content), /città però/);
     assert.equal(db.prepare('SELECT title FROM feeds').get().title, 'Perché no');
   } finally {
     await rss.close();

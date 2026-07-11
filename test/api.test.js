@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { tempDb, testConfig, startOllamaStub } from './helpers.js';
 import { createApp } from '../src/server.js';
 import { recomputeScores } from '../src/scoring.js';
+import { compressText } from '../src/compress.js';
 
 const vec = (...values) => Buffer.from(Float16Array.from(values).buffer);
 
@@ -35,7 +36,7 @@ function seed() {
       ...overrides,
     };
     return Number(insArt.run(
-      a.guid, a.title, a.content, a.summary, a.published_at, a.vote, a.read_at, a.duplicate_of,
+      a.guid, a.title, compressText(a.content), a.summary, a.published_at, a.vote, a.read_at, a.duplicate_of,
     ).lastInsertRowid);
   };
 
@@ -51,9 +52,9 @@ function seed() {
   // one unclassified article, marked read so unread-view assertions stay put
   out.pending = Number(db.prepare(`
     INSERT INTO articles (feed_id, guid, title, content, status, published_at, read_at)
-    VALUES (1, 'g6', 'Awaiting classification', 'body', 'pending',
+    VALUES (1, 'g6', 'Awaiting classification', ?, 'pending',
             '2026-06-30T00:00:00Z', '2026-06-30T10:00:00Z')
-  `).run().lastInsertRowid);
+  `).run(compressText('body')).lastInsertRowid);
   recomputeScores(db, testConfig());
 
   // Distinguishable text_embeddings for the semantic search tests: liked

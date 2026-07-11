@@ -175,6 +175,10 @@ run (after 5 failed attempts an article is parked as unclassifiable).
 - Data lives in the SQLite file set by `config.db` (default `./data/rssmart.db`).
 - Feed HTML is stripped of scripts/event handlers before storage, but this is
   a personal-use reader — don't expose it to the open internet.
+- `content`/`full_content` are stored brotli-compressed (still `TEXT`-typed
+  columns — SQLite stores the BLOB as-is), which is why full-text search only
+  matches title/summary, not article bodies; use **semantic** search (embeds
+  a sample of the full text) to search by meaning instead.
 - Origin-page fetching refuses article links that resolve to private, loopback
   or link-local addresses (feed content is third-party input; this prevents a
   malicious feed from probing your LAN). `enrich.allowPrivateFetch: true`

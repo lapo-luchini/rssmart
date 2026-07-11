@@ -1,5 +1,6 @@
 import { stripHtml } from './html.js';
 import { fetchArticleText } from './fetchpage.js';
+import { compressText, decompressText } from './compress.js';
 
 export function cosine(a, b) {
   if (a.length !== b.length) return 0;
@@ -115,7 +116,7 @@ async function articleText(db, article, enrichCfg) {
   if (!page || page.text.length <= rssText.length) return rssText;
   // Persist immediately so a later classify failure doesn't refetch.
   db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
-    .run(page.html, article.id);
+    .run(compressText(page.html), article.id);
   return page.text;
 }
 
@@ -130,8 +131,9 @@ async function articleText(db, article, enrichCfg) {
  * get it for free.
  */
 export async function getReaderContent(db, article, config) {
-  if (article.full_content) return { html: article.full_content, source: 'cached' };
-  const rssHtml = article.content ?? '';
+  const cachedFullContent = decompressText(article.full_content);
+  if (cachedFullContent) return { html: cachedFullContent, source: 'cached' };
+  const rssHtml = decompressText(article.content) ?? '';
   if (!article.url) return { html: rssHtml, source: 'feed' };
 
   const page = await fetchArticleText(article.url, {
@@ -142,7 +144,7 @@ export async function getReaderContent(db, article, config) {
   if (!page || stripHtml(page.html).length <= stripHtml(rssHtml).length) {
     return { html: rssHtml, source: 'feed' };
   }
-  db.prepare('UPDATE articles SET full_content = ? WHERE id = ?').run(page.html, article.id);
+  db.prepare('UPDATE articles SET full_content = ? WHERE id = ?').run(compressText(page.html), article.id);
   return { html: page.html, source: 'fetched' };
 }
 
@@ -215,7 +217,7 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
     if (!article) break;
     tried.push(article.id);
     try {
-      const text = stripHtml(article.full_content ?? article.content);
+      const text = stripHtml(decompressText(article.full_content ?? article.content));
       const vec = await llm.embed(
         `${article.title}\n${article.summary ?? sampleText(text, 500)}`,
       );
@@ -420,7 +422,11 @@ export async function enrichPending(
   // each other's embedding — later repeats are still caught.
   const claimNext = () => {
     const article = nextPending.get(maxAttempts, JSON.stringify(tried));
-    if (article) tried.push(article.id);
+    if (article) {
+      tried.push(article.id);
+      article.content = decompressText(article.content);
+      article.full_content = decompressText(article.full_content);
+    }
     return article;
   };
   const remaining = () =>
