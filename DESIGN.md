@@ -121,20 +121,29 @@ Two paths, with very different scaling:
 
 ## Known limits (as of ~5k articles, 2026-07)
 
-- **Soft ceiling: kNN scoring**, around tens of thousands of articles ×
-  hundreds of votes. At N=30k, V=300 a recompute is ~7G float ops (~1 s of
-  JS CPU) and loads ~90 MB of embeddings; since voting triggers it
-  synchronously, the symptom will be *lag on the vote buttons*. At current
-  size it's milliseconds. Remediation ladder, in order of effort:
+- **The ceiling arrived much earlier than projected: measured 5.7s per
+  vote at N≈6000 articles, V=43 votes (2026-07-11), against an earlier
+  estimate of ~1s at N=30k/V=300.** The gap: that estimate only counted
+  the O(N×V) cosine math; the real cost is dominated by `recomputeScores`
+  pulling *every* article's full BLOB (all ~6000, not just the voted 43 —
+  now 1024-dim/4KB each since the qwen3-embedding switch, ~24MB per vote)
+  out of SQLite, plus a `.filter().map().sort().slice()` allocation chain
+  run once per article (not per vote) inside a synchronous loop that also
+  competes with the serve scheduler's own CPU use on the same single Node
+  thread. Since voting triggers this synchronously, the direct symptom is
+  *lag on the vote buttons* — confirmed live, not hypothetical. Remediation
+  ladder, cheapest first (all still valid, now with real urgency):
   1. compute the kNN term only for unread articles (cost becomes
-     proportional to the unread set, not the archive);
-  2. cache voted vectors between recomputes;
+     proportional to the unread set, not the archive) — the obvious first
+     fix given the query pattern above pulls every article regardless of
+     whether it's ever shown;
+  2. cache voted vectors between recomputes instead of re-reading blobs;
   3. retention policy: drop/archive read, unvoted articles older than N
      months (voted articles must stay — they are the training data);
   4. only if truly huge: sqlite-vec / approximate NN.
-  Deliberately not done yet: the brute-force version is correct and
-  measurable, and the system's charm is being inspectable. Act when a vote
-  feels slow, not before.
+  Not yet implemented as of 2026-07-11 — the trigger condition ("act when
+  a vote feels slow") has now been met; this is the next thing to do here,
+  not a someday item.
 - **Nothing prunes articles.** The archive grows forever (~6 KB of
   embeddings per article plus text). Fine for years at current intake;
   see retention above.
