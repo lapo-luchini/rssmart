@@ -121,29 +121,44 @@ Two paths, with very different scaling:
 
 ## Known limits (as of ~5k articles, 2026-07)
 
-- **The ceiling arrived much earlier than projected: measured 5.7s per
-  vote at N≈6000 articles, V=43 votes (2026-07-11), against an earlier
-  estimate of ~1s at N=30k/V=300.** The gap: that estimate only counted
-  the O(N×V) cosine math; the real cost is dominated by `recomputeScores`
-  pulling *every* article's full BLOB (all ~6000, not just the voted 43 —
-  now 1024-dim/4KB each since the qwen3-embedding switch, ~24MB per vote)
-  out of SQLite, plus a `.filter().map().sort().slice()` allocation chain
-  run once per article (not per vote) inside a synchronous loop that also
-  competes with the serve scheduler's own CPU use on the same single Node
-  thread. Since voting triggers this synchronously, the direct symptom is
-  *lag on the vote buttons* — confirmed live, not hypothetical. Remediation
-  ladder, cheapest first (all still valid, now with real urgency):
-  1. compute the kNN term only for unread articles (cost becomes
-     proportional to the unread set, not the archive) — the obvious first
-     fix given the query pattern above pulls every article regardless of
-     whether it's ever shown;
-  2. cache voted vectors between recomputes instead of re-reading blobs;
-  3. retention policy: drop/archive read, unvoted articles older than N
-     months (voted articles must stay — they are the training data);
-  4. only if truly huge: sqlite-vec / approximate NN.
-  Not yet implemented as of 2026-07-11 — the trigger condition ("act when
-  a vote feels slow") has now been met; this is the next thing to do here,
-  not a someday item.
+- **The ceiling arrived much earlier than projected — measured 5.7s per
+  vote at N≈6000/V=43 (2026-07-11), against an earlier ~1s-at-N=30k/V=300
+  estimate — and the obvious first remediation (score only unread
+  articles) turned out to be a dead end.** The app exists specifically
+  because arrival outpaces reading; by design, unread articles are the
+  overwhelming majority forever (measured same day: 5934/5972 = 99.4%
+  unread, only 38 read). "Skip recompute for read articles" therefore
+  barely shrinks N — it isn't a real fix, it just looked like one before
+  checking the actual proportions. **Fixed instead by decoupling "confirm
+  my vote" from "rescore the corpus"** (`src/scoring.js`,
+  `recomputeOneScore` / `scheduleRecompute` / `recomputeIfDue`):
+  - A vote updates *only its own article's* score synchronously —
+    scoped queries (this article's topics, its feed, the — usually
+    small — voted set), no full-corpus scan, genuinely cheap. The vote
+    response is accurate and instant (measured 0.14s live, down from
+    5.7s) because it never touches the other ~5900 articles.
+  - The full-corpus ripple (a new vote can shift *any* article's kNN
+    term, not just the voted one) is debounced: each vote pushes a due
+    time (`meta.score_recompute_due_at`) `scoring.recomputeDebounceSec`
+    (default 120s) into the future, so a whole voting session collapses
+    into one recompute after you actually stop, not one per click.
+  - The due time is a DB row, not a JS timer, so it survives a crash or
+    restart with no extra code: whatever next checks it (the serve
+    scheduler's own `scoreTick`, polling cheaply) just runs it
+    immediately if it's overdue. Verified live: voted, killed the
+    process before the debounce elapsed, restarted — the pending
+    recompute fired on the very first tick and cleared its own marker.
+  - `cron` and the scheduler's post-classification sweep already do an
+    unconditional full `recomputeScores` for an unrelated reason (fresh
+    depth/topics need scoring); either one also clears a pending
+    debounce marker, since it's now moot.
+  Retention (drop/archive old read-but-unvoted articles) is *also* not
+  the fix it looked like, for the same reason: read articles are a small
+  minority, so pruning them wouldn't shrink N either. The remaining
+  ladder rungs (cache voted vectors instead of re-reading blobs each
+  sweep; sqlite-vec/approximate NN if this ever gets truly huge) are
+  about the debounced sweep's own cost, not urgent now that it no longer
+  blocks anything a person is looking at.
 - **Nothing prunes articles.** The archive grows forever (~6 KB of
   embeddings per article plus text). Fine for years at current intake;
   see retention above.

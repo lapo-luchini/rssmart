@@ -1,7 +1,7 @@
 import express from 'express';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { recomputeScores, topicPrefs } from './scoring.js';
+import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
@@ -203,7 +203,11 @@ export function createApp(db, config) {
       WHERE id = ?
     `).run(vote, vote, req.params.id);
     if (!changes) return res.status(404).json({ error: 'not found' });
-    recomputeScores(db, config);
+    // Instant, cheap: this article's own score only. The full-corpus
+    // ripple (this vote can shift any other article's kNN term) is
+    // debounced — see DESIGN.md — rather than blocking this response.
+    recomputeOneScore(db, config, req.params.id);
+    scheduleRecompute(db, config.scoring.recomputeDebounceSec);
     const row = db.prepare(`
       SELECT id, vote, read_at, score,
              score_topics, score_embedding, score_depth, score_feed

@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { tempDb, testConfig } from './helpers.js';
-import { recomputeScores, topicPrefs } from '../src/scoring.js';
+import {
+  recomputeScores, recomputeOneScore, topicPrefs,
+  scheduleRecompute, recomputeIfDue, clearScheduledRecompute,
+} from '../src/scoring.js';
+import { openDb } from '../src/db.js';
 
 const vecBuf = (...values) => Buffer.from(Float32Array.from(values).buffer);
 
@@ -123,3 +130,81 @@ test('blended score combines topics, embedding kNN, depth and feed', () => {
   near(c2.score_topics, 0.4 * 0.5);
   near(c2.score_embedding, 0.3);
 });
+
+test('recomputeOneScore matches a full recomputeScores for that one article, and touches nothing else', () => {
+  const db = tempDb();
+  const ids = seed(db, [
+    { title: 'liked', topics: ['tech'], vote: 1 },
+    { title: 'candidate', topics: ['tech'] },
+    { title: 'other', topics: ['tech'] },
+  ]);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?')
+    .run(vecBuf(1, 0), ids.liked);
+  db.prepare('UPDATE articles SET text_embedding = ?, depth = 5 WHERE id = ?')
+    .run(vecBuf(1, 0), ids.candidate);
+  db.prepare('UPDATE articles SET text_embedding = ?, depth = 3 WHERE id = ?')
+    .run(vecBuf(1, 0), ids.other);
+
+  const config = testConfig();
+  config.scoring.weights = { topics: 0.4, embedding: 0.3, depth: 0.2, feed: 0.1 };
+  const parts = (id) => db.prepare(`
+    SELECT score, score_topics, score_embedding, score_depth, score_feed
+    FROM articles WHERE id = ?
+  `).get(id);
+
+  recomputeScores(db, config);
+  const groundTruth = parts(ids.candidate);
+  const otherBefore = parts(ids.other);
+  assert.ok(groundTruth.score !== 0, 'sanity: candidate has a non-trivial score to reproduce');
+
+  // scramble candidate's stored score, leave everything else untouched
+  db.prepare(`
+    UPDATE articles SET score = -99, score_topics = -99, score_embedding = -99,
+    score_depth = -99, score_feed = -99 WHERE id = ?
+  `).run(ids.candidate);
+
+  recomputeOneScore(db, config, ids.candidate);
+  assert.deepEqual(parts(ids.candidate), groundTruth, 'scoped recompute reproduces the full sweep\'s result');
+  assert.deepEqual(parts(ids.other), otherBefore, 'recomputeOneScore never touches other articles');
+});
+
+test('scheduleRecompute + recomputeIfDue: debounced, and survives a process restart', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rssmart-debounce-'));
+  const dbPath = join(dir, 'test.db');
+  const config = testConfig();
+
+  let db = openDb(dbPath);
+  seed(db, [{ title: 'a', topics: ['tech'], vote: 1 }, { title: 'b', topics: ['tech'] }]);
+
+  // scheduled far in the future: not due yet
+  scheduleRecompute(db, 3600);
+  assert.equal(recomputeIfDue(db, config), false, 'not due yet');
+  assert.equal(score(db, seedTitleId(db, 'b')), 0, 'no recompute happened');
+
+  // force it overdue directly (bypassing the public API's positive-delay
+  // convention, which has no "already elapsed" case of its own)
+  db.prepare(`
+    UPDATE meta SET value = '2000-01-01T00:00:00Z' WHERE key = 'score_recompute_due_at'
+  `).run();
+  db.close();
+
+  // reopen a fresh connection to the same file — simulates an app restart;
+  // the pending due-marker must not have been an in-memory-only timer
+  db = openDb(dbPath);
+  assert.equal(recomputeIfDue(db, config), true, 'overdue work runs on the next check after "restart"');
+  assert.ok(Math.abs(score(db, seedTitleId(db, 'b')) - 1 / 3) < 1e-9, 'the deferred recompute actually ran');
+
+  // due-marker is cleared after running: nothing left to do
+  assert.equal(recomputeIfDue(db, config), false, 'idempotent: nothing pending after it already ran');
+
+  // clearScheduledRecompute cancels a still-pending (not yet due) marker
+  scheduleRecompute(db, 3600);
+  clearScheduledRecompute(db);
+  assert.equal(recomputeIfDue(db, config), false, 'cleared marker never fires');
+
+  db.close();
+});
+
+function seedTitleId(db, title) {
+  return db.prepare('SELECT id FROM articles WHERE title = ?').get(title).id;
+}

@@ -133,7 +133,7 @@ export function testConfig(overrides = {}) {
     cron: { maxRunMs: 300_000 },
     scheduler: { enabled: true, minIntervalMin: 15, maxIntervalMin: 1440 },
     // topics-only by default so scoring tests exercise one signal at a time
-    scoring: { knn: 20, weights: { topics: 1, embedding: 0, depth: 0, feed: 0 } },
+    scoring: { knn: 20, weights: { topics: 1, embedding: 0, depth: 0, feed: 0 }, recomputeDebounceSec: 120 },
     server: { host: '127.0.0.1', port: 0 },
     ...overrides,
   };

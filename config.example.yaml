@@ -55,6 +55,13 @@ scoring:
     embedding: 0.3    # votes on articles with similar text (style/genre taste)
     depth: 0.2        # LLM substance rating: rewards real reporting/analysis
     feed: 0.1         # the source's own vote record
+  recomputeDebounceSec: 120  # a vote updates its own article's score instantly;
+                             # rescoring every *other* article (the vote can
+                             # shift anyone's kNN term) is expensive at scale,
+                             # so it's debounced this many seconds after your
+                             # last vote — raise it if you tend to vote in
+                             # long sessions and don't need scores to settle
+                             # between them
 
 server:
   host: 0.0.0.0

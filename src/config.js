@@ -37,6 +37,13 @@ const DEFAULTS = {
       depth: 0.2,
       feed: 0.1,
     },
+    // A vote updates its own article's score instantly (cheap: just that
+    // article's topic/feed prefs plus a scan of the — usually small —
+    // voted set). The full corpus-wide ripple (every other article's kNN
+    // term can shift too) is expensive at scale, so it's debounced: each
+    // vote pushes the due time back by this many seconds, and it only
+    // actually runs once voting has paused for that long.
+    recomputeDebounceSec: 120,
   },
   server: {
     host: '0.0.0.0',

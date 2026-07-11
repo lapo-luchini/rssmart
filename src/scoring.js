@@ -50,7 +50,34 @@ function knnScore(row, voted, k) {
   return nearest.reduce((s, n) => s + n.sim * n.vote, 0) / total;
 }
 
-/** Recompute the materialized score components from current votes. */
+function votedArticles(db) {
+  return db.prepare(`
+    SELECT id, vote, text_embedding FROM articles
+    WHERE vote != 0 AND text_embedding IS NOT NULL
+  `).all().map((r) => ({ id: r.id, vote: r.vote, vec: bufToVec(r.text_embedding) }));
+}
+
+function scoreParts(row, topicPref, feedPref, voted, weights, knn) {
+  const topics = weights.topics * (topicPref ?? 0);
+  const embedding = weights.embedding * knnScore(row, voted, knn);
+  const depth = weights.depth * (row.depth ? (row.depth - 3) / 2 : 0);
+  const feed = weights.feed * (feedPref ?? 0);
+  return { topics, embedding, depth, feed, total: topics + embedding + depth + feed };
+}
+
+const SAVE_SCORE = `
+  UPDATE articles
+  SET score_topics = ?, score_embedding = ?, score_depth = ?, score_feed = ?, score = ?
+  WHERE id = ?
+`;
+
+/**
+ * Recompute every article's score. Expensive — O(articles × votes) — since
+ * one new vote can shift any article's kNN term, not just the voted one.
+ * Called after classification batches (fresh depth/topics need scoring) and
+ * by the debounced vote-driven recompute (see recomputeIfDue below); never
+ * synchronously from the vote request itself — see DESIGN.md.
+ */
 export function recomputeScores(db, config) {
   const { weights, knn } = config.scoring;
 
@@ -75,24 +102,82 @@ export function recomputeScores(db, config) {
   const rows = db.prepare(
     'SELECT id, feed_id, vote, depth, text_embedding FROM articles',
   ).all();
-  const voted = rows
-    .filter((r) => r.vote !== 0 && r.text_embedding)
-    .map((r) => ({ id: r.id, vote: r.vote, vec: bufToVec(r.text_embedding) }));
+  const voted = votedArticles(db);
 
-  const save = db.prepare(`
-    UPDATE articles
-    SET score_topics = ?, score_embedding = ?, score_depth = ?, score_feed = ?,
-        score = ?
-    WHERE id = ?
-  `);
+  const save = db.prepare(SAVE_SCORE);
   db.transaction(() => {
     for (const row of rows) {
-      const topics = weights.topics * (topicPref.get(row.id) ?? 0);
-      const embedding = weights.embedding * knnScore(row, voted, knn);
-      const depth = weights.depth * (row.depth ? (row.depth - 3) / 2 : 0);
-      const feed = weights.feed * (feedPref.get(row.feed_id) ?? 0);
-      save.run(topics, embedding, depth, feed,
-        topics + embedding + depth + feed, row.id);
+      const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id), voted, weights, knn);
+      save.run(s.topics, s.embedding, s.depth, s.feed, s.total, row.id);
     }
   })();
+}
+
+/**
+ * Recompute a single article's own score — cheap, scoped queries only
+ * (this article's topics, its feed, the — usually small — voted set), no
+ * full-corpus scan. Gives instant feedback on the article you just voted
+ * on, while the ripple to every *other* article's score is debounced (see
+ * recomputeIfDue).
+ */
+export function recomputeOneScore(db, config, articleId) {
+  const { weights, knn } = config.scoring;
+
+  const row = db.prepare(
+    'SELECT id, feed_id, depth, text_embedding FROM articles WHERE id = ?',
+  ).get(articleId);
+  if (!row) return;
+
+  const topicPref = db.prepare(`
+    SELECT AVG(pref) AS pref FROM (
+      SELECT at.topic_id AS topic_id, ${PREF_EXPR} AS pref
+      FROM article_topics at
+      JOIN articles a ON a.id = at.article_id
+      WHERE at.topic_id IN (SELECT topic_id FROM article_topics WHERE article_id = ?)
+      GROUP BY at.topic_id
+    )
+  `).get(articleId).pref;
+
+  const feedPref = db.prepare(`
+    SELECT ${PREF_EXPR} AS pref FROM articles a WHERE a.feed_id = ?
+  `).get(row.feed_id).pref;
+
+  const voted = votedArticles(db);
+  const s = scoreParts(row, topicPref, feedPref, voted, weights, knn);
+  db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.total, articleId);
+}
+
+const RECOMPUTE_DUE_KEY = 'score_recompute_due_at';
+
+/**
+ * Debounce a full recompute: push its due time `delaySec` into the future.
+ * Persisted in the DB (not a JS timer) so a pending recompute survives an
+ * app restart — whenever it's next checked (recomputeIfDue), overdue work
+ * just runs immediately instead of being silently lost.
+ */
+export function scheduleRecompute(db, delaySec) {
+  db.prepare(`
+    INSERT INTO meta (key, value) VALUES ('${RECOMPUTE_DUE_KEY}',
+      strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+' || ? || ' seconds'))
+    ON CONFLICT (key) DO UPDATE SET value = excluded.value
+  `).run(delaySec);
+}
+
+/** Run the debounced recompute if (and only if) its due time has passed. */
+export function recomputeIfDue(db, config) {
+  const due = db.prepare(`
+    SELECT 1 FROM meta
+    WHERE key = '${RECOMPUTE_DUE_KEY}' AND value <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+  `).get();
+  if (!due) return false;
+  recomputeScores(db, config);
+  clearScheduledRecompute(db);
+  return true;
+}
+
+/** Drop any pending debounce marker — e.g. after a full recompute already
+ *  ran for another reason (cron's post-classification sweep), which
+ *  satisfies whatever a pending vote-debounce was waiting for. */
+export function clearScheduledRecompute(db) {
+  db.prepare('DELETE FROM meta WHERE key = ?').run(RECOMPUTE_DUE_KEY);
 }

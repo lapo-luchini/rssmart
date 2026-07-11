@@ -5,7 +5,7 @@ import { openDb } from '../src/db.js';
 import { syncFeeds, ingestAll } from '../src/ingest.js';
 import { Ollama } from '../src/llm.js';
 import { enrichPending, syncEmbeddingSpace, reembedMissing } from '../src/enrich.js';
-import { recomputeScores } from '../src/scoring.js';
+import { recomputeScores, clearScheduledRecompute } from '../src/scoring.js';
 import { createApp } from '../src/server.js';
 import { startScheduler } from '../src/scheduler.js';
 import { acquireLease, releaseLease } from '../src/lease.js';
@@ -142,6 +142,7 @@ if (mode === 'cron') {
   }
 
   recomputeScores(db, config);
+  clearScheduledRecompute(db); // this full sweep already satisfies any pending vote debounce
   db.close();
 
   const allFeedsFailed = ingest.feedsFailed > 0 && ingest.feedsOk === 0;
