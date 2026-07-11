@@ -261,6 +261,42 @@ day-one spec was retired for exactly that reason; it's in git history).
   original "never depend on a CDN" framing — but that framing was really
   about the *running app* never phoning a CDN (still true), not the
   one-time setup step.
+- **Express replaced with Hono (2026-07-12).** Investigated on request:
+  is a swap worth it, is Hono smaller, does it cover what `server.js`
+  actually uses? Measured Express's *real* transitive closure properly
+  (naive per-package sizing double-counts shared dependencies across a
+  tree this deep — had to walk pnpm's virtual store by hand, resolving
+  each package's own `node_modules` siblings, to get an honest number):
+  2.04MB across 66 packages. Hono + `@hono/node-server` (only needed
+  under Node — Bun runs Hono's `fetch` handler directly via `Bun.serve`,
+  no adapter, mirroring the `better-sqlite3`-under-Bun non-issue) came to
+  1.40MB with **zero** transitive dependencies, verified with an isolated
+  test install before touching the real project. In isolation that's a
+  real reduction; in the actual project the net change came out close to
+  a wash in raw bytes (some of Express's dependency tree happened to
+  already overlap with things `jsdom` needed, so its true marginal cost
+  was lower than the isolated number) — reported honestly rather than
+  forcing the cleaner isolated-test story. What *did* shrink clearly:
+  package count, 155 → 128, and Express's 66-package closure → Hono's 2 —
+  meaningfully less supply-chain surface and audit burden, which was the
+  more load-bearing argument anyway. Feature parity was complete for what
+  this app uses: routing with path params, `hono/body-limit` for the
+  OPML-import size cap (bundled in the main package, no separate
+  install), a runtime-conditional `serveStatic` (`hono/bun` vs
+  `@hono/node-server/serve-static` — same per-runtime-split pattern as
+  `src/db.js`'s SQLite driver, resolved once via top-level `await` so
+  `createApp` itself stays synchronous), and `c.body(text, status,
+  headers)` for the OPML export's custom content-type. Every route in
+  `server.js` needed rewriting (`(req, res) => {}` → `(c) => {}`,
+  `req.params.id` → `c.req.param('id')`, `req.body` → `await
+  c.req.json()` wrapped in a `jsonBody()` helper since Hono throws on an
+  empty body where Express's `req.body?.field` just read `undefined`) —
+  a real, whole-file migration, not a drop-in swap. Verified live against
+  the real production DB on both Node and Bun before considering it
+  done: every endpoint, static file serving, the body-size-limit 413,
+  and the full browser UI (list, vote, expand, reader overlay, triage,
+  topics/feeds panels, search) all confirmed working, zero console
+  errors, on both runtimes.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly

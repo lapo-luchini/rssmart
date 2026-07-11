@@ -1,4 +1,5 @@
-import express from 'express';
+import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
@@ -8,6 +9,15 @@ import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
 import { semanticSearch } from './search.js';
 import { decompressText } from './compress.js';
+
+// Bun ships its own static-file middleware (hono/bun); Node needs
+// @hono/node-server's, which resolves relative paths from the process cwd
+// rather than this file's location — same reasoning as src/db.js picking
+// its SQLite driver per runtime, done once at module load via top-level
+// await rather than inside createApp, so createApp itself stays synchronous.
+const serveStatic = typeof Bun !== 'undefined'
+  ? (await import('hono/bun')).serveStatic
+  : (await import('@hono/node-server/serve-static')).serveStatic;
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -25,6 +35,17 @@ const ARTICLE_COLUMNS = `
 
 function rowToArticle(row) {
   return { ...row, topics: row.topics ? row.topics.split('|') : [] };
+}
+
+// Hono's c.req.json() throws on an empty/invalid body; every route here
+// treats a missing body as "no fields provided" (matching Express's
+// req.body?.field pattern on an empty req.body), so fall back to {}.
+async function jsonBody(c) {
+  try {
+    return await c.req.json();
+  } catch {
+    return {};
+  }
 }
 
 // topic/feed/text filters: none of these validate input, they just narrow
@@ -130,26 +151,30 @@ function fetchInRankOrder(db, ranked) {
 }
 
 export function createApp(db, config) {
-  const app = express();
-  app.use(express.json({ limit: '2mb' })); // OPML imports ride in JSON
+  const app = new Hono();
+  app.use('/api/*', bodyLimit({
+    maxSize: 2 * 1024 * 1024, // OPML imports ride in JSON
+    onError: (c) => c.json({ error: 'request body too large' }, 413),
+  }));
   const llm = new Ollama(config.ollama);
 
-  app.get('/api/articles', async (req, res) => {
-    const q = (req.query.q ?? '').trim();
-    const isSemantic = req.query.semantic === '1' && q;
+  app.get('/api/articles', async (c) => {
+    const query = Object.fromEntries(new URL(c.req.url).searchParams);
+    const q = (query.q ?? '').trim();
+    const isSemantic = query.semantic === '1' && q;
 
-    const query = articleQuery(req.query, config, { skipTextFilter: isSemantic });
-    if (query.error) return res.status(400).json({ error: query.error });
-    const { whereSql, params, orderParams, grouped, orderBy, lim, off } = query;
+    const parsed = articleQuery(query, config, { skipTextFilter: isSemantic });
+    if (parsed.error) return c.json({ error: parsed.error }, 400);
+    const { whereSql, params, orderParams, grouped, orderBy, lim, off } = parsed;
 
     if (isSemantic) {
       let ranked;
       try {
         ranked = await semanticSearch(db, llm, q, { whereSql, params, grouped });
       } catch (err) {
-        return res.status(502).json({ error: `semantic search unavailable: ${err.message}` });
+        return c.json({ error: `semantic search unavailable: ${err.message}` }, 502);
       }
-      return res.json({
+      return c.json({
         total: ranked.length,
         articles: fetchInRankOrder(db, ranked.slice(off, off + lim)),
       });
@@ -179,32 +204,34 @@ export function createApp(db, config) {
       : `SELECT COUNT(*) AS total FROM articles a ${whereSql}`
     ).get(...params);
 
-    res.json({ total, articles: rows.map(rowToArticle) });
+    return c.json({ total, articles: rows.map(rowToArticle) });
   });
 
-  app.get('/api/articles/:id/versions', (req, res) => {
+  app.get('/api/articles/:id/versions', (c) => {
+    const id = c.req.param('id');
     const row = db
       .prepare('SELECT COALESCE(duplicate_of, id) AS root FROM articles WHERE id = ?')
-      .get(req.params.id);
-    if (!row) return res.status(404).json({ error: 'not found' });
+      .get(id);
+    if (!row) return c.json({ error: 'not found' }, 404);
     const rows = db.prepare(`
       SELECT ${ARTICLE_COLUMNS}
       FROM articles a JOIN feeds f ON f.id = a.feed_id
       WHERE COALESCE(a.duplicate_of, a.id) = ? AND a.id != ?
       ORDER BY a.score DESC, COALESCE(a.published_at, a.created_at) DESC
-    `).all(row.root, req.params.id);
-    res.json(rows.map(rowToArticle));
+    `).all(row.root, id);
+    return c.json(rows.map(rowToArticle));
   });
 
-  app.get('/api/articles/:id', (req, res) => {
+  app.get('/api/articles/:id', (c) => {
+    const id = c.req.param('id');
     const row = db.prepare(`
       SELECT ${ARTICLE_COLUMNS}, COALESCE(a.full_content, a.content) AS content
       FROM articles a JOIN feeds f ON f.id = a.feed_id
       WHERE a.id = ?
-    `).get(req.params.id);
-    if (!row) return res.status(404).json({ error: 'not found' });
+    `).get(id);
+    if (!row) return c.json({ error: 'not found' }, 404);
     row.content = decompressText(row.content);
-    res.json(rowToArticle(row));
+    return c.json(rowToArticle(row));
   });
 
   // The in-page reader overlay's content: the fullest readable text we
@@ -212,23 +239,25 @@ export function createApp(db, config) {
   // full_content) rather than settling for a possibly-truncated RSS
   // teaser. See getReaderContent's doc comment for the "keep only if it
   // beats the feed's own text" guard.
-  app.get('/api/articles/:id/reader', async (req, res) => {
+  app.get('/api/articles/:id/reader', async (c) => {
+    const id = c.req.param('id');
     const article = db.prepare(
       'SELECT id, url, content, full_content FROM articles WHERE id = ?',
-    ).get(req.params.id);
-    if (!article) return res.status(404).json({ error: 'not found' });
+    ).get(id);
+    if (!article) return c.json({ error: 'not found' }, 404);
     try {
       const { html, source } = await getReaderContent(db, article, config);
-      res.json({ html, source });
+      return c.json({ html, source });
     } catch (err) {
-      res.status(502).json({ error: `could not load article content: ${err.message}` });
+      return c.json({ error: `could not load article content: ${err.message}` }, 502);
     }
   });
 
-  app.post('/api/articles/:id/vote', (req, res) => {
-    const vote = req.body?.vote;
+  app.post('/api/articles/:id/vote', async (c) => {
+    const id = c.req.param('id');
+    const vote = (await jsonBody(c))?.vote;
     if (!Number.isInteger(vote) || vote < -2 || vote > 2) {
-      return res.status(400).json({ error: 'vote must be an integer from -2 to 2' });
+      return c.json({ error: 'vote must be an integer from -2 to 2' }, 400);
     }
     // Casting a real vote (not retracting one) implies the article was
     // read — you can't rate what you haven't seen. Retraction (vote = 0)
@@ -238,27 +267,28 @@ export function createApp(db, config) {
       SET vote = ?,
           read_at = CASE WHEN ? != 0 THEN COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ELSE read_at END
       WHERE id = ?
-    `).run(vote, vote, req.params.id);
-    if (!changes) return res.status(404).json({ error: 'not found' });
+    `).run(vote, vote, id);
+    if (!changes) return c.json({ error: 'not found' }, 404);
     // Instant, cheap: this article's own score only. The full-corpus
     // ripple (this vote can shift any other article's kNN term) is
     // debounced — see DESIGN.md — rather than blocking this response.
-    recomputeOneScore(db, config, req.params.id);
+    recomputeOneScore(db, config, id);
     scheduleRecompute(db, config.scoring.recomputeDebounceSec);
     const row = db.prepare(`
       SELECT id, vote, read_at, score,
              score_topics, score_embedding, score_depth, score_feed
       FROM articles WHERE id = ?
-    `).get(req.params.id);
-    res.json(row);
+    `).get(id);
+    return c.json(row);
   });
 
   // Re-queue an article for classification, optionally with a persistent
   // reader note the LLM must take into account. Jumps the queue.
-  app.post('/api/articles/:id/reclassify', (req, res) => {
-    const note = req.body?.note;
+  app.post('/api/articles/:id/reclassify', async (c) => {
+    const id = c.req.param('id');
+    const note = (await jsonBody(c))?.note;
     if (note !== undefined && typeof note !== 'string') {
-      return res.status(400).json({ error: 'note must be a string' });
+      return c.json({ error: 'note must be a string' }, 400);
     }
     // full_content is cleared so the source text is re-fetched and
     // re-judged too — reclassify doubles as "try this article again".
@@ -268,23 +298,23 @@ export function createApp(db, config) {
           full_content = NULL,
           enrich_note = COALESCE(NULLIF(TRIM(?), ''), enrich_note)
       WHERE id = ?
-    `).run(note ?? '', req.params.id);
-    if (!changes) return res.status(404).json({ error: 'not found' });
+    `).run(note ?? '', id);
+    if (!changes) return c.json({ error: 'not found' }, 404);
     const row = db
       .prepare('SELECT id, status, enrich_note FROM articles WHERE id = ?')
-      .get(req.params.id);
-    res.json(row);
+      .get(id);
+    return c.json(row);
   });
 
-  app.get('/api/guidelines', (_req, res) => {
+  app.get('/api/guidelines', (c) => {
     const row = db.prepare("SELECT value FROM meta WHERE key = 'guidelines'").get();
-    res.json({ text: row?.value ?? '' });
+    return c.json({ text: row?.value ?? '' });
   });
 
-  app.put('/api/guidelines', (req, res) => {
-    const text = req.body?.text;
+  app.put('/api/guidelines', async (c) => {
+    const text = (await jsonBody(c))?.text;
     if (typeof text !== 'string') {
-      return res.status(400).json({ error: 'text must be a string' });
+      return c.json({ error: 'text must be a string' }, 400);
     }
     if (text.trim()) {
       db.prepare(`
@@ -294,28 +324,29 @@ export function createApp(db, config) {
     } else {
       db.prepare("DELETE FROM meta WHERE key = 'guidelines'").run();
     }
-    res.json({ text: text.trim() });
+    return c.json({ text: text.trim() });
   });
 
-  app.post('/api/articles/:id/read', (req, res) => {
-    const read = req.body?.read;
+  app.post('/api/articles/:id/read', async (c) => {
+    const id = c.req.param('id');
+    const read = (await jsonBody(c))?.read;
     if (typeof read !== 'boolean') {
-      return res.status(400).json({ error: 'read must be a boolean' });
+      return c.json({ error: 'read must be a boolean' }, 400);
     }
     const { changes } = db.prepare(`
       UPDATE articles
       SET read_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END
       WHERE id = ?
-    `).run(read ? 1 : 0, req.params.id);
-    if (!changes) return res.status(404).json({ error: 'not found' });
+    `).run(read ? 1 : 0, id);
+    if (!changes) return c.json({ error: 'not found' }, 404);
     const row = db
       .prepare('SELECT id, read_at FROM articles WHERE id = ?')
-      .get(req.params.id);
-    res.json(row);
+      .get(id);
+    return c.json(row);
   });
 
-  app.get('/api/topics', (_req, res) => {
-    res.json(topicPrefs(db));
+  app.get('/api/topics', (c) => {
+    return c.json(topicPrefs(db));
   });
 
   const feedList = () => db.prepare(`
@@ -341,35 +372,36 @@ export function createApp(db, config) {
       html_url = COALESCE(feeds.html_url, excluded.html_url)
   `);
 
-  app.get('/api/feeds', (_req, res) => {
-    res.json(feedList());
+  app.get('/api/feeds', (c) => {
+    return c.json(feedList());
   });
 
-  app.post('/api/feeds', (req, res) => {
-    const { url, title } = req.body ?? {};
+  app.post('/api/feeds', async (c) => {
+    const { url, title } = (await jsonBody(c)) ?? {};
     if (typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) {
-      return res.status(400).json({ error: 'url must start with http(s)://' });
+      return c.json({ error: 'url must start with http(s)://' }, 400);
     }
     upsertFeed.run(url.trim(), title?.trim() || null, null);
-    res.status(201).json(feedList().find((f) => f.url === url.trim()));
+    return c.json(feedList().find((f) => f.url === url.trim()), 201);
   });
 
-  app.patch('/api/feeds/:id', (req, res) => {
-    const active = req.body?.active;
+  app.patch('/api/feeds/:id', async (c) => {
+    const id = c.req.param('id');
+    const active = (await jsonBody(c))?.active;
     if (typeof active !== 'boolean') {
-      return res.status(400).json({ error: 'active must be a boolean' });
+      return c.json({ error: 'active must be a boolean' }, 400);
     }
     const { changes } = db
       .prepare('UPDATE feeds SET active = ? WHERE id = ?')
-      .run(active ? 1 : 0, req.params.id);
-    if (!changes) return res.status(404).json({ error: 'not found' });
-    res.json(feedList().find((f) => f.id === Number(req.params.id)));
+      .run(active ? 1 : 0, id);
+    if (!changes) return c.json({ error: 'not found' }, 404);
+    return c.json(feedList().find((f) => f.id === Number(id)));
   });
 
-  app.post('/api/feeds/import', (req, res) => {
-    const opml = req.body?.opml;
+  app.post('/api/feeds/import', async (c) => {
+    const opml = (await jsonBody(c))?.opml;
     if (typeof opml !== 'string' || !opml.trim()) {
-      return res.status(400).json({ error: 'opml must be a non-empty string' });
+      return c.json({ error: 'opml must be a non-empty string' }, 400);
     }
     const found = parseOpml(opml);
     db.transaction(() => {
@@ -377,27 +409,27 @@ export function createApp(db, config) {
         upsertFeed.run(feed.url, feed.title ?? null, feed.htmlUrl ?? null);
       }
     })();
-    res.json({ found: found.length });
+    return c.json({ found: found.length });
   });
 
   // Kick a full fetch (ignoring the adaptive schedule) in the background.
   let refreshing = null;
-  app.post('/api/refresh', (_req, res) => {
+  app.post('/api/refresh', (c) => {
     refreshing ??= ingestAll(db, config, { dueOnly: false }).finally(() => {
       refreshing = null;
     });
-    res.status(202).json({ started: true });
+    return c.json({ started: true }, 202);
   });
 
-  app.get('/api/feeds.opml', (_req, res) => {
+  app.get('/api/feeds.opml', (c) => {
     const feeds = db
       .prepare('SELECT url, title, html_url FROM feeds WHERE active = 1 ORDER BY title')
       .all();
-    res.type('text/x-opml').send(buildOpml(feeds));
+    return c.body(buildOpml(feeds), 200, { 'Content-Type': 'text/x-opml' });
   });
 
-  app.get('/api/stats', (_req, res) => {
-    res.json(db.prepare(`
+  app.get('/api/stats', (c) => {
+    return c.json(db.prepare(`
       SELECT COUNT(*) AS total,
              COALESCE(SUM(read_at IS NULL), 0) AS unread,
              COALESCE(SUM(status = 'pending'), 0) AS pending,
@@ -407,6 +439,6 @@ export function createApp(db, config) {
     `).get());
   });
 
-  app.use(express.static(PUBLIC_DIR));
+  app.use('*', serveStatic({ root: PUBLIC_DIR }));
   return app;
 }

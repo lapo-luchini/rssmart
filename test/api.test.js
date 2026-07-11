@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { tempDb, testConfig, startOllamaStub } from './helpers.js';
+import { tempDb, testConfig, startOllamaStub, startApp } from './helpers.js';
 import { createApp } from '../src/server.js';
 import { recomputeScores } from '../src/scoring.js';
 import { compressText } from '../src/compress.js';
@@ -78,14 +78,12 @@ before(async () => {
   const config = testConfig();
   config.ollama.url = ollamaStub.url;
   const app = createApp(db, config);
-  await new Promise((resolve) => {
-    server = app.listen(0, '127.0.0.1', resolve);
-  });
-  base = `http://127.0.0.1:${server.address().port}`;
+  server = await startApp(app);
+  base = server.url;
 });
 
 after(async () => {
-  server.close();
+  await server.close();
   await ollamaStub.close();
 });
 
@@ -189,16 +187,14 @@ test('semantic search reports a clear error when Ollama is unreachable', async (
   const cfg = testConfig();
   cfg.ollama.url = 'http://127.0.0.1:1';
   const app = createApp(db, cfg);
-  const tempServer = await new Promise((resolve) => {
-    const s = app.listen(0, '127.0.0.1', () => resolve(s));
-  });
+  const tempServer = await startApp(app);
   try {
-    const res = await fetch(`http://127.0.0.1:${tempServer.address().port}/api/articles?view=all&semantic=1&q=x`);
+    const res = await fetch(`${tempServer.url}/api/articles?view=all&semantic=1&q=x`);
     assert.equal(res.status, 502);
     const body = await res.json();
     assert.match(body.error, /semantic search unavailable/);
   } finally {
-    tempServer.close();
+    await tempServer.close();
   }
 });
 
@@ -213,10 +209,8 @@ test('hot sort blends score with freshness, reordering vs plain score sort', asy
   const cfg = testConfig();
   cfg.scoring.hotDecayPerDay = 0.15;
   const app = createApp(db, cfg);
-  const tempServer = await new Promise((resolve) => {
-    const s = app.listen(0, '127.0.0.1', () => resolve(s));
-  });
-  const base2 = `http://127.0.0.1:${tempServer.address().port}`;
+  const tempServer = await startApp(app);
+  const base2 = tempServer.url;
   try {
     const plain = await fetch(`${base2}/api/articles?view=all&sort=score`).then((r) => r.json());
     const plainIdx = (id) => plain.articles.findIndex((a) => a.id === id);
@@ -229,7 +223,7 @@ test('hot sort blends score with freshness, reordering vs plain score sort', asy
     const bad = await fetch(`${base2}/api/articles?sort=bogus`);
     assert.equal(bad.status, 400);
   } finally {
-    tempServer.close();
+    await tempServer.close();
   }
 });
 

@@ -158,9 +158,18 @@ if (mode === 'cron') {
   }
   const app = createApp(db, config);
   const port = Number(values.port) || config.server.port;
-  app.listen(port, config.server.host, () => {
+  // Hono's app.fetch is a standard Fetch API handler — Bun runs it
+  // natively, Node needs @hono/node-server to adapt it to node:http (same
+  // per-runtime split as src/db.js's SQLite driver choice).
+  if (typeof Bun !== 'undefined') {
+    Bun.serve({ fetch: app.fetch, port, hostname: config.server.host });
     log(`rssmart serving on http://${config.server.host}:${port}`);
-  });
+  } else {
+    const { serve } = await import('@hono/node-server');
+    serve({ fetch: app.fetch, port, hostname: config.server.host }, () => {
+      log(`rssmart serving on http://${config.server.host}:${port}`);
+    });
+  }
   if (config.scheduler.enabled) {
     startScheduler(db, config, { log });
     log('internal scheduler active: fetching due feeds, classifying pending articles');

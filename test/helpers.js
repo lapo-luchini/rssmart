@@ -5,6 +5,30 @@ export function tempDb() {
   return openDb(':memory:');
 }
 
+/**
+ * Start a Hono app for a test (Bun's native server, or @hono/node-server
+ * under Node — same split createApp's caller uses in bin/rssmart.js).
+ * Returns { url, close() }.
+ */
+export async function startApp(app) {
+  if (typeof Bun !== 'undefined') {
+    const server = Bun.serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
+    return {
+      url: `http://127.0.0.1:${server.port}`,
+      close: () => server.stop(true),
+    };
+  }
+  const { serve } = await import('@hono/node-server');
+  return new Promise((resolve) => {
+    const server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' }, (info) => {
+      resolve({
+        url: `http://127.0.0.1:${info.port}`,
+        close: () => new Promise((r) => server.close(r)),
+      });
+    });
+  });
+}
+
 export function rssXml({ title = 'Test Feed', items = [] }) {
   const itemXml = items
     .map(
