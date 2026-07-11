@@ -107,6 +107,30 @@ day-one spec was retired for exactly that reason; it's in git history).
   concrete implementation at runtime. The one exception is the bare
   `console.log(USAGE)` for `--help`: that's static text for a human reading
   it, not a log event, so it stays unprefixed.
+- **Non-UTF-8 origin pages are decoded per their declared charset, not
+  assumed UTF-8 (fixed 2026-07-11 in `fetchArticleText`, `src/fetchpage.js`).**
+  WHATWG fetch's `Response.text()` always decodes as UTF-8 regardless of
+  what the page actually declares — still commonly iso-8859-1/windows-1252
+  on older sites (Italian ones especially). Every accented character then
+  becomes an irrecoverable U+FFFD in the stored `full_content`, reported
+  live against a real hwupgrade.it article. `src/charset.js` centralizes
+  the fix: read raw bytes via `res.arrayBuffer()`, detect the charset
+  (`Content-Type` header, else sniff a `<meta charset>`/`http-equiv`
+  tag in the first 1KB), decode with `TextDecoder`. The exact same class of
+  bug had already been fixed once for RSS feed XML itself
+  (`fetchFeedXml` in `src/ingest.js`, which sniffs the XML prolog's
+  `encoding=` instead of an HTML meta tag) — `src/charset.js` extracts
+  the shared byte-decoding half so both call sites stay in sync instead of
+  each maintaining their own copy. A v9 migration (`repairMojibake` in
+  `src/db.js`) nulls out any `full_content` already corrupted by the old
+  behavior — safe because it's a lazy cache (see `getReaderContent`), so a
+  cleared row is just re-fetched, now correctly decoded, next time it's
+  requested. Known limitation, not fixed: articles ingested before the
+  *earlier* `fetchFeedXml` fix can still have mojibake baked into `title`/
+  `content` themselves — those come from the RSS feed at ingest time with
+  no automatic re-fetch path, and nulling a `NOT NULL` `title` isn't an
+  option, so repairing them would mean re-ingesting old feed history,
+  which is a separate, bigger, unrequested change.
 - **Reader corrections are text, not weights.** Per-article notes
   (`enrich_note`, persistent) and the global classification guidelines
   (`meta` table) are shown to the LLM verbatim. Guidelines are directly
@@ -144,12 +168,20 @@ day-one spec was retired for exactly that reason; it's in git history).
   (revised 2026-07-11).** The original scheme put magnitude on two
   different axes (←/→ for ±1, ↑/↓ for WOW/never) with no consistent
   direction — reported as unintuitive. Now ↑/↓ are the normal-magnitude
-  votes, PgUp/PgDn (physically further, a bigger reach) are their WOW/never
-  extremes, and ←/→ are back/skip — no vote maps to left-right at all
-  anymore. The `.triage-controls` CSS grid places six buttons in a
-  matching cross shape (PgUp/PgDn outermost, back/skip flanking the middle
-  two rows) so the layout doubles as a legend, not just an arbitrary
-  button row.
+  votes and ←/→ are back/skip — no vote maps to left-right at all anymore.
+  The WOW/never extremes were bound to PgUp/PgDn at first (physically
+  further, matching "a bigger reach"), but that broke actually reading a
+  long inline preview: PgUp/PgDn's native job is paging through it, and
+  our own `preventDefault` was stealing that. Landed on plain letter keys
+  instead — `w`/`n` (WOW/never) — alongside the already-letter-based
+  `p`/`o` (preview/open-original, see below): letters never scroll the
+  page, so they can't collide with reading a long preview the way any
+  navigation key (PgUp/PgDn, Home/End, even bare arrows to a lesser
+  extent) can. The `.triage-controls` CSS grid still places six buttons in
+  a cross shape (w/n outermost, back/skip flanking the middle two rows) —
+  it's no longer literally arrow-shaped for the outer pair, but the
+  position still doubles as a legend for "these are the amplified
+  versions of the buttons next to them."
 - **Triage's full-article view is inline, not the reader overlay.**
   Reuses the same `GET /api/articles/:id/reader` endpoint the reader
   overlay uses (see above), but renders the result below the triage card

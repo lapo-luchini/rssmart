@@ -31,6 +31,22 @@ const FOOTER_PAGE = `<!doctype html>
   <article><p>Copyright notices and legal information for this site. All rights reserved by their creators. Trademarks belong to their registered owners worldwide.</p></article>
 </body></html>`;
 
+const ACCENTED_PARAGRAPH =
+  'Città e perché: la società è già pronta, però il caffè non arriva mai in ' +
+  'tempo per la colazione, così tutti si chiedono cosa succederà domani. ';
+
+function latin1Page({ metaCharset } = {}) {
+  return `<!doctype html>
+<html><head><title>Città Annuncio</title>${metaCharset ? `<meta charset="${metaCharset}">` : ''}</head>
+<body>
+  <article>
+    <h1>Città Annuncio</h1>
+    <p>${ACCENTED_PARAGRAPH}</p>
+    <p>${ACCENTED_PARAGRAPH}</p>
+  </article>
+</body></html>`;
+}
+
 function startPageServer() {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -38,6 +54,14 @@ function startPageServer() {
         res.writeHead(200, { 'content-type': 'text/html' }).end(PAGE);
       } else if (req.url === '/footer-only') {
         res.writeHead(200, { 'content-type': 'text/html' }).end(FOOTER_PAGE);
+      } else if (req.url === '/latin1-header') {
+        // charset declared only in the Content-Type header
+        res.writeHead(200, { 'content-type': 'text/html; charset=iso-8859-1' })
+          .end(Buffer.from(latin1Page(), 'latin1'));
+      } else if (req.url === '/latin1-meta') {
+        // charset declared only via a <meta charset> tag, generic header
+        res.writeHead(200, { 'content-type': 'text/html' })
+          .end(Buffer.from(latin1Page({ metaCharset: 'iso-8859-1' }), 'latin1'));
       } else {
         res.writeHead(404).end('gone');
       }
@@ -83,6 +107,25 @@ test('fetchArticleText extracts readable content, drops chrome and scripts', asy
 
     assert.equal(await fetchArticleText(`${site.url}/missing`, { allowPrivate: true }), null, '404 -> null');
     assert.equal(await fetchArticleText('http://127.0.0.1:1/x', { allowPrivate: true }), null, 'unreachable -> null');
+  } finally {
+    await site.close();
+  }
+});
+
+test('fetchArticleText decodes non-UTF-8 pages per their declared charset', async () => {
+  const site = await startPageServer();
+  try {
+    // charset in the Content-Type header
+    const byHeader = await fetchArticleText(`${site.url}/latin1-header`, { allowPrivate: true });
+    assert.match(byHeader.text, /Città e perché/);
+    assert.match(byHeader.text, /società è già pronta/);
+    assert.ok(!byHeader.text.includes('�'), 'no mojibake in text');
+    assert.ok(!byHeader.html.includes('�'), 'no mojibake in html');
+
+    // charset only in a <meta charset> tag, generic Content-Type header
+    const byMeta = await fetchArticleText(`${site.url}/latin1-meta`, { allowPrivate: true });
+    assert.match(byMeta.text, /Città e perché/);
+    assert.ok(!byMeta.text.includes('�'), 'no mojibake in text');
   } finally {
     await site.close();
   }

@@ -369,9 +369,9 @@ createApp({
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
       const actions = {
         ArrowUp: () => this.triageVote(1),
-        PageUp: () => this.triageVote(2),
+        w: () => this.triageVote(2),
         ArrowDown: () => this.triageVote(-1),
-        PageDown: () => this.triageVote(-2),
+        n: () => this.triageVote(-2),
         ArrowLeft: () => this.triageBack(),
         Backspace: () => this.triageBack(),
         ArrowRight: () => this.triageSkip(),

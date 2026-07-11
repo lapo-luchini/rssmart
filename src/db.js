@@ -108,7 +108,26 @@ const MIGRATIONS = [
   ALTER TABLE articles ADD COLUMN enrich_note TEXT;
   ALTER TABLE articles ADD COLUMN enrich_priority INTEGER NOT NULL DEFAULT 0;
   `,
+  // v9 — repair full_content mojibake from before fetchArticleText decoded
+  // pages using their declared charset (src/charset.js): non-UTF-8 origin
+  // pages (iso-8859-1/windows-1252, still common) were decoded as UTF-8
+  // regardless, replacing every affected character with U+FFFD.
+  (db) => repairMojibake(db),
 ];
+
+/**
+ * Null out full_content corrupted by decoding a non-UTF-8 page as UTF-8
+ * (every affected character becomes U+FFFD, irrecoverably). full_content is
+ * a lazy cache (see getReaderContent in enrich.js), not authoritative data,
+ * so this is enough — it's naturally re-fetched, now correctly decoded,
+ * next time it's requested. Idempotent: a clean DB has nothing to touch.
+ */
+export function repairMojibake(db) {
+  db.exec(`
+    UPDATE articles SET full_content = NULL
+    WHERE full_content LIKE '%' || char(65533) || '%'
+  `);
+}
 
 /**
  * Normalize duplicate groups to a single level: every duplicate_of points

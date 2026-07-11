@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import { sanitizeHtml } from './html.js';
+import { charsetFromContentType, decodeBytes } from './charset.js';
 
 const MAX_REDIRECTS = 5;
 
@@ -100,7 +101,17 @@ export async function fetchArticleText(
   if (type && !type.includes('html')) return null;
 
   try {
-    const dom = new JSDOM(await res.text(), { url });
+    // res.text() always decodes as UTF-8 regardless of the page's declared
+    // charset (see src/charset.js) — still commonly iso-8859-1/windows-1252
+    // on older sites, which would otherwise turn every accented character
+    // into a U+FFFD replacement in the stored full_content.
+    const bytes = Buffer.from(await res.arrayBuffer());
+    const head = bytes.subarray(0, 1024).toString('latin1');
+    const charset =
+      charsetFromContentType(type) ??
+      /<meta[^>]+charset=["']?\s*([\w-]+)/i.exec(head)?.[1] ??
+      'utf-8';
+    const dom = new JSDOM(decodeBytes(bytes, charset), { url });
     const article = new Readability(dom.window.document).parse();
     if (!article?.textContent?.trim()) return null;
     return {

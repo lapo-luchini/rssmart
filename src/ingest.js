@@ -1,5 +1,6 @@
 import Parser from 'rss-parser';
 import { sanitizeHtml } from './html.js';
+import { charsetFromContentType, decodeBytes } from './charset.js';
 
 // Feed-provided links end up in <a href> in the UI: allow http(s) only.
 const httpUrl = (u) =>
@@ -70,14 +71,10 @@ export async function fetchFeedXml(url, timeoutMs = 30_000) {
   const bytes = Buffer.from(await res.arrayBuffer());
   const head = bytes.subarray(0, 512).toString('latin1');
   const charset =
-    /charset=["']?([\w-]+)/i.exec(res.headers.get('content-type') ?? '')?.[1] ??
+    charsetFromContentType(res.headers.get('content-type')) ??
     /<\?xml[^>]*encoding=["']([\w-]+)["']/i.exec(head)?.[1] ??
     'utf-8';
-  try {
-    return new TextDecoder(charset).decode(bytes);
-  } catch {
-    return bytes.toString('utf8'); // unknown label: best effort
-  }
+  return decodeBytes(bytes, charset);
 }
 
 /** Fetch one feed and insert its new items. Returns the new-article count. */

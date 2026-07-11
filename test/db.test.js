@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb } from './helpers.js';
-import { repairDuplicateGroups, openDb } from '../src/db.js';
+import { repairDuplicateGroups, repairMojibake, openDb } from '../src/db.js';
 
 test('openDb sets a non-zero busy_timeout so concurrent writers wait rather than fail immediately', () => {
   // better-sqlite3 waits out lock contention by default; bun:sqlite
@@ -41,4 +41,27 @@ test('repairDuplicateGroups breaks cycles and flattens chains', () => {
   repairDuplicateGroups(db);
   assert.equal(dup(3), 1);
   assert.equal(dup(5), 4);
+});
+
+test('repairMojibake nulls out full_content corrupted by a wrong-charset decode', () => {
+  const db = tempDb();
+  db.prepare("INSERT INTO feeds (id, url) VALUES (1, 'http://f')").run();
+  const ins = db.prepare(
+    'INSERT INTO articles (id, feed_id, guid, title, full_content) VALUES (?, 1, ?, ?, ?)',
+  );
+  ins.run(1, 'g1', 'Corrupted', 'Citt� e perch�, gi� pronta');
+  ins.run(2, 'g2', 'Clean', '<p>Perfectly good extracted text.</p>');
+  ins.run(3, 'g3', 'No content', null);
+
+  repairMojibake(db);
+
+  const fullContent = (id) =>
+    db.prepare('SELECT full_content FROM articles WHERE id = ?').get(id).full_content;
+  assert.equal(fullContent(1), null, 'corrupted full_content cleared for re-fetch');
+  assert.equal(fullContent(2), '<p>Perfectly good extracted text.</p>', 'clean content left alone');
+  assert.equal(fullContent(3), null);
+
+  // idempotent
+  repairMojibake(db);
+  assert.equal(fullContent(2), '<p>Perfectly good extracted text.</p>');
 });
