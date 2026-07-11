@@ -152,21 +152,33 @@ day-one spec was retired for exactly that reason; it's in git history).
   button row.
 - **Triage's full-article view is inline, not the reader overlay.**
   Reuses the same `GET /api/articles/:id/reader` endpoint the reader
-  overlay uses (see above), but renders the result inside the triage card itself
-  (below the vote row), not as a full-screen takeover — triage is
-  explicitly about using screen space efficiently for rapid voting, so a
-  modal would work against its own premise. Unlike the reader overlay,
-  expanding does *not* mark the article read: previewing the full text
-  ahead of a vote/skip shouldn't fast-track it out of the queue by itself
+  overlay uses (see above), but renders the result below the triage card
+  (a sibling in `.triage-panel`, not nested inside `.triage-card`), not as
+  a full-screen takeover — triage is explicitly about using screen space
+  efficiently for rapid voting, so a modal would work against its own
+  premise. It's deliberately a *sibling* rather than nested inside the
+  card: `.triage-card` stays narrow (34rem, centered, short line lengths
+  for a title/summary skim), while `.triage-content` gets its own wider
+  max-width (44rem, matching the app shell's own content width) —
+  requested after the first version nested it inside the card and
+  inherited its narrower width, making long articles read as an
+  unnecessarily tall, narrow column. More horizontal room means fewer
+  wrapped lines per paragraph, i.e. less vertical scrolling for the same
+  text, not just a wider box. Unlike the reader overlay, expanding does
+  *not* mark the article read: previewing the full text ahead of a
+  vote/skip shouldn't fast-track it out of the queue by itself
   (voting/skipping already does that, per the entry above). The expand
   state resets on advance/back/new-batch since it's a per-card, transient
-  peek, not something that should carry across cards. A real "open
-  original ↗" link sits next to the byline regardless of expand state,
-  for the cases where the extraction isn't enough — same reasoning as the
-  reader overlay's own escape hatch: an occasional, deliberate new-tab
-  open doesn't reintroduce the wrong-tab-focus annoyance that motivated
-  replacing the *default* open action with the overlay in the first
-  place, since that annoyance scales with frequency of use, not existence.
+  peek, not something that should carry across cards. `p` (or clicking the
+  title) toggles it; `o` (or a real "open original ↗" link next to the
+  byline, shown regardless of expand state) opens the actual source page
+  in a new tab via `window.open` — safe from popup blockers since it's a
+  synchronous call inside the keydown handler, i.e. a direct user gesture.
+  Same reasoning as the reader overlay's own escape hatch: an occasional,
+  deliberate new-tab open doesn't reintroduce the wrong-tab-focus
+  annoyance that motivated replacing the *default* open action with the
+  overlay in the first place, since that annoyance scales with frequency
+  of use, not existence.
 - **In-page reader overlay (2026-07-11), not an iframe.** Opening an article
   in a new tab and closing it with Ctrl-W left the reader on whatever tab
   happened to be next, not the tab they came from — reported as a real

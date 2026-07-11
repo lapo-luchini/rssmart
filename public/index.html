@@ -146,9 +146,10 @@
       <div class="story-meta">
         <span class="source">{{ triageCurrent.feed_title || 'feed' }}</span>
         <time>{{ ago(triageCurrent.published_at || triageCurrent.created_at) }}</time>
-        <a v-if="triageCurrent.url" class="mark" :href="triageCurrent.url" target="_blank" rel="noopener">open original ↗</a>
+        <a v-if="triageCurrent.url" class="mark" :href="triageCurrent.url" target="_blank" rel="noopener"
+           title="open in a new tab (o)">open original ↗</a>
       </div>
-      <h2 class="triage-title" title="read full article" @click="toggleTriageContent">{{ triageCurrent.title }}</h2>
+      <h2 class="triage-title" title="read full article (p)" @click="toggleTriageContent">{{ triageCurrent.title }}</h2>
       <p class="triage-summary" v-if="triageCurrent.summary">{{ triageCurrent.summary }}</p>
       <p class="notice" v-else>Not classified yet — no summary available.</p>
       <div class="chips" v-if="triageCurrent.topics.length">
@@ -162,13 +163,13 @@
         <button class="never" @click="triageVote(-2)" title="Page Down">▼▼<br>never</button>
         <button class="skip" @click="triageSkip()" title="→, space or enter">→<br>skip</button>
       </div>
-      <div v-if="triageExpanded" class="triage-content">
-        <p v-if="triageContentLoading" class="notice">Loading…</p>
-        <p v-else-if="!triageContent" class="notice">No content available.</p>
-        <div v-else v-html="triageContent" class="reader-body"></div>
-        <em v-if="triageContentSource === 'feed'" class="feed-notice"
-            title="the full article couldn't be fetched or extracted; showing the feed's own summary">feed excerpt only</em>
-      </div>
+    </div>
+    <div v-if="triageExpanded" class="triage-content">
+      <p v-if="triageContentLoading" class="notice">Loading…</p>
+      <p v-else-if="!triageContent" class="notice">No content available.</p>
+      <div v-else v-html="triageContent" class="reader-body"></div>
+      <em v-if="triageContentSource === 'feed'" class="feed-notice"
+          title="the full article couldn't be fetched or extracted; showing the feed's own summary">feed excerpt only</em>
     </div>
   </section>
 

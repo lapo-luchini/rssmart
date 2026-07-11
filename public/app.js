@@ -350,6 +350,13 @@ createApp({
       }
     },
 
+    // A direct new-tab open, same escape hatch as the reader overlay's
+    // "open original ↗" link, just keyboard-reachable — window.open here
+    // is a synchronous response to a keydown, so it isn't popup-blocked.
+    openTriageOriginal() {
+      if (this.triageCurrent?.url) window.open(this.triageCurrent.url, '_blank', 'noopener');
+    },
+
     handleGlobalKey(e) {
       if (this.readerArticle) {
         if (e.key === 'Escape') {
@@ -370,11 +377,14 @@ createApp({
         ArrowRight: () => this.triageSkip(),
         ' ': () => this.triageSkip(),
         Enter: () => this.triageSkip(),
+        p: () => this.toggleTriageContent(),
+        o: () => this.openTriageOriginal(),
         Escape: () => this.setView(this.view),
       };
-      if (actions[e.key]) {
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if (actions[key]) {
         e.preventDefault();
-        actions[e.key]();
+        actions[key]();
       }
     },
 

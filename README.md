@@ -117,10 +117,12 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   `PgDn` never, `←`/`⌫` back, `→`/`space`/`enter` skip (marks read without
   voting), `esc` exit. The on-screen buttons form a cross matching this
   layout: PgUp/PgDn are the outer top/bottom buttons, back/skip flank the
-  middle two. Click the title (or tap it) to expand the full extracted
-  article inline, below the vote buttons, without leaving triage or
-  marking it read — and **open original ↗** next to the byline is a real
-  new-tab link for the cases where the extraction isn't enough. Aimed
+  middle two. `p` (or click the title) expands the full extracted article
+  inline below the vote buttons — wider than the card itself, so long
+  paragraphs cost fewer scrolled lines — without leaving triage or marking
+  it read; `o` (or **open original ↗** next to the byline) opens the real
+  source page in a new tab for the cases where the extraction isn't
+  enough. Aimed
   squarely at the sparsity problem: a smarter algorithm can't beat more
   training data, and this is the fastest way to generate it.
 - ▲ / ▼ vote to teach it: one click = interesting (±1), a second click = WOW

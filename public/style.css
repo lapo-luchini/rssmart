@@ -493,7 +493,12 @@ body {
 
 /* ---- triage: fast, keyboard-driven voting through the unread backlog --- */
 
-.triage-panel { display: flex; justify-content: center; padding: 1.2rem 0 3rem; }
+.triage-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.2rem 0 3rem;
+}
 
 .triage-card {
   width: 100%;
@@ -576,9 +581,13 @@ body {
 .triage-controls .less:hover,
 .triage-controls .never:hover { border-color: var(--down); color: var(--down); }
 
+/* Wider than .triage-card on purpose: more horizontal room means fewer
+   wrapped lines per paragraph, so reading the full article costs less
+   vertical (scroll) space, not just more of it. */
 .triage-content {
   margin: 1.5rem auto 0;
-  max-width: 34rem;
+  width: 100%;
+  max-width: 44rem;
   padding: 0.9rem 1.1rem;
   background: #fff;
   border: 1px solid var(--hairline);
