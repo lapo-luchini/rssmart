@@ -127,6 +127,32 @@ day-one spec was retired for exactly that reason; it's in git history).
   passive scrolling — this is a narrower, session-scoped exception to
   "only explicit votes train" (skip itself still isn't a training
   signal, it just clears the article from the unread queue).
+- **In-page reader overlay (2026-07-11), not an iframe.** Opening an article
+  in a new tab and closing it with Ctrl-W left the reader on whatever tab
+  happened to be next, not the tab they came from — reported as a real
+  annoyance. A literal `<iframe src="article-url">` was the first idea, but
+  many sites refuse to be framed (`X-Frame-Options`/CSP `frame-ancestors`),
+  so it'd fail unpredictably per-source. Instead, `GET
+  /api/articles/:id/reader` (`getReaderContent` in `src/enrich.js`) serves
+  our own extracted text: cached `full_content` if present, otherwise a
+  live fetch of the origin page through the same `fetchArticleText` and
+  "keep only if it beats the feed's own text" guard the enrichment pipeline
+  already uses (avoids the same footer/nav-extraction failure mode), else
+  the feed's own excerpt. A win from a live fetch is persisted into
+  `full_content`, so later reads (and re-enrichment) get it for free. The
+  overlay itself (`public/app.js` `openReader`/`closeReader`) is a plain
+  boolean-gated full-screen div, not a hash route — closing it returns to
+  whatever view/panel was already active (including mid-triage, on the
+  same card) rather than navigating anywhere. "open original ↗" inside the
+  overlay remains a real `target="_blank"` link for the cases where the
+  live page is actually wanted.
+- **Sans-serif for all reading content, not just the reader overlay.** The
+  `--serif` CSS variable was removed outright (reader preference, stated
+  directly, not scoped to one feature) — `.story-body`, `.story-summary`,
+  `.triage-title/-summary` and the reader body all use `--sans`
+  (`system-ui` etc.) now. No separate "reading" font stack was introduced:
+  system-ui renders well at both UI-chrome and article-body sizes, so
+  reusing one stack was simpler than maintaining two.
 
 ## How the cosine math actually runs
 

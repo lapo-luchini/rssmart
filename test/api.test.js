@@ -239,6 +239,15 @@ test('article detail includes content; unknown id -> 404', async () => {
   assert.equal(missing.status, 404);
 });
 
+test('reader endpoint: no URL falls back to feed content; unknown id -> 404', async () => {
+  const ok = await get(`/api/articles/${ids.fresh}/reader`);
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.body, { html: 'body', source: 'feed' });
+
+  const missing = await get('/api/articles/99999/reader');
+  assert.equal(missing.status, 404);
+});
+
 test('voting validates input, persists and recomputes scores', async () => {
   for (const vote of [5, -3, 1.5, '1']) {
     const bad = await post(`/api/articles/${ids.sporty}/vote`, { vote });

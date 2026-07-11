@@ -41,6 +41,10 @@ createApp({
       expandedVersions: {},
       flashId: null,
       scoreDetailId: null,
+      readerArticle: null,
+      readerHtml: '',
+      readerSource: null,
+      readerLoading: false,
       loading: false,
       error: null,
       prefByTopic: {},
@@ -94,7 +98,7 @@ createApp({
     // back/forward, and a reload stays on the current tab.
     this.applyRoute(location.hash, { replace: true });
     window.addEventListener('hashchange', () => this.applyRoute(location.hash));
-    window.addEventListener('keydown', this.handleTriageKey);
+    window.addEventListener('keydown', this.handleGlobalKey);
     this.reload();
     this.loadSidebarData();
   },
@@ -303,7 +307,14 @@ createApp({
       }
     },
 
-    handleTriageKey(e) {
+    handleGlobalKey(e) {
+      if (this.readerArticle) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          this.closeReader();
+        }
+        return;
+      }
       if (this.panel !== 'triage') return;
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
       const actions = {
@@ -405,6 +416,33 @@ createApp({
         }
       }
       if (!article.read_at) this.toggleRead(article);
+    },
+
+    // In-page reader: full extracted text in an overlay, instead of a new
+    // tab (which used to steal tab focus on close). "open original ↗" in
+    // the overlay remains as the real-new-tab escape hatch.
+    async openReader(article) {
+      this.readerArticle = article;
+      this.readerHtml = '';
+      this.readerSource = null;
+      this.readerLoading = true;
+      if (!article.read_at) this.toggleRead(article);
+      try {
+        const data = await this.api(`/api/articles/${article.id}/reader`);
+        if (this.readerArticle !== article) return; // closed or switched while loading
+        this.readerHtml = data.html;
+        this.readerSource = data.source;
+      } catch (err) {
+        if (this.readerArticle !== article) return;
+        this.error = `Cannot load article: ${err.message}`;
+        this.readerArticle = null;
+      } finally {
+        if (this.readerArticle === article) this.readerLoading = false;
+      }
+    },
+
+    closeReader() {
+      this.readerArticle = null;
     },
 
     async addFeed() {

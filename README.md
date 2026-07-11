@@ -118,6 +118,13 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   (±2, counts double in every signal), a third clears. Expanding a story
   marks it read. Topic chips and each story's left edge are tinted by
   learned preference: green = liked, red = disliked.
+- **open ↗** opens an in-page reader instead of a new tab (closing a tab used
+  to leave you on whatever tab happened to be next, not the one you came
+  from). It shows our own extracted full-text — many sites refuse to be
+  iframed — fetching the origin page on demand if the feed's own text looks
+  thin. `esc` or **← back** returns to exactly where you were; **open
+  original ↗** is still there as a real new tab for when you want the live
+  page. Vote and mark-read controls stay reachable from the reader's top bar.
 - Disagree with a classification? Expand the article and hit **reclassify**,
   optionally with a note ("this is about hardware, not software") — the note
   is stored with the article, shown to the LLM together with the previous

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { fetchArticleText, isPrivateAddress } from '../src/fetchpage.js';
-import { enrichPending } from '../src/enrich.js';
+import { enrichPending, getReaderContent } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
 
@@ -128,6 +128,76 @@ test('thin RSS entries get their origin page fetched for the LLM; failures fall 
     assert.equal(rows[2].id, footer);
   } finally {
     await stub.close();
+    await site.close();
+  }
+});
+
+function seedArticle(db, { url = null, content = 'body', fullContent = null } = {}) {
+  db.prepare("INSERT OR IGNORE INTO feeds (id, url) VALUES (1, 'http://f')").run();
+  const { lastInsertRowid } = db.prepare(`
+    INSERT INTO articles (feed_id, guid, title, url, content, full_content, status)
+    VALUES (1, ?, 'Article', ?, ?, ?, 'enriched')
+  `).run(`g-${Math.random()}`, url, content, fullContent);
+  return db.prepare(
+    'SELECT id, url, content, full_content FROM articles WHERE id = ?',
+  ).get(lastInsertRowid);
+}
+
+test('getReaderContent: cached full_content wins without touching the network', async () => {
+  const db = tempDb();
+  const article = seedArticle(db, {
+    url: 'http://127.0.0.1:1/would-fail', // proves this path is never fetched
+    fullContent: '<p>Already extracted.</p>',
+  });
+  const result = await getReaderContent(db, article, testConfig());
+  assert.deepEqual(result, { html: '<p>Already extracted.</p>', source: 'cached' });
+});
+
+test('getReaderContent: no URL falls back to the feed content as-is', async () => {
+  const db = tempDb();
+  const article = seedArticle(db, { url: null, content: 'Just the feed excerpt.' });
+  const result = await getReaderContent(db, article, testConfig());
+  assert.deepEqual(result, { html: 'Just the feed excerpt.', source: 'feed' });
+});
+
+test('getReaderContent: a winning live fetch is used and persisted', async () => {
+  const db = tempDb();
+  const site = await startPageServer();
+  try {
+    const article = seedArticle(db, { url: `${site.url}/article`, content: 'thin teaser' });
+    const result = await getReaderContent(db, article, testConfig());
+    assert.equal(result.source, 'fetched');
+    assert.match(result.html, /ZETAFRAME/);
+    const stored = db.prepare('SELECT full_content FROM articles WHERE id = ?').get(article.id);
+    assert.match(stored.full_content, /ZETAFRAME/, 'persisted for future reads');
+  } finally {
+    await site.close();
+  }
+});
+
+test('getReaderContent: a losing extraction (footer-only) keeps the feed content, unpersisted', async () => {
+  const db = tempDb();
+  const site = await startPageServer();
+  try {
+    const longFeedText = 'A perfectly good RSS summary of the actual article content. '.repeat(3);
+    const article = seedArticle(db, { url: `${site.url}/footer-only`, content: longFeedText });
+    const result = await getReaderContent(db, article, testConfig());
+    assert.deepEqual(result, { html: longFeedText, source: 'feed' });
+    const stored = db.prepare('SELECT full_content FROM articles WHERE id = ?').get(article.id);
+    assert.equal(stored.full_content, null, 'a worse extraction is never persisted');
+  } finally {
+    await site.close();
+  }
+});
+
+test('getReaderContent: a failed fetch (404) falls back to the feed content gracefully', async () => {
+  const db = tempDb();
+  const site = await startPageServer();
+  try {
+    const article = seedArticle(db, { url: `${site.url}/missing`, content: 'Feed content survives.' });
+    const result = await getReaderContent(db, article, testConfig());
+    assert.deepEqual(result, { html: 'Feed content survives.', source: 'feed' });
+  } finally {
     await site.close();
   }
 });

@@ -147,7 +147,7 @@
         <span class="source">{{ triageCurrent.feed_title || 'feed' }}</span>
         <time>{{ ago(triageCurrent.published_at || triageCurrent.created_at) }}</time>
       </div>
-      <h2 class="triage-title">{{ triageCurrent.title }}</h2>
+      <h2 class="triage-title" title="read full article" @click="openReader(triageCurrent)">{{ triageCurrent.title }}</h2>
       <p class="triage-summary" v-if="triageCurrent.summary">{{ triageCurrent.summary }}</p>
       <p class="notice" v-else>Not classified yet — no summary available.</p>
       <div class="chips" v-if="triageCurrent.topics.length">
@@ -221,8 +221,7 @@
                   :title="a.vote === -1 ? 'never again! (click once more to clear)' : a.vote === -2 ? 'clear vote' : 'less like this'"
                   aria-label="Less like this">{{ a.vote === -2 ? '▼▼' : '▼' }}</button>
           <button class="mark" @click="toggleRead(a)">{{ a.read_at ? 'unread' : 'mark read' }}</button>
-          <a v-if="a.url" class="mark" :href="a.url" target="_blank" rel="noopener"
-             @click="!a.read_at && toggleRead(a)">open ↗</a>
+          <button v-if="a.url" class="mark" @click="openReader(a)">open ↗</button>
         </span>
       </div>
 
@@ -255,6 +254,35 @@
       {{ loading ? 'loading…' : `more (${articles.length} of ${total})` }}
     </button>
   </main>
+
+  <div class="reader-overlay" v-if="readerArticle">
+    <div class="reader-bar">
+      <button class="mark reader-close" @click="closeReader">← back (esc)</button>
+      <span class="reader-spacer"></span>
+      <button class="vote up" :class="{ on: readerArticle.vote > 0, max: readerArticle.vote === 2 }"
+              @click="voteCycle(readerArticle, 1)"
+              :title="readerArticle.vote === 1 ? 'WOW! (click once more to clear)' : readerArticle.vote === 2 ? 'clear vote' : 'more like this'"
+              aria-label="More like this">{{ readerArticle.vote === 2 ? '▲▲' : '▲' }}</button>
+      <button class="vote down" :class="{ on: readerArticle.vote < 0, max: readerArticle.vote === -2 }"
+              @click="voteCycle(readerArticle, -1)"
+              :title="readerArticle.vote === -1 ? 'never again! (click once more to clear)' : readerArticle.vote === -2 ? 'clear vote' : 'less like this'"
+              aria-label="Less like this">{{ readerArticle.vote === -2 ? '▼▼' : '▼' }}</button>
+      <button class="mark" @click="toggleRead(readerArticle)">{{ readerArticle.read_at ? 'unread' : 'mark read' }}</button>
+      <a v-if="readerArticle.url" class="mark" :href="readerArticle.url" target="_blank" rel="noopener">open original ↗</a>
+    </div>
+    <article class="reader-content">
+      <h1 class="reader-title">{{ readerArticle.title }}</h1>
+      <div class="story-meta reader-meta">
+        <span class="source">{{ readerArticle.feed_title || 'feed' }}</span>
+        <time>{{ ago(readerArticle.published_at || readerArticle.created_at) }}</time>
+        <em v-if="readerSource === 'feed'" class="feed-notice"
+            title="the full article couldn't be fetched or extracted; showing the feed's own summary">feed excerpt only</em>
+      </div>
+      <p v-if="readerLoading" class="notice">Loading…</p>
+      <p v-else-if="!readerHtml" class="notice">No content available.</p>
+      <div v-else v-html="readerHtml" class="reader-body"></div>
+    </article>
+  </div>
 
 </div>
 <script type="module" src="app.js"></script>

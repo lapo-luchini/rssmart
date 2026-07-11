@@ -119,6 +119,32 @@ async function articleText(db, article, enrichCfg) {
 }
 
 /**
+ * Best available full text for DISPLAY (the reader view): always tries a
+ * live fetch of the origin page, unlike the enrichment pipeline above,
+ * which skips fetching once the RSS text is already "enough to classify"
+ * — reading wants the fullest text, not just enough to judge topic/depth.
+ * Same "keep only if it beats the feed's own text" guard as enrichment,
+ * to avoid the same footer/nav-extraction bug (see articleText above).
+ * Persists a win into full_content, so future reads (and re-enrichment)
+ * get it for free.
+ */
+export async function getReaderContent(db, article, config) {
+  if (article.full_content) return { html: article.full_content, source: 'cached' };
+  const rssHtml = article.content ?? '';
+  if (!article.url) return { html: rssHtml, source: 'feed' };
+
+  const page = await fetchArticleText(article.url, {
+    allowPrivate: config.enrich.allowPrivateFetch,
+  }).catch(() => null);
+
+  if (!page || stripHtml(page.html).length <= stripHtml(rssHtml).length) {
+    return { html: rssHtml, source: 'feed' };
+  }
+  db.prepare('UPDATE articles SET full_content = ? WHERE id = ?').run(page.html, article.id);
+  return { html: page.html, source: 'fetched' };
+}
+
+/**
  * Embeddings from different models live in different vector spaces and
  * must never be compared. The model that produced the stored vectors is
  * recorded in meta; when the configured embedModel differs (or vectors

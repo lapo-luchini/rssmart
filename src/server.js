@@ -2,6 +2,7 @@ import express from 'express';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
+import { getReaderContent } from './enrich.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
@@ -198,6 +199,24 @@ export function createApp(db, config) {
     `).get(req.params.id);
     if (!row) return res.status(404).json({ error: 'not found' });
     res.json(rowToArticle(row));
+  });
+
+  // The in-page reader overlay's content: the fullest readable text we
+  // have, fetching the origin page on demand (and caching a win into
+  // full_content) rather than settling for a possibly-truncated RSS
+  // teaser. See getReaderContent's doc comment for the "keep only if it
+  // beats the feed's own text" guard.
+  app.get('/api/articles/:id/reader', async (req, res) => {
+    const article = db.prepare(
+      'SELECT id, url, content, full_content FROM articles WHERE id = ?',
+    ).get(req.params.id);
+    if (!article) return res.status(404).json({ error: 'not found' });
+    try {
+      const { html, source } = await getReaderContent(db, article, config);
+      res.json({ html, source });
+    } catch (err) {
+      res.status(502).json({ error: `could not load article content: ${err.message}` });
+    }
   });
 
   app.post('/api/articles/:id/vote', (req, res) => {
