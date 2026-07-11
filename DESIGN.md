@@ -253,6 +253,16 @@ Two paths, with very different scaling:
 
 ## Deferred ideas
 
+- Harden `sanitizeHtml` (`src/html.js`): it's a regex blocklist (strips
+  `<script>/<style>/<iframe>/<object>/<embed>/<form>`, `on*` attributes,
+  `javascript:` URLs), not a parser-based allowlist, so it's more exposed to
+  malformed/nested-markup evasion than something like DOMPurify or
+  `sanitize-html`. Flagged by an automated security review of the reader
+  overlay's `v-html` binding (2026-07-11); not a new gap introduced by that
+  feature — every `v-html` in the app (`a.content`, `readerHtml`) has always
+  relied on this same write-time sanitization (`ingest.js`, `fetchpage.js`).
+  Swapping in a real HTML-sanitizer library would be a codebase-wide change,
+  not a one-file fix, which is why it's deferred rather than done inline.
 - Non-RSS sources (the feeds table would grow a `kind` column).
 - Bookmarkable filter state in the URL hash (tabs already have routes).
 - "Promote this note to guidelines" one-click from a reclassify note.
