@@ -224,13 +224,26 @@ day-one spec was retired for exactly that reason; it's in git history).
   `undefined`). So `bun run dbstats` had been invoking real Node the
   whole time, never `bun:sqlite` at all — the two runtimes' outputs
   matched because they were the same runtime. `package.json` now has a
-  `dbstats:bun` entry (`bun scripts/dbstats.js`, no `run`) specifically
-  so this can't happen again, and the same gotcha applies to `cron`/
-  `serve`: `npm`/`pnpm`/`bun run cron` (or `serve`) always spawns real
-  Node regardless of which package manager invokes it, since those
-  scripts also just say `node` — invoke `bin/rssmart.js` directly with
-  the desired binary (`bun bin/rssmart.js serve`) to actually pick a
-  runtime, don't rely on `run`.
+  whole time, never `bun:sqlite` at all — the two runtimes' outputs
+  matched because they were the same runtime. The same gotcha already
+  existed, undiscovered, for `cron`/`serve`/`postinstall`, and a
+  genuinely bun-only machine (verified live with an isolated `PATH`
+  containing nothing but a `bun` binary) would hit it immediately on a
+  fresh clone: `bun install`'s own `postinstall` hook spawns real `node`
+  the same way, so `scripts/vendor.js` — required for the app to serve
+  at all — would never run there at all if Node weren't *also* installed.
+  Fixed at the source rather than by telling people to remember to
+  invoke `bin/rssmart.js` directly: all four scripts (`cron`, `serve`,
+  `dbstats`, `postinstall`) are now `if command -v bun >/dev/null 2>&1;
+  then exec bun ...; else exec node ...; fi` — a plain POSIX shell
+  conditional, not a Node-side or Bun-side trick, so it doesn't depend on
+  either runtime being present to make the *decision*, only on whichever
+  one it ends up choosing. Verified live in three isolated `PATH`
+  configurations: both installed (prefers Bun), only Bun reachable
+  (works, no Node anywhere), only Node reachable (falls back correctly).
+  `command -v` is a shell builtin, not an external program, so even a
+  `PATH` containing nothing but `bun`'s own directory is enough for the
+  conditional itself to evaluate correctly.
 - **`busy_timeout` is set explicitly, not left to the driver's default.**
   better-sqlite3 waits out lock contention by default; bun:sqlite does not
   — a real `SQLITE_BUSY` crash surfaced under genuine concurrent cron +

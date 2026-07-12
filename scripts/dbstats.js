@@ -54,12 +54,11 @@ console.log();
 
 // dbstat gives real, precise per-table/index byte sizes straight from
 // SQLite's own page accounting (includes row/page overhead, unlike a
-// LENGTH()-sum estimate) — but it's a compile-time SQLite option, not
-// guaranteed by any driver. better-sqlite3 always has it; bun:sqlite's
-// support turns out to depend on how that particular bun binary was
-// built (the official upstream release lacks it, at least one
-// NixOS-packaged build has it — not a fixed fact about "Bun", so this
-// probes for it live rather than branching on the runtime.
+// LENGTH()-sum estimate) — but it's a compile-time SQLite option.
+// better-sqlite3 always has it; bun:sqlite (confirmed on both the
+// official release and a NixOS-packaged build) does not. Probed for
+// live rather than assumed, since a fact this specific isn't worth
+// hardcoding into a runtime branch.
 let dbstatRows = null;
 try {
   dbstatRows = db.prepare('SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC').all();

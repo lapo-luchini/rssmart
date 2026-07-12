@@ -40,15 +40,23 @@ own dependency chain — SSR, SFC compilation, none of it used here — is
 ~28MB for a single 170KB file). Already-vendored installs skip the fetch.
 
 Runs on both **Node.js (24+)** and **[Bun](https://bun.sh)**: `src/db.js`
-picks `bun:sqlite` under Bun and `better-sqlite3` under Node automatically,
-so `bun bin/rssmart.js serve` / `bun bin/rssmart.js cron` work exactly like
-their `node` equivalents. No config needed — just use whichever `node`/`bun`
-binary is on your `PATH`. Invoke the file directly (`bun bin/rssmart.js
-...`) to actually run under Bun — `npm`/`pnpm`/`bun run cron` and `run
-serve` always spawn a real `node` subprocess regardless of which package
-manager you use, since those package.json scripts are plain shell commands
-that literally say `node`; `bun run <script>` does not translate that to
-Bun's own runtime, it just shells out to whatever `node` is on `PATH`.
+picks `bun:sqlite` under Bun and `better-sqlite3` under Node automatically.
+Invoking `bin/rssmart.js` directly (`bun bin/rssmart.js serve` / `node
+bin/rssmart.js serve`) always uses the binary you named. The `cron`/
+`serve`/`dbstats`/`postinstall` package.json scripts pick whichever runtime
+is actually installed on their own (`bun`, if present, else `node`) —
+`npm`/`pnpm`/`bun run serve` all work the same way regardless of which
+package manager invokes them, and so does a genuinely single-runtime
+machine with only one of the two installed (verified live: an isolated
+Bun-only `PATH`, with no `node` reachable at all, ran `bun run dbstats`
+and its own `postinstall` hook correctly; a Bun-free `PATH` correctly fell
+back to `node` for the same two). This isn't automatic in package.json —
+a script that just says `"node ..."` never becomes Bun's own runtime
+merely because `bun run` was the one asked to run it (confirmed live: it
+spawns a real `node` subprocess, `typeof Bun` is `undefined` inside it) —
+so each of those four scripts is `if command -v bun >/dev/null 2>&1; then
+exec bun ...; else exec node ...; fi` rather than a single hardcoded
+interpreter name.
 Node 24 is required for native
 `Float16Array` (embeddings are stored as float16 — see below); if you're
 on an older Node, install 24 via `nvm install 24` and rebuild the native
@@ -228,18 +236,17 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   columns — SQLite stores the BLOB as-is), which is why full-text search only
   matches title/summary, not article bodies; use **semantic** search (embeds
   a sample of the full text) to search by meaning instead.
-- `pnpm run dbstats` (or `node scripts/dbstats.js`) reports file size, row
-  counts, and a per-column breakdown of the `articles` table (the one that
-  dominates the file) — read-only, safe to run anytime. Table/index-level
-  sizes come from SQLite's own `dbstat` accounting, always present under
-  Node/better-sqlite3 but not (at least as far as tested) under
-  `bun:sqlite` — the script probes for it live and just skips that one
-  section if it's missing, everything else still works either way. To
-  actually check under Bun's own SQLite, run `pnpm run dbstats:bun` (or
-  `bun scripts/dbstats.js` directly) — plain `bun run dbstats` runs the
-  `dbstats` script's literal command, which says `node`, so it spawns a
-  real `node` subprocess and tells you nothing about `bun:sqlite` at all.
-  Example, a real ~6,200-article database (38.3 MB total):
+- `pnpm run dbstats` (or `node`/`bun scripts/dbstats.js` directly) reports
+  file size, row counts, and a per-column breakdown of the `articles`
+  table (the one that dominates the file) — read-only, safe to run
+  anytime. Table/index-level sizes come from SQLite's own `dbstat`
+  accounting, always present under Node/better-sqlite3 but not (at least
+  as far as tested, on two different builds) under `bun:sqlite` — the
+  script probes for it live and just skips that one section if it's
+  missing, everything else still works either way. `pnpm run dbstats`
+  prefers Bun when it's installed, so on a machine with both, run `node
+  scripts/dbstats.js` explicitly if you want the fuller Node-side report
+  by default. Example, a real ~6,200-article database (38.3 MB total):
 
   | column | size | notes |
   |---|---|---|
