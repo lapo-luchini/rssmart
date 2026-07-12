@@ -47,19 +47,61 @@ export function topicPrefs(db) {
   `).all();
 }
 
-/** Similarity-weighted vote average of the k nearest voted articles. */
-function knnScore(row, voted, k) {
-  if (!row.text_embedding || voted.length === 0) return 0;
+/**
+ * Similarity-weighted vote average of the k nearest voted articles.
+ * `scratch` is a pair of same-length arrays (>= k) the caller owns and
+ * reuses across every row in a sweep - maintaining the top-k highest
+ * similarities by insertion into this small sorted-descending window,
+ * instead of the previous filter+map+sort+slice: that allocated a
+ * {sim, vote} object per candidate and sorted the *entire* voted list on
+ * every one of the ~1M row x voted-article pairs a full recompute makes
+ * (170 voted x 6200 rows). Insertion is cheap here because most
+ * candidates never beat the current k-th best once the window fills, and
+ * even the worst case only ever shifts within the k-sized window, never
+ * the full voted list. Ties keep voted's original order (matching
+ * Array.prototype.sort's stable-sort semantics the old code relied on),
+ * since the shift condition is strict (`<`, not `<=`). See DESIGN.md for
+ * the measured effect and why plain arrays, not typed ones.
+ */
+function knnScore(row, voted, k, scratch) {
+  if (!row.text_embedding || voted.length === 0 || k === 0) return 0;
   const vec = bufToVec(row.text_embedding);
-  const nearest = voted
-    .filter((v) => v.id !== row.id)
-    // vote / 2 normalizes the -2..+2 scale into this signal's -1..+1 range
-    .map((v) => ({ sim: Math.max(cosine(vec, v.vec), 0), vote: v.vote / 2 }))
-    .sort((x, y) => y.sim - x.sim)
-    .slice(0, k);
-  const total = nearest.reduce((s, n) => s + n.sim, 0);
-  if (total === 0) return 0;
-  return nearest.reduce((s, n) => s + n.sim * n.vote, 0) / total;
+  const { sims, votes } = scratch;
+  let count = 0;
+
+  for (let j = 0; j < voted.length; j++) {
+    const v = voted[j];
+    if (v.id === row.id) continue;
+    const sim = Math.max(cosine(vec, v.vec), 0);
+    if (count < k) {
+      insertDescending(sims, votes, count, sim, v.vote / 2);
+      count++;
+    } else if (sim > sims[k - 1]) {
+      insertDescending(sims, votes, k - 1, sim, v.vote / 2);
+    }
+  }
+
+  let total = 0;
+  let weighted = 0;
+  for (let i = 0; i < count; i++) {
+    total += sims[i];
+    weighted += sims[i] * votes[i];
+  }
+  return total === 0 ? 0 : weighted / total;
+}
+
+// Shift sim/vote into sims/votes' descending-sorted [0, insertAt] window,
+// overwriting whatever was at insertAt (the first free slot while filling,
+// the worst-ranked slot once full - either way, the entry being replaced).
+function insertDescending(sims, votes, insertAt, sim, vote) {
+  let i = insertAt - 1;
+  while (i >= 0 && sims[i] < sim) {
+    sims[i + 1] = sims[i];
+    votes[i + 1] = votes[i];
+    i--;
+  }
+  sims[i + 1] = sim;
+  votes[i + 1] = vote;
 }
 
 function votedArticles(db) {
@@ -69,9 +111,13 @@ function votedArticles(db) {
   `).all().map((r) => ({ id: r.id, vote: r.vote, vec: bufToVec(r.text_embedding) }));
 }
 
-function scoreParts(row, topicPref, feedPref, voted, weights, knn) {
+function makeKnnScratch(k) {
+  return { sims: new Array(k), votes: new Array(k) };
+}
+
+function scoreParts(row, topicPref, feedPref, voted, weights, knn, scratch) {
   const topics = weights.topics * (topicPref ?? 0);
-  const embedding = weights.embedding * knnScore(row, voted, knn);
+  const embedding = weights.embedding * knnScore(row, voted, knn, scratch);
   const depth = weights.depth * (row.depth ? (row.depth - 3) / 2 : 0);
   const feed = weights.feed * (feedPref ?? 0);
   return { topics, embedding, depth, feed, total: topics + embedding + depth + feed };
@@ -127,6 +173,7 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
     'SELECT id, feed_id, vote, depth, text_embedding FROM articles',
   ).all();
   const voted = votedArticles(db);
+  const scratch = makeKnnScratch(knn);
 
   const save = db.prepare(SAVE_SCORE);
   let i = 0;
@@ -139,7 +186,7 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
       // advancing.
       do {
         const row = rows[i++];
-        const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id), voted, weights, knn);
+        const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id), voted, weights, knn, scratch);
         save.run(s.topics, s.embedding, s.depth, s.feed, s.total, row.id);
       } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
     })();
@@ -178,7 +225,7 @@ export function recomputeOneScore(db, config, articleId) {
   `).get(row.feed_id).pref;
 
   const voted = votedArticles(db);
-  const s = scoreParts(row, topicPref, feedPref, voted, weights, knn);
+  const s = scoreParts(row, topicPref, feedPref, voted, weights, knn, makeKnnScratch(knn));
   db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.total, articleId);
 }
 

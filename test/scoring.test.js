@@ -133,6 +133,65 @@ test('blended score combines topics, embedding kNN, depth and feed', async () =>
   near(c2.score_embedding, 0.3);
 });
 
+test('embedding kNN keeps only the k nearest voted articles, not the whole voted set', async () => {
+  const db = tempDb();
+  const ids = seed(db, [
+    { title: 'v1', vote: 2 },  // WOW up -> vote/2 = 1
+    { title: 'v2', vote: -2 }, // WOW down -> vote/2 = -1
+    { title: 'v3', vote: 1 },
+    { title: 'v4', vote: 1 },
+    { title: 'v5', vote: 1 },  // similarity clamps to 0 - excluded either way
+    { title: 'candidate' },
+  ]);
+  const cos = (deg) => {
+    const rad = (deg * Math.PI) / 180;
+    return vecBuf(Math.cos(rad), Math.sin(rad));
+  };
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(cos(0), ids.candidate);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(cos(0), ids.v1);   // sim 1
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(cos(30), ids.v2);  // sim ~0.866
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(cos(60), ids.v3);  // sim 0.5
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(cos(90), ids.v4);  // sim 0
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(cos(180), ids.v5); // sim -1 -> 0
+
+  const config = testConfig();
+  config.scoring.weights = { topics: 0, embedding: 1, depth: 0, feed: 0 };
+  config.scoring.knn = 2; // fewer than the 5 voted articles - forces top-k truncation
+  await recomputeScores(db, config);
+
+  const embScore = db.prepare('SELECT score_embedding FROM articles WHERE id = ?').get(ids.candidate).score_embedding;
+  // only v1 (sim 1) and v2 (sim ~0.866) survive the k=2 cutoff - v3/v4/v5 must
+  // be excluded even though they'd otherwise contribute to the weighted average
+  const sim1 = 1;
+  const sim2 = Math.cos((30 * Math.PI) / 180);
+  const expected = (sim1 * 1 + sim2 * -1) / (sim1 + sim2);
+  assert.ok(Math.abs(embScore - expected) < 1e-3, `expected ~${expected}, got ${embScore}`);
+});
+
+test('embedding kNN tie at the k-th cutoff keeps the earlier-inserted (lower id) voted article', async () => {
+  const db = tempDb();
+  const ids = seed(db, [
+    { title: 'first', vote: 2 },  // inserted first, tied similarity
+    { title: 'second', vote: -2 }, // inserted second, same similarity as "first"
+    { title: 'candidate' },
+  ]);
+  const vec = vecBuf(1, 0);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec, ids.candidate);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec, ids.first);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec, ids.second);
+
+  const config = testConfig();
+  config.scoring.weights = { topics: 0, embedding: 1, depth: 0, feed: 0 };
+  config.scoring.knn = 1; // only room for one of the two identical-similarity votes
+  await recomputeScores(db, config);
+
+  const embScore = db.prepare('SELECT score_embedding FROM articles WHERE id = ?').get(ids.candidate).score_embedding;
+  // "first" (vote/2 = 1) wins the tie over "second" (vote/2 = -1) - matching
+  // voted's original (insertion) order, the same tie-break a stable sort on
+  // {sim, vote} pairs would have produced.
+  assert.ok(Math.abs(embScore - 1) < 1e-9, `expected 1 (first's vote wins the tie), got ${embScore}`);
+});
+
 test('recomputeOneScore matches a full recomputeScores for that one article, and touches nothing else', async () => {
   const db = tempDb();
   const ids = seed(db, [

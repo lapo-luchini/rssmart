@@ -665,19 +665,44 @@ Two paths, with very different scaling:
   which is why this was implemented and that wasn't). Measured live
   against the real ~6200-article archive: full sweep dropped from
   ~44.7s to **19.2s on Node** (2.3×) — roughly the expected 3× on the
-  raw arithmetic, diluted by `knnScore`'s unchanged array/object
-  overhead (`.filter().map().sort()`, one allocation per pairwise
-  comparison). On Bun it dropped only to **89.4s**, barely below its
-  noisy ~90-115s baseline — telling: it confirms a decent chunk of
-  Bun's slowness was never the norm/sqrt math this optimization
-  removes, but that same `knnScore` array/object overhead JSC seems to
-  handle worse than V8. That overhead (not the arithmetic) is now the
-  likely next lever if the Bun gap ever needs closing further - not
-  done here, flagged for later. The remaining ladder rungs (caching
-  voted vectors instead of re-reading blobs each sweep; sqlite-vec/
-  approximate NN if this ever gets truly huge) are about the sweep's
-  total *duration*, not urgent now that duration no longer blocks
-  anything.
+  raw arithmetic, diluted by `knnScore`'s then-unchanged array/object
+  overhead. On Bun it dropped only to **89.4s**, barely below its
+  noisy ~90-115s baseline.
+
+  **`knnScore`'s array/object overhead optimized next** (`scoring.js`):
+  the old `.filter().map().sort().slice()` allocated a `{sim, vote}`
+  object per candidate and fully sorted the entire voted list, on every
+  one of the ~1M row × voted-article pairs a sweep makes. Replaced with
+  insertion into a small (size k, default 20) descending-sorted window
+  the caller allocates once per sweep and reuses across every row -
+  most candidates never beat the current k-th best once the window
+  fills, and even the worst case only shifts within the k-sized window,
+  never the full voted list. Verified bit-identical output against the
+  real archive (same min/max score before and after, to the last
+  decimal) and against two new unit tests covering what the old
+  suite never exercised - every existing test's `voted.length` was
+  smaller than `k`, so the top-k truncation and tie-at-the-cutoff paths
+  had zero coverage until now.
+
+  Measured impact, and it's a genuinely useful negative result: **Node
+  dropped only to 17.6s** (from 19.2s, ~8%) and **Bun barely moved at
+  all, 89.0s** (from 89.4s). The hypothesis that this array/object
+  churn was Bun's dominant remaining cost was wrong - disproven by
+  measurement, not assumed away. What actually dominates on both
+  runtimes, especially Bun, is simply the volume of `cosine()` calls
+  itself: 1,054,000 of them, each a 512-element multiply-add loop, and
+  JSC runs that loop several times slower than V8 regardless of what
+  wraps it (see the microbenchmark above). Trimming the wrapper code
+  around those calls was worth doing (it's real, verified-correct work,
+  just not a big lever) but doesn't touch the call volume or per-call
+  cost, which is where the time actually goes. The only remaining
+  levers that would touch *that* are the ones already listed below
+  (fewer calls via caching/approximate NN), not further micro-
+  optimization of the surrounding JS. The remaining ladder rungs
+  (caching voted vectors instead of re-reading blobs each sweep;
+  sqlite-vec/approximate NN if this ever gets truly huge) are about the
+  sweep's total *duration*, not urgent now that duration no longer
+  blocks anything.
 - **Nothing prunes articles.** The archive grows forever (~6 KB of
   embeddings per article plus text). Fine for years at current intake;
   see retention above.
