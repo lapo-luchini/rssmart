@@ -55,6 +55,7 @@ createApp({
       loading: false,
       error: null,
       prefByTopic: {},
+      articlesByTopic: {},
       searchTimer: null,
     };
   },
@@ -177,6 +178,7 @@ createApp({
         this.feeds = feeds.filter((f) => f.active);
         this.stats = stats;
         this.prefByTopic = Object.fromEntries(topics.map((t) => [t.name, t.pref]));
+        this.articlesByTopic = Object.fromEntries(topics.map((t) => [t.name, t.articles]));
       } catch {
         /* header extras are non-essential */
       }

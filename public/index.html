@@ -100,7 +100,10 @@
         article and blends the two topics' vote history, permanently.
       </p>
       <div class="topic-merge-row" v-for="p in topicMergeProposals" :key="p.from + '>' + p.to">
-        <span><strong>{{ p.from }}</strong> → <strong>{{ p.to }}</strong></span>
+        <span>
+          <strong>{{ p.from }}</strong> ({{ articlesByTopic[p.from] ?? 0 }}) →
+          <strong>{{ p.to }}</strong> ({{ articlesByTopic[p.to] ?? 0 }})
+        </span>
         <span class="feed-notice">{{ p.reason }}</span>
         <span>
           <button class="mark" @click="applyTopicMerge(p)">merge</button>

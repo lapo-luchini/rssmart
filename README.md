@@ -197,7 +197,9 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   and blends the two topics' vote history permanently, so it's never done
   without an explicit click. A merged-away name is remembered: if the
   classifier suggests it again later, it's silently redirected to the
-  topic you kept rather than recreated.
+  topic you kept rather than recreated. Each proposal shows both topics'
+  article counts, so you can sanity-check the direction (and size of the
+  impact) before merging.
 
 ## Notes
 
