@@ -692,17 +692,72 @@ Two paths, with very different scaling:
   runtimes, especially Bun, is simply the volume of `cosine()` calls
   itself: 1,054,000 of them, each a 512-element multiply-add loop, and
   JSC runs that loop several times slower than V8 regardless of what
-  wraps it (see the microbenchmark above). Trimming the wrapper code
-  around those calls was worth doing (it's real, verified-correct work,
-  just not a big lever) but doesn't touch the call volume or per-call
-  cost, which is where the time actually goes. The only remaining
-  levers that would touch *that* are the ones already listed below
-  (fewer calls via caching/approximate NN), not further micro-
-  optimization of the surrounding JS. The remaining ladder rungs
+  wraps it. Trimming the wrapper code around those calls was worth
+  doing (it's real, verified-correct work) but doesn't touch the call
+  volume or per-call cost, which is where the time actually goes.
+
+  **`altor-vec` (a WASM/HNSW approximate-NN library) considered and
+  rejected**: the whole point of ANN is turning an O(N) scan into
+  roughly O(log N), which only pays off at large N - our voted set
+  was ~170 at the time (log2(170)≈ 7.4, but HNSW's default
+  `ef_search=50` already examines close to a third of the entire
+  dataset at that size, so the algorithmic win is marginal here).
+  It's also approximate, a real correctness-character change for a
+  codebase that had verified every other optimization bit-identical;
+  v0.1.0/53-stars/4-commits with no confirmed Bun support was an
+  unproven dependency risk on top of a marginal, uncertain gain.
+
+  **Hand-rolled WASM instead - and this is the lever that actually
+  worked.** `wasm/cosine-src` (Rust, ~30 lines) compiles to
+  `wasm/cosine.wasm` (~12KB, committed - portable across Node/Bun/OS/
+  architecture, unlike `better-sqlite3`'s native addon, so no rebuild
+  step ever). `src/wasmDot.js` wraps it: `createDotBatcher(candidates,
+  dims)` flattens the voted set into WASM linear memory *once* per
+  sweep, then `.query(vec)` computes every dot product against it in a
+  single call - one JS↔WASM boundary crossing per *article scored*,
+  not per candidate pair, and no Float16→float conversion happening
+  inside a JS loop at all.
+
+  Isolated microbenchmark, matching the real shape exactly (a query per
+  article against N candidates, 512 dims, `Float16Array` throughout -
+  the actual production storage type, not a `Float32Array` stand-in
+  which understates the gap): **~9-10x faster than plain JS on Node,
+  ~46-51x faster on Bun**, consistent from N=170 (today's real count)
+  up through N=8000 (a plausible size after months of continued
+  voting - the per-pair cost is flat across that whole range on both
+  paths, so this holds up as the voted set grows, not just today).
+  This also finally pins down *why* Bun was so much slower: if raw JS
+  is ~51x worse than WASM on Bun and ~9.5x worse on Node, that predicts
+  Bun's plain-JS should be ~5.4x slower than Node's - and the real
+  production sweep was 89s vs 17.6s, a 5.1x gap. Not a coincidence:
+  JSC's `Float16Array` element access specifically (not "JSC is
+  generally slower at loops", the earlier, less precise read) is what's
+  dramatically worse-optimized than V8's.
+
+  Wired into `scoring.js`'s `knnScore` (the only real hot path -
+  `enrich.js`'s `findDuplicate` and `search.js`'s `semanticSearch` stay
+  on plain JS `cosine()`, since neither is a bottleneck at this
+  project's scale and per-call WASM overhead isn't worth paying where
+  volume is low). Verified two ways: a dedicated `wasmDot.test.js`
+  covering the batcher in isolation (correct dot products, mixed
+  `Float16Array`/`Float32Array` input, sequential queries, two
+  independent batchers coexisting safely - the mid-sweep-vote scenario
+  - and dims-mismatch guards that fail loud instead of silently
+  corrupting WASM memory, since raw pointer arithmetic has no bounds
+  checking of its own); and a live before/after diff against the real
+  archive, comparing every article's score between the pre-WASM and
+  WASM code paths: **max deviation 7.7e-08** - float32-vs-float64
+  accumulation noise, utterly dwarfed by the Float16 storage
+  quantization already baked into every stored vector. Measured
+  end-to-end on the real ~6200-article archive: **Node 17.9s → 3.4s
+  (5.3x)**, **Bun ~89s → 3.2s (~27.7x)** - Bun is now marginally
+  *faster* than Node for this workload, a complete reversal from
+  where this investigation started. The remaining ladder rungs
   (caching voted vectors instead of re-reading blobs each sweep;
-  sqlite-vec/approximate NN if this ever gets truly huge) are about the
-  sweep's total *duration*, not urgent now that duration no longer
-  blocks anything.
+  sqlite-vec/approximate NN if this ever gets truly huge) are about
+  the sweep's total *duration*, not urgent now that duration no
+  longer blocks anything and is down to single-digit seconds either
+  way.
 - **Nothing prunes articles.** The archive grows forever (~6 KB of
   embeddings per article plus text). Fine for years at current intake;
   see retention above.

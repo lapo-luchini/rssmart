@@ -9,7 +9,8 @@
 // so score = score_topics + score_embedding + score_depth + score_feed.
 // Everything derives from votes at recompute time — no training state.
 
-import { cosine, bufToVec } from './enrich.js';
+import { bufToVec } from './enrich.js';
+import { createDotBatcher } from './wasmDot.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -52,27 +53,34 @@ export function topicPrefs(db) {
  * `scratch` is a pair of same-length arrays (>= k) the caller owns and
  * reuses across every row in a sweep - maintaining the top-k highest
  * similarities by insertion into this small sorted-descending window,
- * instead of the previous filter+map+sort+slice: that allocated a
- * {sim, vote} object per candidate and sorted the *entire* voted list on
- * every one of the ~1M row x voted-article pairs a full recompute makes
- * (170 voted x 6200 rows). Insertion is cheap here because most
- * candidates never beat the current k-th best once the window fills, and
- * even the worst case only ever shifts within the k-sized window, never
- * the full voted list. Ties keep voted's original order (matching
- * Array.prototype.sort's stable-sort semantics the old code relied on),
- * since the shift condition is strict (`<`, not `<=`). See DESIGN.md for
- * the measured effect and why plain arrays, not typed ones.
+ * instead of a filter+map+sort+slice that would allocate a {sim, vote}
+ * object per candidate and sort the *entire* voted list on every one of
+ * the ~1M row x voted-article pairs a full recompute makes (170 voted x
+ * 6200 rows). Insertion is cheap here because most candidates never beat
+ * the current k-th best once the window fills, and even the worst case
+ * only ever shifts within the k-sized window, never the full voted list.
+ * Ties keep voted's original order (matching Array.prototype.sort's
+ * stable-sort semantics), since the shift condition is strict (`<`, not
+ * `<=`). See DESIGN.md for the measured effect and why plain arrays, not
+ * typed ones.
+ *
+ * `batcher` (see wasmDot.js) supplies every pairwise similarity in
+ * `pairSims`, one WASM call per row instead of one JS cosine() call per
+ * voted article - see DESIGN.md for why (Float16Array element access is
+ * dramatically slower in JS, especially on Bun, than decoding once and
+ * computing in compiled code).
  */
-function knnScore(row, voted, k, scratch) {
+function knnScore(row, voted, k, scratch, batcher) {
   if (!row.text_embedding || voted.length === 0 || k === 0) return 0;
   const vec = bufToVec(row.text_embedding);
+  const pairSims = batcher.query(vec);
   const { sims, votes } = scratch;
   let count = 0;
 
   for (let j = 0; j < voted.length; j++) {
     const v = voted[j];
     if (v.id === row.id) continue;
-    const sim = Math.max(cosine(vec, v.vec), 0);
+    const sim = Math.max(pairSims[j], 0);
     if (count < k) {
       insertDescending(sims, votes, count, sim, v.vote / 2);
       count++;
@@ -115,9 +123,17 @@ function makeKnnScratch(k) {
   return { sims: new Array(k), votes: new Array(k) };
 }
 
-function scoreParts(row, topicPref, feedPref, voted, weights, knn, scratch) {
+// A null batcher when there's no voted set to compare against - knnScore's
+// own `voted.length === 0` guard means it's never actually dereferenced,
+// but avoids creating (and needing to free) an empty WASM batcher.
+function makeVotedBatcher(voted) {
+  if (voted.length === 0) return null;
+  return createDotBatcher(voted.map((v) => v.vec), voted[0].vec.length);
+}
+
+function scoreParts(row, topicPref, feedPref, voted, weights, knn, scratch, batcher) {
   const topics = weights.topics * (topicPref ?? 0);
-  const embedding = weights.embedding * knnScore(row, voted, knn, scratch);
+  const embedding = weights.embedding * knnScore(row, voted, knn, scratch, batcher);
   const depth = weights.depth * (row.depth ? (row.depth - 3) / 2 : 0);
   const feed = weights.feed * (feedPref ?? 0);
   return { topics, embedding, depth, feed, total: topics + embedding + depth + feed };
@@ -174,23 +190,28 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
   ).all();
   const voted = votedArticles(db);
   const scratch = makeKnnScratch(knn);
+  const batcher = makeVotedBatcher(voted);
 
-  const save = db.prepare(SAVE_SCORE);
-  let i = 0;
-  while (i < rows.length) {
-    const chunkStart = performance.now();
-    db.transaction(() => {
-      // do/while: always process at least one row per chunk before
-      // checking the time budget, so yieldEveryMs=0 (or any value too
-      // small to survive a single row) can't spin forever without i ever
-      // advancing.
-      do {
-        const row = rows[i++];
-        const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id), voted, weights, knn, scratch);
-        save.run(s.topics, s.embedding, s.depth, s.feed, s.total, row.id);
-      } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
-    })();
-    if (i < rows.length) await sleep(0);
+  try {
+    const save = db.prepare(SAVE_SCORE);
+    let i = 0;
+    while (i < rows.length) {
+      const chunkStart = performance.now();
+      db.transaction(() => {
+        // do/while: always process at least one row per chunk before
+        // checking the time budget, so yieldEveryMs=0 (or any value too
+        // small to survive a single row) can't spin forever without i ever
+        // advancing.
+        do {
+          const row = rows[i++];
+          const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id), voted, weights, knn, scratch, batcher);
+          save.run(s.topics, s.embedding, s.depth, s.feed, s.total, row.id);
+        } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
+      })();
+      if (i < rows.length) await sleep(0);
+    }
+  } finally {
+    batcher?.free();
   }
   return { count: rows.length, ms: performance.now() - start };
 }
@@ -225,8 +246,13 @@ export function recomputeOneScore(db, config, articleId) {
   `).get(row.feed_id).pref;
 
   const voted = votedArticles(db);
-  const s = scoreParts(row, topicPref, feedPref, voted, weights, knn, makeKnnScratch(knn));
-  db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.total, articleId);
+  const batcher = makeVotedBatcher(voted);
+  try {
+    const s = scoreParts(row, topicPref, feedPref, voted, weights, knn, makeKnnScratch(knn), batcher);
+    db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.total, articleId);
+  } finally {
+    batcher?.free();
+  }
 }
 
 const RECOMPUTE_DUE_KEY = 'score_recompute_due_at';

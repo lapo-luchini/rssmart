@@ -67,6 +67,15 @@ project is only tested against Node/Bun versions meeting `engines` in
 `package.json`; older-but-Float16-capable runtimes get a warning, not a
 hard stop.
 
+The kNN taste-similarity signal's vector math runs in WASM (`wasm/cosine.wasm`,
+committed, portable across Node/Bun/OS/architecture - no rebuild needed when
+you update Node or Bun, unlike `better-sqlite3`'s native addon above). It's
+prebuilt; a Rust toolchain (`rustup target add wasm32-unknown-unknown`) is
+only needed if you ever change `wasm/cosine-src`'s source and want to rebuild
+it (`cd wasm/cosine-src && cargo build --target wasm32-unknown-unknown
+--release`, then copy the resulting `.wasm` over `wasm/cosine.wasm`) - not to
+run the app.
+
 Configure in `config.yaml`:
 
 - `ollama.url` — your Ollama instance, e.g. `http://192.168.1.10:11434`.
