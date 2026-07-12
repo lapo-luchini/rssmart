@@ -71,12 +71,14 @@ day-one spec was retired for exactly that reason; it's in git history).
     it was built under, so upgrading needs one rebuild
     (`npm rebuild better-sqlite3` under the new Node) — not a code change,
     but a real one-time step, documented in the README. `engines.bun` in
-    `package.json` (`>=1.3.14`) is the exact Bun version verified to have
-    native `Float16Array`, not a guessed lower bound — neither `engines`
-    field is actually enforced by default (checked live: Bun 1.3.14
-    installs and runs fine against an impossible `engines.bun: >=999.0.0`;
-    npm's `engine-strict` is off by default too), so both are
-    documentation for readers, not a technical gate.
+    `package.json` was originally set to `>=1.3.14`, the Bun version this
+    was first verified against — not a guessed lower bound, but not the
+    true floor either: a user reported `Float16Array` and the rest of the
+    app working fine on Bun 1.3.13 (2026-07-12), so `engines.bun` was
+    lowered to match. Neither `engines` field is actually enforced by
+    default (checked live: an impossible `engines.bun: >=999.0.0` still
+    installs and runs fine; npm's `engine-strict` is off by default too),
+    so both remain documentation for readers, not a technical gate.
     **Follow-up (2026-07-12):** `src/runtime-check.js`'s `checkRuntime()`,
     called first thing in `bin/rssmart.js`, closes that gap at the one
     point it actually matters: checks `typeof Float16Array` directly
