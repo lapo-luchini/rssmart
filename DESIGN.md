@@ -366,7 +366,12 @@ day-one spec was retired for exactly that reason; it's in git history).
   in a new tab and closing it used to leave the reader on an arbitrary
   other tab, not the one it came from — the motivating annoyance this
   overlay replaces for the *default* open action; "open original ↗"
-  remains a real link for when the live page is actually wanted.
+  remains a real link for when the live page is actually wanted. The
+  scrollable element (`.reader-scroll`) spans the overlay's full width;
+  the centered, narrower `.reader-content` column inside it is just for
+  text measure, not its own scroll container — scrolling used to only
+  work over that narrow column, so the side gutters fell through to the
+  real page scrolling invisibly underneath the fixed overlay.
 - **Sans-serif for all reading content, not just the reader overlay.**
   The `--serif` CSS variable was removed outright (reader preference,
   stated directly, not scoped to one feature) — `.story-body`,

@@ -279,18 +279,20 @@
       <button class="mark" @click="toggleRead(readerArticle)">{{ readerArticle.read_at ? 'unread' : 'mark read' }}</button>
       <a v-if="readerArticle.url" class="mark" :href="readerArticle.url" target="_blank" rel="noopener">open original ↗</a>
     </div>
-    <article class="reader-content">
-      <h1 class="reader-title">{{ readerArticle.title }}</h1>
-      <div class="story-meta reader-meta">
-        <span class="source">{{ readerArticle.feed_title || 'feed' }}</span>
-        <time :title="fullDate(readerArticle.published_at || readerArticle.created_at)">{{ ago(readerArticle.published_at || readerArticle.created_at) }}</time>
-        <em v-if="readerSource === 'feed'" class="feed-notice"
-            title="the full article couldn't be fetched or extracted; showing the feed's own summary">feed excerpt only</em>
-      </div>
-      <p v-if="readerLoading" class="notice">Loading…</p>
-      <p v-else-if="!readerHtml" class="notice">No content available.</p>
-      <div v-else v-html="readerHtml" class="reader-body"></div>
-    </article>
+    <div class="reader-scroll">
+      <article class="reader-content">
+        <h1 class="reader-title">{{ readerArticle.title }}</h1>
+        <div class="story-meta reader-meta">
+          <span class="source">{{ readerArticle.feed_title || 'feed' }}</span>
+          <time :title="fullDate(readerArticle.published_at || readerArticle.created_at)">{{ ago(readerArticle.published_at || readerArticle.created_at) }}</time>
+          <em v-if="readerSource === 'feed'" class="feed-notice"
+              title="the full article couldn't be fetched or extracted; showing the feed's own summary">feed excerpt only</em>
+        </div>
+        <p v-if="readerLoading" class="notice">Loading…</p>
+        <p v-else-if="!readerHtml" class="notice">No content available.</p>
+        <div v-else v-html="readerHtml" class="reader-body"></div>
+      </article>
+    </div>
   </div>
 
 </div>

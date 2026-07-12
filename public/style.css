@@ -631,10 +631,17 @@ body {
 
 .reader-spacer { flex: 1; }
 
-.reader-content {
+/* Scrolls full-width (not just the narrow centered column below) so
+   scrolling anywhere over the overlay — including its side gutters —
+   moves this, rather than falling through to the hidden page behind
+   the fixed overlay. */
+.reader-scroll {
   flex: 1 1 auto;
   overflow-y: auto;
   width: 100%;
+}
+
+.reader-content {
   max-width: 40rem;
   margin: 0 auto;
   padding: 1.5rem 1.2rem 4rem;
