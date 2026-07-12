@@ -196,29 +196,41 @@ day-one spec was retired for exactly that reason; it's in git history).
   invocation ([oven-sh/bun#5090](https://github.com/oven-sh/bun/issues/5090));
   this project's suite still runs fine under Bun one file at a time, or
   under `node --test` (`pnpm test`) either way. One more difference found
-  while writing `scripts/dbstats.js`, and a genuinely inconsistent one:
-  SQLite's `dbstat` virtual table (real, precise per-table/index byte
-  sizes from its own page accounting) is always available under
-  Node/better-sqlite3, but under `bun:sqlite` it depends on *how that Bun
-  binary itself was built* — confirmed live: the official upstream
-  `bun-v1.3.13` and `1.3.14` release binaries both lack it
-  (`no such table: dbstat`), while a user's NixOS-packaged Bun 1.3.13 has
-  it and matches better-sqlite3's output exactly, byte for byte. Ruled
-  out both Bun version (tested the identical official 1.3.13 release
-  directly) and dynamic linking against a system SQLite (`ldd` on the
-  user's `bun` binary shows no `libsqlite3` dependency at all, only
-  glibc/libpthread/libdl/libm — both builds statically link their own
-  copy). So it's specifically a difference in *which* SQLite gets
-  compiled in and with what flags: nixpkgs likely builds Bun from source
-  rather than repackaging the vendor's release binary, and whatever
-  SQLite amalgamation/config that build uses happens to have `dbstat`
-  enabled, unlike upstream's official release CI. Not independently
-  confirmed (no access to that system's build process), but the two
-  ruled-out explanations already establish that "does bun:sqlite have
-  dbstat" isn't a fixed fact about the driver — it's build-dependent,
-  which is exactly why the script treats it as an optional capability to
-  probe for and gracefully fall back on, not a hardcoded per-runtime
-  branch the way `src/db.js`'s actual driver selection is.
+  while writing `scripts/dbstats.js`: SQLite's `dbstat` virtual table
+  (real, precise per-table/index byte sizes from its own page accounting)
+  is always available under Node/better-sqlite3, but not under
+  `bun:sqlite` (`no such table: dbstat`) — confirmed identically on the
+  official upstream `bun-v1.3.13`/`1.3.14` release binaries *and* a
+  user's NixOS-packaged Bun 1.3.13, via `PRAGMA compile_options` (no
+  `ENABLE_DBSTAT_VTAB` in either) plus an actual `SELECT * FROM dbstat`
+  attempt, so this genuinely is a fixed fact about `bun:sqlite`, not
+  environment-dependent — the script treats it as an optional capability
+  to probe for and fall back on regardless, since a fact this specific
+  isn't worth hardcoding into a branch.
+  **A detour worth remembering, since it nearly became a wrong
+  conclusion:** a user's first test of `bun run dbstats` under Bun
+  produced output identical to Node's, byte for byte, including the
+  `dbstat` section — seemingly contradicting the above and triggering a
+  real investigation (two separate wrong theories: a NixOS build-from-
+  source difference, then a dynamic-linking difference, each ruled out
+  in turn by direct `ldd`/`compile_options` checks on their machine).
+  The actual cause was much simpler and had nothing to do with SQLite at
+  all: `dbstats`'s package.json entry is the literal shell command `node
+  scripts/dbstats.js`. `bun run <script>` (or its `bun <script>`
+  shorthand) does not translate a script's own `node` command to Bun's
+  runtime — it just shells out to whatever `node` binary is on `PATH` as
+  a real subprocess, confirmed directly (`process.execPath` inside that
+  subprocess pointed at the actual system Node binary, `typeof Bun` was
+  `undefined`). So `bun run dbstats` had been invoking real Node the
+  whole time, never `bun:sqlite` at all — the two runtimes' outputs
+  matched because they were the same runtime. `package.json` now has a
+  `dbstats:bun` entry (`bun scripts/dbstats.js`, no `run`) specifically
+  so this can't happen again, and the same gotcha applies to `cron`/
+  `serve`: `npm`/`pnpm`/`bun run cron` (or `serve`) always spawns real
+  Node regardless of which package manager invokes it, since those
+  scripts also just say `node` — invoke `bin/rssmart.js` directly with
+  the desired binary (`bun bin/rssmart.js serve`) to actually pick a
+  runtime, don't rely on `run`.
 - **`busy_timeout` is set explicitly, not left to the driver's default.**
   better-sqlite3 waits out lock contention by default; bun:sqlite does not
   — a real `SQLITE_BUSY` crash surfaced under genuine concurrent cron +

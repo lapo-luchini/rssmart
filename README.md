@@ -42,9 +42,14 @@ own dependency chain — SSR, SFC compilation, none of it used here — is
 Runs on both **Node.js (24+)** and **[Bun](https://bun.sh)**: `src/db.js`
 picks `bun:sqlite` under Bun and `better-sqlite3` under Node automatically,
 so `bun bin/rssmart.js serve` / `bun bin/rssmart.js cron` work exactly like
-their `node` equivalents (including `bun run cron` / `bun run serve` via
-the package.json scripts). No config needed — just use whichever
-`node`/`bun` binary is on your `PATH`. Node 24 is required for native
+their `node` equivalents. No config needed — just use whichever `node`/`bun`
+binary is on your `PATH`. Invoke the file directly (`bun bin/rssmart.js
+...`) to actually run under Bun — `npm`/`pnpm`/`bun run cron` and `run
+serve` always spawn a real `node` subprocess regardless of which package
+manager you use, since those package.json scripts are plain shell commands
+that literally say `node`; `bun run <script>` does not translate that to
+Bun's own runtime, it just shells out to whatever `node` is on `PATH`.
+Node 24 is required for native
 `Float16Array` (embeddings are stored as float16 — see below); if you're
 on an older Node, install 24 via `nvm install 24` and rebuild the native
 addon once: `nvm use 24 && npm rebuild better-sqlite3`. `bin/rssmart.js`
@@ -226,13 +231,15 @@ run (after 5 failed attempts an article is parked as unclassifiable).
 - `pnpm run dbstats` (or `node scripts/dbstats.js`) reports file size, row
   counts, and a per-column breakdown of the `articles` table (the one that
   dominates the file) — read-only, safe to run anytime. Table/index-level
-  sizes come from SQLite's own `dbstat` accounting where available; that's
-  always true under Node/better-sqlite3, but under Bun it depends on how
-  your particular `bun` binary was built (the official upstream release
-  lacks it; at least one NixOS-packaged build has it) — the script probes
-  for it and just skips that one section if it's missing, everything else
-  still works either way. Example,
-  a real ~6,200-article database (38.3 MB total):
+  sizes come from SQLite's own `dbstat` accounting, always present under
+  Node/better-sqlite3 but not (at least as far as tested) under
+  `bun:sqlite` — the script probes for it live and just skips that one
+  section if it's missing, everything else still works either way. To
+  actually check under Bun's own SQLite, run `pnpm run dbstats:bun` (or
+  `bun scripts/dbstats.js` directly) — plain `bun run dbstats` runs the
+  `dbstats` script's literal command, which says `node`, so it spawns a
+  real `node` subprocess and tells you nothing about `bun:sqlite` at all.
+  Example, a real ~6,200-article database (38.3 MB total):
 
   | column | size | notes |
   |---|---|---|
