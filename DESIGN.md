@@ -625,20 +625,45 @@ Two paths, with very different scaling:
   vote, isn't worth the complexity for a discrepancy this small and
   short-lived). `scheduler.js`'s `scoreTick` guards against overlapping
   sweeps (`scoring` boolean) since it's now a long-running async job
-  instead of a single blocking call. Verified live against the real
-  ~6200-article/170-voted archive, server running, a vote fired via real
-  HTTP while a forced-due sweep was genuinely in flight: on Node, the
-  sweep ran end-to-end in ~46s and votes at ~0.3s and ~20s into it
-  returned in 666ms and 372ms; on Bun, votes returned in 631ms and
-  606ms during a sweep that took noticeably longer than Node's (observed
-  in the 90-115s range for the same archive on the same machine) — a
-  real Bun-vs-Node performance gap for this workload worth investigating
-  separately sometime, but orthogonal to this fix, since the thing that
-  mattered (a vote never waits anywhere near the sweep's full duration)
-  held on both runtimes. The remaining ladder rungs (cache voted vectors
-  instead of re-reading blobs each sweep; sqlite-vec/approximate NN if
-  this ever gets truly huge) are about the sweep's total *duration*, not
-  urgent now that duration no longer blocks anything.
+  instead of a single blocking call. `recomputeScores`/`recomputeIfDue`
+  now return `{ count, ms }` (or `false` if nothing was due), and
+  `scheduler.js`/`cron` log it — e.g. "scheduler: recomputed 6200 scores
+  in 46.3s (debounced after recent votes)" — so the sweep's real cost is
+  visible in normal operation, not just in a one-off measurement.
+  Verified live against the real ~6200-article/170-voted archive, server
+  running, a vote fired via real HTTP while a forced-due sweep was
+  genuinely in flight: on Node, the sweep ran end-to-end in ~46s and
+  votes at ~0.3s and ~20s into it returned in 666ms and 372ms; on Bun,
+  votes returned in 631ms and 606ms during a sweep that took noticeably
+  longer than Node's (observed in the 90-115s range for the same
+  archive on the same machine).
+
+  **Root-caused**, via an isolated microbenchmark (same shape: 6200
+  rows × 170 voted, 512-dim vectors, no DB/SQL involved at all): Bun's
+  JavaScriptCore engine runs the tight numeric loop in `cosine()`
+  (`enrich.js`) several times slower than Node's V8 for *every* typed
+  array element type tested, not just the one this project happens to
+  use — per-call cost was roughly 6.6× slower on `Float16Array`, 4.8×
+  on `Float32Array`, and 8.9× on `Float64Array`. So this isn't a
+  Float16-specific bug or a solvable misconfiguration; it's JSC being
+  inherently worse than V8 at this particular pattern (a tight
+  accumulator loop over typed arrays), and it fully explains the
+  observed ~2-2.5× gap in real sweep duration. Independently,
+  `Float16Array` access costs about 2× more than `Float32Array` on
+  *both* engines (the implicit float16→float64 conversion on every
+  element read) — a real, engine-agnostic optimization opportunity
+  (decode each of the ~6370 unique vectors to `Float32Array` once,
+  instead of paying that conversion on every one of the ~1 billion
+  element reads across all 1,054,000 pairwise comparisons) that wasn't
+  implemented here since it changes the scoring hot path's memory
+  profile (temporary ~12.7 MB of decoded vectors instead of zero-copy
+  buffer views) and is additional, not-yet-requested scope — flagged
+  for the user to decide on rather than done unilaterally. The
+  remaining ladder rungs (that Float32 pre-decode; caching voted
+  vectors instead of re-reading blobs each sweep; sqlite-vec/
+  approximate NN if this ever gets truly huge) are about the sweep's
+  total *duration*, not urgent now that duration no longer blocks
+  anything.
 - **Nothing prunes articles.** The archive grows forever (~6 KB of
   embeddings per article plus text). Fine for years at current intake;
   see retention above.

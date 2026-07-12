@@ -102,6 +102,7 @@ const SAVE_SCORE = `
  * tradeoff, documented in DESIGN.md).
  */
 export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD_MS } = {}) {
+  const start = performance.now();
   const { weights, knn } = config.scoring;
 
   const topicPref = new Map(db.prepare(`
@@ -144,6 +145,7 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
     })();
     if (i < rows.length) await sleep(0);
   }
+  return { count: rows.length, ms: performance.now() - start };
 }
 
 /**
@@ -196,16 +198,20 @@ export function scheduleRecompute(db, delaySec) {
   `).run(delaySec);
 }
 
-/** Run the debounced recompute if (and only if) its due time has passed. */
+/**
+ * Run the debounced recompute if (and only if) its due time has passed.
+ * Returns false if nothing was due, or recomputeScores' own { count, ms }
+ * result if it ran.
+ */
 export async function recomputeIfDue(db, config, opts) {
   const due = db.prepare(`
     SELECT 1 FROM meta
     WHERE key = '${RECOMPUTE_DUE_KEY}' AND value <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
   `).get();
   if (!due) return false;
-  await recomputeScores(db, config, opts);
+  const result = await recomputeScores(db, config, opts);
   clearScheduledRecompute(db);
-  return true;
+  return result;
 }
 
 /** Drop any pending debounce marker — e.g. after a full recompute already

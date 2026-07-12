@@ -118,8 +118,10 @@ export function startScheduler(db, config, {
     if (scoring) return;
     scoring = true;
     try {
-      if (await recomputeIfDue(db, config)) {
-        log('scheduler: recomputed scores (debounced after recent votes)');
+      const result = await recomputeIfDue(db, config);
+      if (result) {
+        log(`scheduler: recomputed ${plural(result.count, 'score')} in ` +
+          `${(result.ms / 1000).toFixed(1)}s (debounced after recent votes)`);
       }
     } catch (err) {
       logError('scheduler score:', err.message);

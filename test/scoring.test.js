@@ -38,10 +38,12 @@ const score = (db, id) =>
 test('no votes -> neutral preference and zero scores', async () => {
   const db = tempDb();
   const ids = seed(db, [{ title: 'a', topics: ['tech'] }, { title: 'b' }]);
-  await recomputeScores(db, testConfig());
+  const result = await recomputeScores(db, testConfig());
   assert.equal(score(db, ids.a), 0);
   assert.equal(score(db, ids.b), 0, 'topicless article scores 0');
   assert.equal(topicPrefs(db)[0].pref, 0);
+  assert.equal(result.count, 2, 'reports how many articles it scored');
+  assert.ok(result.ms >= 0, 'reports how long it took');
 });
 
 test('upvotes raise topic preference with Laplace smoothing', async () => {
@@ -191,7 +193,10 @@ test('scheduleRecompute + recomputeIfDue: debounced, and survives a process rest
   // reopen a fresh connection to the same file — simulates an app restart;
   // the pending due-marker must not have been an in-memory-only timer
   db = openDb(dbPath);
-  assert.equal(await recomputeIfDue(db, config), true, 'overdue work runs on the next check after "restart"');
+  const result = await recomputeIfDue(db, config);
+  assert.ok(result, 'overdue work runs on the next check after "restart"');
+  assert.equal(result.count, 2, 'reports how many articles it scored');
+  assert.ok(result.ms >= 0, 'reports how long it took');
   assert.ok(Math.abs(score(db, seedTitleId(db, 'b')) - 1 / 3) < 1e-9, 'the deferred recompute actually ran');
 
   // due-marker is cleared after running: nothing left to do

@@ -157,7 +157,10 @@ if (mode === 'cron') {
   // so even here it no longer holds one long write transaction that could
   // push a concurrent serve process's own write past its busy_timeout.
   for (const id of classifiedIds) recomputeOneScore(db, config, id);
-  await recomputeIfDue(db, config);
+  const recomputed = await recomputeIfDue(db, config);
+  if (recomputed) {
+    info(`recomputed ${plural(recomputed.count, 'score')} in ${(recomputed.ms / 1000).toFixed(1)}s (debounced after recent votes)`);
+  }
   db.close();
 
   const allFeedsFailed = ingest.feedsFailed > 0 && ingest.feedsOk === 0;
