@@ -43,6 +43,24 @@ test('proposeTopicMerges: valid proposals kept, unknown/self/duplicate-from ones
   }
 });
 
+test('proposeTopicMerges: an overly long reason is truncated, not rejected', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  try {
+    seedTopic(db, 'ai');
+    seedTopic(db, 'artificial-intelligence');
+    const longReason = 'a'.repeat(200);
+    stub.chat = () => ({ merges: [{ from: 'artificial-intelligence', to: 'ai', reason: longReason }] });
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+    const [proposal] = await proposeTopicMerges(db, llm);
+    assert.equal(proposal.reason.length, 60);
+    assert.equal(proposal.reason, 'a'.repeat(60));
+  } finally {
+    await stub.close();
+  }
+});
+
 test('proposeTopicMerges: fewer than two topics short-circuits without calling the LLM', async () => {
   const db = tempDb();
   seedTopic(db, 'only-one');

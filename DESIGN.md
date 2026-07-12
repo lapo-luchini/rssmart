@@ -113,12 +113,25 @@ day-one spec was retired for exactly that reason; it's in git history).
   alias that already pointed at it, so a chain (A -> B, later B -> C)
   still resolves to the final survivor rather than a dead intermediate.
   Gets its own, longer timeout (`ollama.topicMergeTimeoutMs`, default 5
-  minutes) rather than sharing `ollama.timeoutMs` — reasoning over the
-  whole vocabulary in one call is a fundamentally slower request than
-  classifying one short article, and a real user hit a spurious 502
-  ("aborted due to timeout") before `chatJSON`'s `timeoutMs` option
-  existed as a per-call override (it previously always used the
-  instance's constructor default regardless of what a caller needed).
+  minutes) rather than sharing `ollama.timeoutMs` — a real user hit a
+  spurious 502 before `chatJSON`'s `timeoutMs` option existed as a
+  per-call override (it previously always used the instance's
+  constructor default regardless of what a caller needed). Diagnosed
+  live with that same user rather than assumed: prompt length isn't the
+  reason this is slower than classification (it's comparable, sometimes
+  shorter) — it's *output* length. Classification's reply is small and
+  bounded (1-3 topics, a summary capped at 500 chars, one digit); a
+  vocabulary of a few hundred topics can easily yield dozens of merge
+  proposals, each with a `"reason"` field, and generation time scales
+  with output tokens, not input. Confirmed by ruling out a competing
+  theory first: a cold model reload (`ollama ps` showed the model
+  unloading) was a plausible one-time cause, but a warm retry still took
+  2 minutes for 54 proposals, isolating the real cost to output size.
+  Fixed at the source rather than by further raising the timeout: the
+  prompt now asks for a 3-5 word `"reason"`, not a justification essay
+  (`normalizeMergeProposals` also hard-caps it to 60 chars as a
+  backstop) — it's a quick sanity check for the reader, not a rationale
+  that needs to earn its own paragraph.
 - **Semantic search (`src/search.js`) reuses the taste-learning embeddings,
   no vector index.** The query is embedded with the same model and the
   `query` task prefix, then ranked by brute-force cosine against

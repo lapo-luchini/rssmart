@@ -23,7 +23,9 @@ anything merely related but conceptually distinct (e.g. "sports" and
 "esports" are NOT the same topic, nor are "javascript" and "nodejs"). Prefer
 the clearer or more commonly used name as the canonical "to". Never propose
 merging a topic into itself, and never propose the same "from" topic in more
-than one merge.
+than one merge. Keep "reason" to 3-5 words, not a full sentence — a short
+label like "same concept" or "Italian translation" is enough, since it's
+only shown for a reader's quick sanity check, not a justification essay.
 
 Answer with JSON: {"merges": [{"from": "...", "to": "...", "reason": "..."}]}`;
 }
@@ -43,7 +45,7 @@ function normalizeMergeProposals(merges, knownTopics) {
     if (!known.has(from) || !known.has(to)) continue;
     if (seen.has(from)) continue;
     seen.add(from);
-    out.push({ from, to, reason: typeof m.reason === 'string' ? m.reason.trim().slice(0, 200) : '' });
+    out.push({ from, to, reason: typeof m.reason === 'string' ? m.reason.trim().slice(0, 60) : '' });
   }
   return out;
 }
