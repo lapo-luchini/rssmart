@@ -5,7 +5,7 @@ import { openDb } from '../src/db.js';
 import { syncFeeds, ingestAll } from '../src/ingest.js';
 import { Ollama } from '../src/llm.js';
 import { enrichPending, syncEmbeddingSpace, reembedMissing } from '../src/enrich.js';
-import { recomputeScores, clearScheduledRecompute } from '../src/scoring.js';
+import { recomputeOneScore, recomputeIfDue } from '../src/scoring.js';
 import { createApp } from '../src/server.js';
 import { startScheduler } from '../src/scheduler.js';
 import { acquireLease, releaseLease } from '../src/lease.js';
@@ -98,6 +98,7 @@ if (mode === 'cron') {
   // already be classifying; the lease keeps the queue single-consumer.
   const owner = `cron-${process.pid}`;
   const llm = new Ollama(config.ollama);
+  const classifiedIds = [];
   const enrichPromise = !acquireLease(db, owner)
     ? Promise.resolve({ skipped: true, reason: 'another rssmart process holds the classification lease' })
     : (async () => {
@@ -117,6 +118,7 @@ if (mode === 'cron') {
         logError(`[${item.index}/${item.total}] article #${item.id} "${item.title}": ${item.error}`);
         return;
       }
+      classifiedIds.push(item.id);
       info(
         `[${item.index}/${item.total}] #${item.id} ${item.title} -> [${item.topics.join(', ')}]` +
           (item.depth ? ` depth ${item.depth}/5` : '') +
@@ -145,8 +147,16 @@ if (mode === 'cron') {
     );
   }
 
-  recomputeScores(db, config);
-  clearScheduledRecompute(db); // this full sweep already satisfies any pending vote debounce
+  // Cheap, scoped scoring for whatever was just classified (see the same
+  // reasoning in src/scheduler.js) — not a full recomputeScores() sweep,
+  // which takes ~48s against a real archive and would hold a write
+  // transaction that long, risking a concurrent serve process's own
+  // writes (e.g. a vote) past its busy_timeout. recomputeIfDue still
+  // applies the debounced vote-ripple recompute if it's actually due —
+  // needed here since a cron-only deployment (no serve process running)
+  // would otherwise never catch up on it at all.
+  for (const id of classifiedIds) recomputeOneScore(db, config, id);
+  recomputeIfDue(db, config);
   db.close();
 
   const allFeedsFailed = ingest.feedsFailed > 0 && ingest.feedsOk === 0;

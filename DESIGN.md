@@ -564,8 +564,11 @@ Two paths, with very different scaling:
 
 2. **kNN vote scoring** (`recomputeScores`): loads *all* text embeddings
    and compares every article against every voted article —
-   O(N articles × V votes × dims) — and runs on **every vote** plus after
-   every classification batch. This is the path with a real ceiling.
+   O(N articles × V votes × dims). Runs only via the debounced
+   vote-ripple recompute (`recomputeIfDue`, see below) — never per-vote
+   and never after a classification batch, both of which use the cheap
+   scoped `recomputeOneScore` instead. This is the path with a real
+   ceiling: ~48s measured against a real ~6200-article archive.
 
 ## Known limits (as of ~5k articles, 2026-07)
 
@@ -583,18 +586,37 @@ Two paths, with very different scaling:
   stop, not one per click. The due time is a DB row, not a JS timer, so
   it survives a crash or restart with no extra code — whatever next
   checks it (the serve scheduler's `scoreTick`) just runs it immediately
-  if overdue. `cron` and the scheduler's post-classification sweep
-  already do an unconditional full `recomputeScores` for an unrelated
-  reason (fresh depth/topics need scoring); either one also clears a
-  pending debounce marker, since it's now moot. Two remediations that
-  looked promising but aren't real fixes, since unread/unvoted articles
-  are the overwhelming majority of the archive by design (the app exists
+  if overdue. `cron` and the scheduler's post-classification sweep used to
+  also do an unconditional full `recomputeScores` for an unrelated reason
+  (fresh depth/topics need scoring) — this was a real bug, not just a
+  theoretical cost: measured live against a real ~6200-article archive
+  (170 voted), a full sweep takes **~48 seconds**, and since both SQLite
+  drivers are fully synchronous, that blocks the entire single JS thread —
+  including a concurrent vote's HTTP response — for the whole 48s. In
+  `cron` it also risked worse than a delay: a write transaction that long
+  could push a concurrent `serve` process's own write past its 5s
+  `busy_timeout` into an outright `SQLITE_BUSY`. Fixed: classification now
+  calls `recomputeOneScore` per newly-classified article instead. This
+  isn't an approximation — `PREF_EXPR` is purely vote-driven, so a
+  freshly-classified (always initially unvoted) article joining a topic
+  or feed contributes exactly 0 to that topic/feed's preference
+  aggregate, meaning no *other* article's score is affected by a new
+  classification. Per-article cost dropped from ~48000ms to ~13ms.
+  `cron` additionally still calls `recomputeIfDue` after this, since a
+  cron-only deployment (no `serve` process) has no other path to ever
+  apply the debounced vote-ripple recompute. Two remediations that looked
+  promising but aren't real fixes, since unread/unvoted articles are the
+  overwhelming majority of the archive by design (the app exists
   precisely because arrival outpaces reading): scoring only unread
   articles, and pruning old read-but-unvoted ones — both barely shrink N.
   The remaining ladder rungs (cache voted vectors instead of re-reading
   blobs each sweep; sqlite-vec/approximate NN if this ever gets truly
-  huge) are about the debounced sweep's own cost, not urgent now that it
-  no longer blocks anything a person is looking at.
+  huge) are about the debounced sweep's *own* cost — `recomputeIfDue`
+  still runs a full `recomputeScores` when a vote-ripple debounce
+  actually elapses, and that call still blocks for the same ~48s. That
+  path is unchanged by this fix (votes genuinely do ripple to every
+  article's kNN term, unlike classification) and is a separate,
+  currently unaddressed risk.
 - **Nothing prunes articles.** The archive grows forever (~6 KB of
   embeddings per article plus text). Fine for years at current intake;
   see retention above.

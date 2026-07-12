@@ -4,6 +4,7 @@ import { tempDb, rssXml, startRssServer, startOllamaStub, testConfig } from './h
 import { fetchIntervalMinutes, ingestAll, syncFeeds } from '../src/ingest.js';
 import { acquireLease, releaseLease } from '../src/lease.js';
 import { startScheduler } from '../src/scheduler.js';
+import { compressText } from '../src/compress.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -94,6 +95,55 @@ test('startScheduler fetches due feeds and classifies pending articles', async (
       logs.some((m) => /classified 1 article \(avg \d+(\.\d+)?s each\)/.test(m)),
       `singular form + avg timing in log, got: ${JSON.stringify(logs)}`,
     );
+  } finally {
+    await ollama.close();
+    await rss.close();
+  }
+});
+
+test('classifying a new article never rescores unrelated already-scored articles', async () => {
+  // The whole point of the fix this guards: an unvoted article joining an
+  // existing topic doesn't change that topic's (vote-driven) preference,
+  // so classifying it must never trigger a full-corpus recomputeScores()
+  // sweep - which, against a real archive, is slow enough to block every
+  // concurrent request (measured live: ~48s for ~6k articles) - only the
+  // newly-classified article's own score should change.
+  const db = tempDb();
+  const rss = await startRssServer();
+  const ollama = await startOllamaStub();
+  rss.routes.set('/feed.xml', rssXml({ items: [{ title: 'New story', description: 'body' }] }));
+
+  try {
+    db.prepare("INSERT INTO feeds (id, url) VALUES (99, 'http://other-feed')").run();
+    const untouchedScore = 0.4242;
+    const { lastInsertRowid: otherId } = db.prepare(`
+      INSERT INTO articles (feed_id, guid, title, content, status, vote, score, score_topics)
+      VALUES (99, 'g-other', 'Unrelated already-scored article', ?, 'enriched', 1, ?, ?)
+    `).run(compressText('body'), untouchedScore, untouchedScore);
+
+    syncFeeds(db, [{ url: `${rss.url}/feed.xml` }]);
+    const config = testConfig();
+    config.ollama.url = ollama.url;
+
+    const stop = startScheduler(db, config, {
+      log: () => {},
+      fetchEveryMs: 40,
+      enrichEveryMs: 40,
+      batchMs: 5000,
+    });
+    try {
+      for (let i = 0; i < 50; i++) {
+        await sleep(100);
+        const done = db.prepare("SELECT COUNT(*) c FROM articles WHERE status='enriched' AND id != ?").get(otherId).c;
+        if (done === 1) break;
+      }
+    } finally {
+      stop();
+    }
+
+    const other = db.prepare('SELECT score, score_topics FROM articles WHERE id = ?').get(otherId);
+    assert.equal(other.score, untouchedScore, 'unrelated article\'s score untouched by classifying a new one');
+    assert.equal(other.score_topics, untouchedScore);
   } finally {
     await ollama.close();
     await rss.close();

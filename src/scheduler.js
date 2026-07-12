@@ -1,6 +1,6 @@
 import { ingestAll } from './ingest.js';
 import { enrichPending, reembedMissing } from './enrich.js';
-import { recomputeScores, recomputeIfDue, clearScheduledRecompute } from './scoring.js';
+import { recomputeOneScore, recomputeIfDue } from './scoring.js';
 import { Ollama } from './llm.js';
 import { acquireLease, releaseLease } from './lease.js';
 import { logError } from './log.js';
@@ -63,10 +63,27 @@ export function startScheduler(db, config, {
     const re = await reembedMissing(db, config, llm, { deadline, onItem: heartbeat });
     if (re.reembedded) log(`scheduler: re-embedded ${plural(re.reembedded, 'article')}`);
 
-    const r = await enrichPending(db, config, llm, { deadline, onItem: heartbeat });
+    // A newly-classified article needs its own score computed (fresh
+    // depth/topics didn't exist before), but nothing about *other*
+    // articles' scores changes: scoring is entirely vote-driven, and an
+    // unvoted article (every article straight out of classification)
+    // contributes nothing to any topic/feed preference aggregate.
+    // recomputeOneScore per classified article is therefore exactly as
+    // correct here as a full recomputeScores() sweep, not an
+    // approximation — and unlike it, doesn't block the event loop for
+    // the ~48s a full recompute takes against a real ~6k-article archive
+    // (measured live), which used to make every concurrent request,
+    // including a vote, hang until this batch's recompute finished.
+    const classifiedIds = [];
+    const r = await enrichPending(db, config, llm, {
+      deadline,
+      onItem: (item) => {
+        heartbeat();
+        if (!item.error) classifiedIds.push(item.id);
+      },
+    });
+    for (const id of classifiedIds) recomputeOneScore(db, config, id);
     if (r.enriched || r.failed) {
-      recomputeScores(db, config);
-      clearScheduledRecompute(db); // this full sweep already satisfies any pending vote debounce
       const avg = (Date.now() - started) / (r.enriched + r.failed) / 1000;
       log(`scheduler: classified ${plural(r.enriched, 'article')} (avg ${avg.toFixed(1)}s each)` +
         (r.failed ? `, ${r.failed} failed` : ''));
