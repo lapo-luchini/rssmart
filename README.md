@@ -146,7 +146,8 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   off the arrow cluster; Shift+arrow escalates the same key, no reach).
   The on-screen buttons form a cross matching this layout: WOW/never are
   the outer top/bottom buttons, back/skip flank the middle two. `p` (or
-  click the title) expands
+  click the title, or `PgDn` the first time — after that `PgDn` just
+  scrolls the now-visible content normally) expands
   the full extracted article inline below the vote buttons — wider than
   the card itself, so long paragraphs cost fewer scrolled lines — without
   leaving triage or marking it read; `o` (or **open original ↗** next to

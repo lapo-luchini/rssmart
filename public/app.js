@@ -386,6 +386,15 @@ createApp({
         return;
       }
 
+      // PageDown opens the preview the first time (nothing to scroll yet
+      // anyway); once it's open, PageDown reverts to its normal job of
+      // scrolling the now-visible content.
+      if (e.key === 'PageDown' && !this.triageExpanded) {
+        e.preventDefault();
+        this.toggleTriageContent();
+        return;
+      }
+
       const actions = {
         ArrowLeft: () => this.triageBack(),
         Backspace: () => this.triageBack(),
