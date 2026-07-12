@@ -155,8 +155,10 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   way to generate it.
 - ▲ / ▼ vote to teach it: one click = interesting (±1), a second click = WOW
   (±2, counts double in every signal), a third clears. Expanding a story
-  marks it read. Topic chips and each story's left edge are tinted by
-  learned preference: green = liked, red = disliked.
+  marks it read; `esc` collapses whichever one is open, from anywhere on
+  the page — handy after scrolling down into a long one. Topic chips and
+  each story's left edge are tinted by learned preference: green = liked,
+  red = disliked.
 - **open ↗** opens an in-page reader instead of a new tab. It shows our own
   extracted full-text — many sites refuse to be iframed — fetching the
   origin page on demand if the feed's own text looks thin. `esc` or **←

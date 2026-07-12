@@ -369,6 +369,12 @@ createApp({
         }
         return;
       }
+      if (this.panel === null && e.key === 'Escape' && this.expandedId !== null
+          && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        this.expandedId = null;
+        return;
+      }
       if (this.panel !== 'triage') return;
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
