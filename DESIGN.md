@@ -464,11 +464,28 @@ Two paths, with very different scaling:
 - Harden `sanitizeHtml` (`src/html.js`): it's a regex blocklist (strips
   `<script>/<style>/<iframe>/<object>/<embed>/<form>`, `on*` attributes,
   `javascript:` URLs), not a parser-based allowlist, so it's more exposed to
-  malformed/nested-markup evasion than something like DOMPurify or
-  `sanitize-html`. Every `v-html` in the app (`a.content`, `readerHtml`)
-  relies on this same write-time sanitization (`ingest.js`, `fetchpage.js`).
-  Swapping in a real HTML-sanitizer library would be a codebase-wide change,
-  not a one-file fix, which is why it's deferred rather than done inline.
+  malformed/nested-markup evasion than a real sanitizer library. Every
+  `v-html` in the app (`a.content`, `readerHtml`) relies on this same
+  write-time sanitization (`ingest.js`, `fetchpage.js`). Investigated on
+  request: DOMPurify looked nearly free since it could reuse the
+  happy-dom instance already carried for Readability (~1.7MB, ~1 package
+  vs. sanitize-html's ~2MB/17), but live-tested against real XSS payloads
+  it silently passed *everything* through unsanitized against happy-dom
+  (script tags, `onerror`, `javascript:` hrefs — untouched) while working
+  correctly against real jsdom — and DOMPurify's own internal
+  `isSupported` self-check reports `true` for happy-dom regardless, so
+  there's no signal a caller could detect and fall back from. That rules
+  out DOMPurify unless jsdom comes back (undoing that migration's
+  savings). `sanitize-html` (string-based, no DOM dependency, verified
+  live to correctly strip every payload above) is the real option:
+  ~2MB/17 packages, and would replace both functions in `src/html.js`
+  without touching call sites, provided the exported names/signatures
+  stay the same. The main design cost isn't the library swap itself but
+  moving from a blocklist to an allowlist: `sanitize-html` requires
+  explicitly declaring which tags/attributes survive, so real feed HTML
+  needs checking against that allowlist first so legitimate formatting
+  (images, tables, code blocks) doesn't quietly get stripped. Deferred,
+  not implemented.
 - Non-RSS sources (the feeds table would grow a `kind` column).
 - Bookmarkable filter state in the URL hash (tabs already have routes).
 - "Promote this note to guidelines" one-click from a reclassify note.
