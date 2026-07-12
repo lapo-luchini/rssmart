@@ -17,33 +17,52 @@ ${topics.join(', ')}
 
 Some of these are redundant: literally the same concept, written differently
 — a translation, spelling/hyphenation variant, abbreviation, or synonym at
-the exact same level of specificity (e.g. "ai" and "artificial-intelligence",
-or "eu" and "european-union"). Find genuinely redundant pairs like that and
-propose collapsing each "from" topic into one canonical "to" topic.
+the exact IDENTICAL scope (e.g. "ai" and "artificial-intelligence", or "eu"
+and "european-union"). Find genuinely redundant pairs like that and propose
+collapsing each "from" topic into one canonical "to" topic.
 
-Do NOT propose a merge just because one topic is a broader category that
-includes the other — that is a completely different relationship from
-"same concept, different name", and merging them would destroy a real
-distinction a reader may care about. For example: "laptops" and "hardware"
-are NOT the same topic (laptops are one specific kind of hardware, not
-another name for hardware in general) — do not merge them. Likewise
-"hardware" and "computing" are NOT the same topic (computing is a much
-broader field) — do not merge them either. Also skip anything merely
-related but conceptually distinct even at the same level (e.g. "sports"
-and "esports" are NOT the same topic, nor are "javascript" and "nodejs").
+The test is scope, not casual usage: would merging them ever make an
+article's topic broader or narrower than it already was? If yes, do NOT
+merge, even if the two names are sometimes used loosely/interchangeably in
+general news writing — that kind of casual conflation is exactly the trap,
+not a justification. For example: "laptops" and "hardware" are NOT the same
+topic (laptops are one specific kind of hardware) — do not merge. "hardware"
+and "computing" are NOT the same topic (computing is much broader) — do not
+merge. Neither are "artificial intelligence" and "machine learning" (machine
+learning is a narrower subfield of AI), nor "information technology" and
+"technology" (IT is a subset of the broader field), nor "computer science"
+and "computing" (computing is broader) — all of these are broader/narrower
+pairs, not synonyms, even though a news article might use them
+interchangeably. Also skip anything merely related but conceptually
+distinct at the same level (e.g. "sports" and "esports" are NOT the same
+topic, nor are "javascript" and "nodejs").
 
-When genuinely unsure whether two topics are the same concept or a
+When genuinely unsure whether two topics are identical in scope or a
 broader/narrower pair, do not propose the merge — a missed merge costs
 nothing, a wrong one silently blends two topics' vote history together.
 Prefer the clearer or more commonly used name as the canonical "to". Never
 propose merging a topic into itself, and never propose the same "from"
 topic in more than one merge.
 
+Critical: the "merges" array must contain ONLY pairs you are actually
+proposing. If you consider a pair and decide it should NOT be merged, leave
+it out of the array entirely — do not include it with a "reason" explaining
+why you're rejecting it. Every single entry in "merges" is treated as an
+endorsed proposal, exactly as written, regardless of what its "reason" says.
+
 Answer with JSON: {"merges": [{"from": "...", "to": "...", "reason": "..."}]}`;
 }
 
-/** Keep only proposals that name two different, real, known topics, and
- *  drop any repeat "from" (first proposal for a given "from" wins). */
+// Phrases that mean the model's own reason contradicts the merge it just
+// proposed (observed live: the model sometimes writes "...skipping merge"
+// or "these should remain separate" right in "reason", yet still includes
+// the pair in "merges" — the prompt above now tells it not to, but this is
+// a cheap, mechanical backstop in case a model does it anyway).
+const SELF_REJECTION = /\b(skip(ping)?|not (a )?synonyms?|(should|do) not merge|remain separate|keep(ing)? (them |it )?separate|distinct enough)\b/i;
+
+/** Keep only proposals that name two different, real, known topics, whose
+ *  own reason doesn't contradict the merge, and drop any repeat "from"
+ *  (first proposal for a given "from" wins). */
 function normalizeMergeProposals(merges, knownTopics) {
   if (!Array.isArray(merges)) return [];
   const known = new Set(knownTopics.map((t) => t.toLowerCase()));
@@ -56,6 +75,7 @@ function normalizeMergeProposals(merges, knownTopics) {
     if (!from || !to || from === to) continue;
     if (!known.has(from) || !known.has(to)) continue;
     if (seen.has(from)) continue;
+    if (typeof m.reason === 'string' && SELF_REJECTION.test(m.reason)) continue;
     seen.add(from);
     out.push({ from, to, reason: typeof m.reason === 'string' ? m.reason.trim().slice(0, 200) : '' });
   }

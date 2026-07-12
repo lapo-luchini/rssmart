@@ -143,6 +143,26 @@ day-one spec was retired for exactly that reason; it's in git history).
   tells the model that an uncertain call should be skipped, not
   proposed — a missed merge costs nothing, a wrong one blends two topics'
   vote history together irreversibly.
+  **Follow-up, from a real reply the user shared:** the model doesn't
+  reliably follow its own stated reasoning — about half the entries in
+  one real batch had a `"reason"` that explicitly argued *against* the
+  merge ("...however, they are not synonyms. Skipping merge.", "These are
+  distinct enough to remain separate.") yet were included in `"merges"`
+  anyway, alongside several "confident" ones that still violated the
+  broader/narrower rule above (e.g. "artificial intelligence" ->
+  "machine learning", "computer science" -> "computing"). Two different
+  problems, two different fixes: the prompt now explicitly forbids
+  including a pair the model has decided to reject (with those exact
+  counter-examples added) — a prompt change whose real-world
+  effectiveness isn't yet re-verified live. Separately,
+  `normalizeMergeProposals` now also drops any proposal whose own
+  `reason` text contains self-rejecting language (`"skip"`, `"not a
+  synonym"`, `"remain separate"`, `"distinct enough"`, etc.) as a
+  deterministic backstop — this catches the self-contradiction bug
+  mechanically regardless of whether the prompt fix holds, but it
+  can't and doesn't catch a confidently-stated broader/narrower merge
+  the model doesn't contradict itself on; that class of mistake is only
+  as good as the prompt's own guidance.
 - **Semantic search (`src/search.js`) reuses the taste-learning embeddings,
   no vector index.** The query is embedded with the same model and the
   `query` task prefix, then ranked by brute-force cosine against

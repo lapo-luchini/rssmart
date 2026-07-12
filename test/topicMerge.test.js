@@ -61,6 +61,58 @@ test('proposeTopicMerges: an overly long reason is truncated, not rejected', asy
   }
 });
 
+// A real reply, observed live: about half these entries explicitly
+// contradict themselves in their own "reason" ("...skipping merge",
+// "these should remain separate") yet still appear in "merges" — the
+// prompt now tells the model not to do this, but normalizeMergeProposals
+// must catch it mechanically regardless, since a model can misbehave
+// again. The other entries have no such contradiction and must survive
+// untouched, even though some of them are still questionable
+// broader/narrower pairs a smarter prompt (not this deterministic filter)
+// is responsible for discouraging.
+const REAL_REPLY_MERGES = [
+  { from: 'artificial intelligence', to: 'machine learning', reason: "In many technical taxonomies, these are treated as synonymous at the high level of interest; however, since 'artificial intelligence' is more common in general news and 'machine learning' is a subset," },
+  { from: 'information technology', to: 'technology', reason: 'Information technology is a synonym for the broader technology category in most news contexts.' },
+  { from: 'software engineering', to: 'software architecture', reason: "These are often used interchangeably in professional contexts, but 'software engineering' is the standard industry term." },
+  { from: 'software updates', to: 'software', reason: 'Software updates are a subset of software; however, they are not synonyms. Skipping merge.' },
+  { from: 'internet history', to: 'computing history', reason: 'These are distinct enough to remain separate.' },
+  { from: 'computer science', to: 'computing', reason: 'In a news context, these are often used interchangeably to describe the field of study and practice.' },
+  { from: 'film and television media', to: 'entertainment', reason: 'Film and television media is a subset of entertainment. Skipping merge.' },
+  { from: 'google chrome', to: 'browser', reason: 'Google Chrome is a specific instance, while browser is the category. Skipping merge.' },
+  { from: 'github codespaces', to: 'github', reason: 'Github Codespaces is a specific product of Github; skipping merge.' },
+  { from: 'remote work', to: 'employment', reason: 'Remote work is a subset of employment. Skipping merge.' },
+  { from: 'public health', to: 'healthcare', reason: 'These are often used synonymously in news reporting regarding systemic health issues.' },
+  { from: 'smart home', to: 'home automation', reason: 'These are exact synonyms for the same technology concept.' },
+  { from: 'video games', to: 'gaming', reason: 'These are synonymous in most news taxonomies.' },
+  { from: 'telecommunications', to: 'networking', reason: 'While distinct in engineering, they are often collapsed in general news. However, I will keep them separate as they represent different industries.' },
+];
+
+test('proposeTopicMerges: drops proposals whose own reason contradicts the merge (real observed reply)', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  try {
+    const topicNames = new Set(REAL_REPLY_MERGES.flatMap((m) => [m.from, m.to]));
+    for (const name of topicNames) seedTopic(db, name);
+    stub.chat = () => ({ merges: REAL_REPLY_MERGES });
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+    const proposals = await proposeTopicMerges(db, llm);
+
+    const froms = proposals.map((p) => p.from).sort();
+    assert.deepEqual(froms, [
+      'artificial intelligence',
+      'computer science',
+      'information technology',
+      'public health',
+      'smart home',
+      'software engineering',
+      'video games',
+    ].sort(), 'the seven self-contradicting proposals are dropped, the rest survive');
+  } finally {
+    await stub.close();
+  }
+});
+
 test('proposeTopicMerges: fewer than two topics short-circuits without calling the LLM', async () => {
   const db = tempDb();
   seedTopic(db, 'only-one');
