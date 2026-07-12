@@ -462,6 +462,34 @@ body {
   resize: vertical;
 }
 
+.topic-merge {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.topic-merge-row { align-self: stretch; }
+
+.topic-merge-warning {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  max-width: 34rem;
+}
+
+.topic-merge-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
 /* Other versions of the same news, expanded from the versions badge. */
 .versions {
   margin-top: 0.6rem;

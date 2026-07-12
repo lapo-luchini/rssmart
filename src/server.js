@@ -9,6 +9,7 @@ import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
 import { semanticSearch } from './search.js';
 import { decompressText } from './compress.js';
+import { proposeTopicMerges, applyTopicMerge } from './topicMerge.js';
 
 // Bun ships its own static-file middleware (hono/bun); Node needs
 // @hono/node-server's, which resolves relative paths from the process cwd
@@ -346,6 +347,31 @@ export function createApp(db, config) {
   });
 
   app.get('/api/topics', (c) => {
+    return c.json(topicPrefs(db));
+  });
+
+  // Propose-only: nothing is applied until the reader approves each merge
+  // individually via POST /api/topics/merge (see src/topicMerge.js — a
+  // merge blends historical vote data per topic, not just a label).
+  app.post('/api/topics/propose-merges', async (c) => {
+    try {
+      const merges = await proposeTopicMerges(db, llm);
+      return c.json({ merges });
+    } catch (err) {
+      return c.json({ error: `topic-merge proposal unavailable: ${err.message}` }, 502);
+    }
+  });
+
+  app.post('/api/topics/merge', async (c) => {
+    const { from, to } = (await jsonBody(c)) ?? {};
+    if (typeof from !== 'string' || typeof to !== 'string' || !from.trim() || !to.trim()) {
+      return c.json({ error: 'from and to must be non-empty strings' }, 400);
+    }
+    try {
+      applyTopicMerge(db, from, to);
+    } catch (err) {
+      return c.json({ error: err.message }, 400);
+    }
     return c.json(topicPrefs(db));
   });
 

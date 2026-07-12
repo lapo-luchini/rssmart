@@ -40,6 +40,9 @@ createApp({
       feedNotice: '',
       guidelines: '',
       guidelinesNotice: '',
+      topicMergeProposals: [],
+      topicMergeLoading: false,
+      topicMergeNotice: '',
       stats: null,
       expandedId: null,
       expandedVersions: {},
@@ -429,6 +432,43 @@ createApp({
       } catch (err) {
         this.guidelinesNotice = `Save failed: ${err.message}`;
       }
+    },
+
+    // Propose-review-approve: the LLM only suggests candidate topic merges
+    // (src/topicMerge.js) — nothing is applied until findTopicMerges below
+    // is called per-proposal by an explicit click. Merging blends two
+    // topics' historical vote data, not just their label, so this is never
+    // automatic.
+    async proposeTopicMerges() {
+      this.topicMergeLoading = true;
+      this.topicMergeNotice = '';
+      try {
+        const { merges } = await this.api('/api/topics/propose-merges', { method: 'POST' });
+        this.topicMergeProposals = merges;
+        this.topicMergeNotice = merges.length ? '' : 'No confident merge candidates found.';
+      } catch (err) {
+        this.topicMergeNotice = `Could not propose merges: ${err.message}`;
+      } finally {
+        this.topicMergeLoading = false;
+      }
+    },
+
+    async applyTopicMerge(proposal) {
+      try {
+        await this.api('/api/topics/merge', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ from: proposal.from, to: proposal.to }),
+        });
+        this.topicMergeProposals = this.topicMergeProposals.filter((p) => p !== proposal);
+        this.loadSidebarData();
+      } catch (err) {
+        this.topicMergeNotice = `Merge failed: ${err.message}`;
+      }
+    },
+
+    skipTopicMerge(proposal) {
+      this.topicMergeProposals = this.topicMergeProposals.filter((p) => p !== proposal);
     },
 
     async reclassify(article) {

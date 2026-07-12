@@ -130,6 +130,19 @@ const MIGRATIONS = [
   // over existing plain-text rows; every write from here on
   // (ingestFeed, articleText, getReaderContent) stores pre-compressed.
   (db) => compressExistingContent(db),
+  // v12 — topic-merge alias history (src/topicMerge.js): when a reader
+  // approves collapsing topic A into topic B, the mapping is recorded here
+  // so a *future* classification that names A again (the model has no
+  // memory of the merge) redirects to B automatically instead of
+  // recreating A. ON DELETE CASCADE: if the canonical topic itself is ever
+  // deleted, its aliases are meaningless and should go with it.
+  `
+  CREATE TABLE topic_aliases (
+    alias_name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    canonical_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    merged_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  );
+  `,
 ];
 
 /**

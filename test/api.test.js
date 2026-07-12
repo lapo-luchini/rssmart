@@ -376,3 +376,39 @@ test('topics, feeds and stats endpoints', async () => {
     { total: 6, duplicates: 1, pending: 1 },
   );
 });
+
+test('propose-merges returns the LLM\'s filtered proposals, nothing applied', async () => {
+  ollamaStub.chat = () => ({
+    merges: [
+      { from: 'sports', to: 'tech', reason: 'test proposal' },
+      { from: 'not-a-real-topic', to: 'tech', reason: 'unknown from, dropped' },
+    ],
+  });
+  const res = await post('/api/topics/propose-merges');
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.merges, [{ from: 'sports', to: 'tech', reason: 'test proposal' }]);
+
+  // propose-only: both topics must still exist, untouched
+  const names = (await get('/api/topics')).body.map((t) => t.name).sort();
+  assert.ok(names.includes('sports') && names.includes('tech'));
+});
+
+test('merge applies immediately and rejects bad input', async () => {
+  const bad = await post('/api/topics/merge', { from: '', to: 'tech' });
+  assert.equal(bad.status, 400);
+
+  const unknown = await post('/api/topics/merge', { from: 'ghost', to: 'tech' });
+  assert.equal(unknown.status, 400);
+  assert.match(unknown.body.error, /unknown topic "ghost"/);
+
+  const ok = await post('/api/topics/merge', { from: 'sports', to: 'tech' });
+  assert.equal(ok.status, 200);
+  const names = ok.body.map((t) => t.name);
+  assert.ok(!names.includes('sports'), 'the merged-away topic is gone');
+  assert.ok(names.includes('tech'));
+
+  const sportyTopics = db.prepare(`
+    SELECT t.name FROM article_topics at JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ?
+  `).all(ids.sporty).map((r) => r.name);
+  assert.deepEqual(sportyTopics, ['tech'], 'the affected article was retagged');
+});

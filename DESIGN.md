@@ -91,6 +91,27 @@ day-one spec was retired for exactly that reason; it's in git history).
   reused if the model names it anyway (`normalizeTopics` has no
   existing-list restriction). It does not fix the underlying redundancy
   itself — see the topic-merge tooling entry below for that.
+- **Topic merges are propose-review-approve, never automatic
+  (`src/topicMerge.js`).** Unlike a plain relabel, collapsing topic A into
+  topic B retroactively blends their vote history — `topicPrefs`
+  (`src/scoring.js`) computes a Laplace-smoothed ratio *per topic*, so a
+  merge is a real, permanent change to historical scoring input, not just
+  display text. `proposeTopicMerges` sends the LLM the *full* topic list
+  (not the capped suggestion list above — the long, rarely-used tail is
+  exactly where duplicates accumulate) and asks it to find genuinely
+  redundant pairs; proposals are filtered to ones naming two different,
+  real, known topics before ever reaching the reader (`normalizeMergeProposals`).
+  Nothing is written to the DB until the reader clicks "merge" on a
+  specific proposal in the Topics tab — `applyTopicMerge` then retags
+  every affected article (an article already tagged with both collapses
+  to one row, no PK violation) and deletes the now-orphaned topic.
+  A `topic_aliases` table (migration v12) records the mapping: the
+  classifier has no memory of the merge and can easily name the
+  merged-away topic again, so `resolveTopicId` (`src/enrich.js`) checks
+  it first and redirects to the canonical topic instead of recreating the
+  old one. A later merge of the canonical topic itself repoints any
+  alias that already pointed at it, so a chain (A -> B, later B -> C)
+  still resolves to the final survivor rather than a dead intermediate.
 - **Semantic search (`src/search.js`) reuses the taste-learning embeddings,
   no vector index.** The query is embedded with the same model and the
   `query` task prefix, then ranked by brute-force cosine against
@@ -456,12 +477,13 @@ Two paths, with very different scaling:
   origin-page fetching refuses private/loopback targets (SSRF) unless
   `enrich.allowPrivateFetch` is set. Residual, accepted: DNS-rebinding
   TOCTOU on page fetches — firewall the process if that ever matters.
-- **The topic vocabulary itself is still unbounded, even though its prompt
-  cost is now capped (see `existingTopicNames` below).** Nothing merges or
-  retires topics on its own, so the Topics tab keeps getting less
-  browsable and genuinely redundant near-duplicates (e.g. "ai" vs
-  "artificial-intelligence") keep accumulating in the DB — nothing
-  currently fixes that at the source, only bounds its cost downstream.
+- **The topic vocabulary still only grows between merge passes.** The
+  suggestion-list cap (`existingTopicNames`) bounds prompt cost, and the
+  propose-review-approve merge tool (`src/topicMerge.js`, see below) can
+  clean up redundancy, but nothing runs either automatically — if nobody
+  opens the Topics tab and clicks "Find redundant topics" periodically,
+  near-duplicates keep accumulating and the tab keeps getting less
+  browsable in between passes.
 - **`num_ctx` must stay stable across requests, not just "large enough".**
   Changing `num_ctx` between calls makes Ollama reload the model, at a real
   time cost. `contextTokens` (`src/enrich.js`) therefore sizes it from

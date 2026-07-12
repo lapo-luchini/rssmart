@@ -190,6 +190,14 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   Feeds is feed management — add a feed, import/export OPML, enable/disable
   sources, and see each feed's average vote, articles/week, and fetch
   success/error record.
+- **Find redundant topics** (Topics tab) asks the LLM to spot near-duplicate
+  topics (e.g. "ai" vs "artificial-intelligence") and propose collapsing
+  each into one. Nothing is applied automatically — review each proposal
+  and click **merge** or **skip**; merging retags every affected article
+  and blends the two topics' vote history permanently, so it's never done
+  without an explicit click. A merged-away name is remembered: if the
+  classifier suggests it again later, it's silently redirected to the
+  topic you kept rather than recreated.
 
 ## Notes
 

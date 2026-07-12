@@ -284,6 +284,23 @@ export function existingTopicNames(db, limit) {
   return limit ? names.slice(0, limit) : names;
 }
 
+/**
+ * Resolve a classifier-returned topic name to a topic id, redirecting
+ * through `topic_aliases` first — a reader may have already merged this
+ * exact name into a canonical topic (src/topicMerge.js); the model has no
+ * memory of that and can easily name it again. Creates the topic if it's
+ * genuinely new and not an alias of anything.
+ */
+export function resolveTopicId(db, name) {
+  const alias = db
+    .prepare('SELECT canonical_topic_id FROM topic_aliases WHERE alias_name = ? COLLATE NOCASE')
+    .get(name);
+  if (alias) return alias.canonical_topic_id;
+  return db
+    .prepare('INSERT INTO topics (name) VALUES (?) ON CONFLICT (name) DO UPDATE SET name = name RETURNING id')
+    .get(name).id;
+}
+
 /** Classify + summarize + embed one article and persist the outcome. */
 async function enrichOne(db, llm, article, recent, enrichCfg) {
   const existing = existingTopicNames(db, enrichCfg.maxSuggestedTopics);
@@ -349,9 +366,6 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     article.id,
   );
 
-  const insertTopic = db.prepare(
-    'INSERT INTO topics (name) VALUES (?) ON CONFLICT (name) DO UPDATE SET name = name RETURNING id',
-  );
   const linkTopic = db.prepare(
     'INSERT OR IGNORE INTO article_topics (article_id, topic_id) VALUES (?, ?)',
   );
@@ -359,8 +373,7 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     // replace, don't merge: re-enrichment must drop corrected-away topics
     db.prepare('DELETE FROM article_topics WHERE article_id = ?').run(article.id);
     for (const name of topics) {
-      const { id: topicId } = insertTopic.get(name);
-      linkTopic.run(article.id, topicId);
+      linkTopic.run(article.id, resolveTopicId(db, name));
     }
     db.prepare(`
       UPDATE articles
