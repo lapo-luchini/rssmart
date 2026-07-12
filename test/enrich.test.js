@@ -79,10 +79,10 @@ test('existingTopicNames: most-used first, capped, uncapped when falsy', () => {
   assert.deepEqual(existingTopicNames(db, null), existingTopicNames(db, 0), 'null and 0 both mean uncapped');
 });
 
-test('cosine similarity basics', () => {
+test('cosine similarity basics (unit vectors only - see cosine\'s doc comment in enrich.js)', () => {
   assert.equal(cosine([1, 0], [1, 0]), 1);
   assert.equal(cosine([1, 0], [0, 1]), 0);
-  assert.ok(Math.abs(cosine([1, 1], [1, 0]) - Math.SQRT1_2) < 1e-9);
+  assert.ok(Math.abs(cosine([Math.SQRT1_2, Math.SQRT1_2], [1, 0]) - Math.SQRT1_2) < 1e-9);
 });
 
 test('enrichPending classifies, summarizes and embeds pending articles', async () => {

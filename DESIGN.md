@@ -640,27 +640,41 @@ Two paths, with very different scaling:
 
   **Root-caused**, via an isolated microbenchmark (same shape: 6200
   rows × 170 voted, 512-dim vectors, no DB/SQL involved at all): Bun's
-  JavaScriptCore engine runs the tight numeric loop in `cosine()`
-  (`enrich.js`) several times slower than Node's V8 for *every* typed
-  array element type tested, not just the one this project happens to
-  use — per-call cost was roughly 6.6× slower on `Float16Array`, 4.8×
-  on `Float32Array`, and 8.9× on `Float64Array`. So this isn't a
-  Float16-specific bug or a solvable misconfiguration; it's JSC being
-  inherently worse than V8 at this particular pattern (a tight
-  accumulator loop over typed arrays), and it fully explains the
-  observed ~2-2.5× gap in real sweep duration. Independently,
-  `Float16Array` access costs about 2× more than `Float32Array` on
-  *both* engines (the implicit float16→float64 conversion on every
-  element read) — a real, engine-agnostic optimization opportunity
-  (decode each of the ~6370 unique vectors to `Float32Array` once,
-  instead of paying that conversion on every one of the ~1 billion
-  element reads across all 1,054,000 pairwise comparisons) that wasn't
-  implemented here since it changes the scoring hot path's memory
-  profile (temporary ~12.7 MB of decoded vectors instead of zero-copy
-  buffer views) and is additional, not-yet-requested scope — flagged
-  for the user to decide on rather than done unilaterally. The
-  remaining ladder rungs (that Float32 pre-decode; caching voted
-  vectors instead of re-reading blobs each sweep; sqlite-vec/
+  JavaScriptCore engine ran the old `cosine()` (full norm+dot+sqrt+divide)
+  several times slower than Node's V8 for *every* typed array element
+  type tested — roughly 6.6× slower on `Float16Array`, 4.8× on
+  `Float32Array`, 8.9× on `Float64Array` — and, tried again with plain
+  JS number arrays instead of typed arrays, still 2.5× slower, though
+  interestingly plain arrays were JSC's *fastest* representation of the
+  four (beating even `Float32Array` there), while V8 preferred
+  `Float32Array` and put plain arrays second-worst. Net conclusion:
+  JSC is inherently worse than V8 at this loop shape regardless of
+  representation, not fixable by picking a different array type.
+
+  **Optimized anyway, on a different axis**: checked live against the
+  real archive (6200 stored vectors, plus a 2000-row sample of the
+  separate summary-embedding column) whether they're actually
+  L2-normalized as `llm.js`'s Matryoshka-truncation comment already
+  claimed — confirmed: norms ranged 0.999954-1.000043, i.e. deviation
+  from exactly 1 fully explained by Float16 storage rounding, not a
+  real lack of normalization. Cosine similarity of two unit vectors is
+  exactly their dot product, so `cosine()` (`enrich.js`) now skips the
+  norm/sqrt/divide entirely - correct given the verified precondition,
+  not an approximation, and doesn't touch the zero-copy `Float16Array`
+  storage/memory profile at all (unlike the pre-decode idea above,
+  which is why this was implemented and that wasn't). Measured live
+  against the real ~6200-article archive: full sweep dropped from
+  ~44.7s to **19.2s on Node** (2.3×) — roughly the expected 3× on the
+  raw arithmetic, diluted by `knnScore`'s unchanged array/object
+  overhead (`.filter().map().sort()`, one allocation per pairwise
+  comparison). On Bun it dropped only to **89.4s**, barely below its
+  noisy ~90-115s baseline — telling: it confirms a decent chunk of
+  Bun's slowness was never the norm/sqrt math this optimization
+  removes, but that same `knnScore` array/object overhead JSC seems to
+  handle worse than V8. That overhead (not the arithmetic) is now the
+  likely next lever if the Bun gap ever needs closing further - not
+  done here, flagged for later. The remaining ladder rungs (caching
+  voted vectors instead of re-reading blobs each sweep; sqlite-vec/
   approximate NN if this ever gets truly huge) are about the sweep's
   total *duration*, not urgent now that duration no longer blocks
   anything.
