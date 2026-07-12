@@ -7,7 +7,7 @@ const DEFAULTS = {
   feeds: [],
   ollama: {
     url: 'http://localhost:11434',
-    chatModel: 'llama3.1',
+    chatModel: 'gemma4:12b-it-qat',
     embedModel: 'nomic-embed-text',
     embedPrefixes: { document: '', query: '' },
     // Matryoshka-style dimension truncation (halves embedding storage on

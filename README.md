@@ -57,7 +57,7 @@ hard stop.
 Configure in `config.yaml`:
 
 - `ollama.url` — your Ollama instance, e.g. `http://192.168.1.10:11434`.
-- `ollama.chatModel` — any instruct model, e.g. `llama3.1`, `qwen3`.
+- `ollama.chatModel` — any instruct model, e.g. `gemma4:12b-it-qat`, `qwen3`.
 - `ollama.embedModel` — an embedding model, e.g. `nomic-embed-text`
   (`ollama pull nomic-embed-text`).
 - `ollama.embedDimensions` — optional Matryoshka-style truncation (e.g. `512`

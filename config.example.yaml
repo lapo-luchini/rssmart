@@ -5,7 +5,7 @@ db: ./data/rssmart.db
 
 ollama:
   url: http://localhost:11434   # your network-local Ollama instance
-  chatModel: llama3.1           # any instruct model, for topics + summaries
+  chatModel: gemma4:12b-it-qat  # any instruct model, for topics + summaries
   embedModel: qwen3-embedding:0.6b  # embeddings: dedup, taste, (search)
   # Changing embedModel (or embedDimensions below) is safe: the change is
   # detected on the next run, stored vectors are cleared and articles are
