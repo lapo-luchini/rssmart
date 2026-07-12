@@ -25,6 +25,10 @@ createApp({
       feeds: [],
       feedsDetailed: [],
       panel: null, // null = article list, 'topics' | 'feeds' | 'triage' = content tabs
+      triageScope: 'fixed', // 'fixed' = the dedicated Triage tab's own unread/date/enriched scope;
+                            // 'filtered' = triageThisView(), whatever the main list's own filters/sort are
+      triageSeen: new Set(), // ids already voted/skipped this session — needed for 'filtered' scopes
+                              // like view=all that don't naturally shrink as articles are marked read
       triageQueue: [],
       triagePos: 0,
       triageProcessed: 0,
@@ -91,6 +95,10 @@ createApp({
       return 'All caught up. New articles arrive on the next cron run.';
     },
 
+    filtersActive() {
+      return !!(this.topic || this.feedId || this.q || this.dupes || this.enrichedOnly);
+    },
+
     triageCurrent() {
       return this.triageQueue[this.triagePos] ?? null;
     },
@@ -128,6 +136,16 @@ createApp({
       if (this.dupes) p.set('dupes', '1');
       if (this.enrichedOnly) p.set('status', 'enriched');
       return p;
+    },
+
+    clearFilters() {
+      this.topic = '';
+      this.feedId = '';
+      this.q = '';
+      this.semantic = false;
+      this.dupes = false;
+      this.enrichedOnly = false;
+      this.reload();
     },
 
     async api(path, options) {
@@ -244,25 +262,63 @@ createApp({
           .then((g) => (this.guidelines = g.text))
           .catch(() => {});
       }
-      if (name === 'triage') {
-        this.triageProcessed = 0;
-        this.loadTriageBatch();
-      }
+      if (name === 'triage') this.startTriage('fixed');
     },
 
-    // Triage: a fast, keyboard-driven mode for blasting through the unread
-    // backlog. Each vote/skip marks the article read, so the *next* batch
-    // fetch (still just view=unread, offset 0) naturally excludes whatever
-    // was just processed — no offset bookkeeping needed. status=enriched
-    // excludes not-yet-classified (or unclassifiable) articles: triage's
-    // whole premise is voting off title/summary/topics, none of which
-    // exist yet for a pending article, and a fresh one is often the very
-    // newest — exactly the position a date-sorted queue surfaces first.
+    // Triage-this-view: the same rapid keyboard-driven flow as the
+    // dedicated Triage tab, but scoped to whatever the main list is
+    // already showing (topic/feed/search/dupes/enrichedOnly, current
+    // sort) instead of the tab's own fixed unread/date/enriched scope —
+    // requested so triage isn't limited to one hardcoded subset. Exiting
+    // (esc) returns to this same filtered view, since starting it never
+    // touches view/topic/feedId/etc. themselves, only which panel is shown.
+    triageThisView() {
+      this.startTriage('filtered');
+      this.panel = 'triage';
+      this.feedNotice = '';
+      this.guidelinesNotice = '';
+      this.syncHash();
+    },
+
+    startTriage(scope) {
+      this.triageScope = scope;
+      this.triageProcessed = 0;
+      this.triageSeen = new Set();
+      this.loadTriageBatch();
+    },
+
+    triageParams(offset) {
+      if (this.triageScope === 'filtered') {
+        const p = this.params(offset);
+        p.set('limit', TRIAGE_BATCH);
+        return p;
+      }
+      // The dedicated tab's own fixed scope, untouched by any of the main
+      // list's filters: unread + classified, oldest-classified-first is
+      // exactly wrong here — date order, newest first, is what makes a
+      // freshly-classified article turn up promptly (see DESIGN.md).
+      return new URLSearchParams({ view: 'unread', sort: 'date', status: 'enriched', limit: TRIAGE_BATCH, offset });
+    },
+
+    // Each vote/skip marks the article read. For the dedicated tab's own
+    // scope (always unread) that alone drops it out of the very next
+    // fetch at offset 0 — no bookkeeping needed. A filtered scope isn't
+    // guaranteed to shrink that way (view=all shows read articles too),
+    // so triageSeen also filters out anything already processed this
+    // session; the while loop below just keeps walking the offset forward
+    // until it finds a batch with something new, or genuinely runs out.
     async loadTriageBatch() {
       this.triageLoading = true;
       try {
-        const data = await this.api(`/api/articles?view=unread&sort=date&status=enriched&limit=${TRIAGE_BATCH}&offset=0`);
-        this.triageQueue = data.articles;
+        let offset = 0;
+        let queue = [];
+        for (;;) {
+          const data = await this.api(`/api/articles?${this.triageParams(offset)}`);
+          queue = data.articles.filter((a) => !this.triageSeen.has(a.id));
+          if (queue.length > 0 || data.articles.length === 0) break;
+          offset += data.articles.length;
+        }
+        this.triageQueue = queue;
         this.triagePos = 0;
         this.collapseTriageContent();
       } catch (err) {
@@ -273,6 +329,7 @@ createApp({
     },
 
     async triageAdvance() {
+      if (this.triageCurrent) this.triageSeen.add(this.triageCurrent.id);
       this.triageProcessed++;
       this.triagePos++;
       this.collapseTriageContent();

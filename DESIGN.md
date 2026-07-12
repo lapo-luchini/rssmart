@@ -441,6 +441,33 @@ day-one spec was retired for exactly that reason; it's in git history).
   currently wrong about. Date order approximates unbiased sampling and
   keeps triage meaningfully different from just a faster way to browse
   the already-hot-sorted Interesting tab.
+- **"Triage this" reuses the triage UI over the main list's own filters,
+  as a second scope alongside the dedicated tab's fixed one, not a
+  replacement for it.** Requested explicitly: the dedicated ⚡Triage tab's
+  unread/classified/date scope has a real purpose (unbiased sampling
+  against scoring blind spots, see above) and stays untouched; a new
+  `triageThisView()` entry point (a button next to the filters row) sets
+  `triageScope: 'filtered'` and reuses `params()` — the exact same
+  query-building the main list itself uses — instead of the tab's
+  hardcoded one, so topic/feed/search/sort/dupes/enrichedOnly all carry
+  through. Exiting (`esc`) lands back on that same filtered view for
+  free: starting triage never touches `view`/`topic`/`feedId`/etc.
+  themselves, only which panel is shown. One real wrinkle the fixed
+  scope never had to deal with: `view=unread`/`interesting` naturally
+  shrink as articles are marked read (the next fetch at offset 0 already
+  excludes what was just processed), but `view=all` does not — the same
+  offset-0 refetch would show the same already-processed articles again.
+  Fixed generally rather than special-cased per view: `triageSeen` (a
+  `Set` of ids processed this session) filters each fetch, and
+  `loadTriageBatch` walks the offset forward whenever an entire batch
+  turns out to be already-seen, until it finds one that isn't or
+  genuinely runs out — verified live filtering to a single topic with
+  view=all, where the one matching article triaged cleanly and the next
+  fetch correctly reported "all caught up" rather than looping.
+  **Clear filters** (shown only once a filter is active) is the
+  companion request: reset topic/feed/search/dupes/enrichedOnly/semantic
+  back to a plain tab in one click, without needing to individually
+  clear each control.
 - **In-page reader overlay, not an iframe.** A literal `<iframe
   src="article-url">` was the first idea, but many sites refuse to be
   framed (`X-Frame-Options`/CSP `frame-ancestors`), so it'd fail

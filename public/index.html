@@ -61,6 +61,9 @@
       <label class="dupes-toggle" title="hide articles still waiting for classification">
         <input type="checkbox" v-model="enrichedOnly" @change="reload"> classified only
       </label>
+      <button class="mark" @click="clearFilters" v-if="filtersActive">✕ clear filters</button>
+      <button class="mark" @click="triageThisView"
+              title="triage through exactly what's shown here, with the same filters">⚡ triage this</button>
     </div>
   </nav>
 

@@ -159,6 +159,13 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   the extraction isn't enough. Aimed squarely at the sparsity problem: a
   smarter algorithm can't beat more training data, and this is the fastest
   way to generate it.
+- **⚡ triage this** (Interesting/Unread/All, next to the filters) runs the
+  exact same triage UI and keybindings over whatever the list is already
+  showing — current topic/feed/search/sort included — instead of the
+  ⚡Triage tab's own fixed unread/classified/date scope. `esc` returns to
+  that same filtered view, filters intact. **✕ clear filters** (shown
+  once any filter is active) resets topic/feed/search/toggles back to a
+  plain tab in one click.
 - ▲ / ▼ vote to teach it: one click = interesting (±1), a second click = WOW
   (±2, counts double in every signal), a third clears. Expanding a story
   marks it read; `esc` collapses whichever one is open, from anywhere on
