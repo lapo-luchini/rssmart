@@ -140,10 +140,7 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   runs on title/summary/topics, which a pending article doesn't have yet)
   — one article at a time, no clicking into anything. `↑` more interesting,
   `↓` less interesting, `Shift+↑` WOW, `Shift+↓` never, `←`/`⌫` back,
-  `→`/`space`/`enter` skip (marks read without voting), `esc` exit
-  (`PgUp`/`PgDn` and plain `w`/`n` were both tried for WOW/never first —
-  PgUp/PgDn are needed to scroll a long preview, and `w`/`n` pull the hand
-  off the arrow cluster; Shift+arrow escalates the same key, no reach).
+  `→`/`space`/`enter` skip (marks read without voting), `esc` exit.
   The on-screen buttons form a cross matching this layout: WOW/never are
   the outer top/bottom buttons, back/skip flank the middle two. `p` (or
   click the title, or `PgDn` the first time — after that `PgDn` just
@@ -159,13 +156,12 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   (±2, counts double in every signal), a third clears. Expanding a story
   marks it read. Topic chips and each story's left edge are tinted by
   learned preference: green = liked, red = disliked.
-- **open ↗** opens an in-page reader instead of a new tab (closing a tab used
-  to leave you on whatever tab happened to be next, not the one you came
-  from). It shows our own extracted full-text — many sites refuse to be
-  iframed — fetching the origin page on demand if the feed's own text looks
-  thin. `esc` or **← back** returns to exactly where you were; **open
-  original ↗** is still there as a real new tab for when you want the live
-  page. Vote and mark-read controls stay reachable from the reader's top bar.
+- **open ↗** opens an in-page reader instead of a new tab. It shows our own
+  extracted full-text — many sites refuse to be iframed — fetching the
+  origin page on demand if the feed's own text looks thin. `esc` or **←
+  back** returns to exactly where you were; **open original ↗** is still
+  there as a real new tab for when you want the live page. Vote and
+  mark-read controls stay reachable from the reader's top bar.
 - Disagree with a classification? Expand the article and hit **reclassify**,
   optionally with a note ("this is about hardware, not software") — the note
   is stored with the article, shown to the LLM together with the previous
