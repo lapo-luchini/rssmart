@@ -87,7 +87,7 @@ Configure in `config.yaml`:
 ## Usage
 
 ```sh
-node bin/rssmart.js serve    # web UI on http://0.0.0.0:8098 + built-in scheduler
+node bin/rssmart.js serve    # web UI on http://127.0.0.1:8098 + built-in scheduler
 node bin/rssmart.js cron     # one-shot: fetch due feeds, classify, exit
 ```
 

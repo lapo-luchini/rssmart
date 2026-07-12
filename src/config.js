@@ -70,7 +70,12 @@ const DEFAULTS = {
     hotDecayPerDay: 0.05,
   },
   server: {
-    host: '0.0.0.0',
+    // Loopback-only by default: this is a personal-use reader with no
+    // authentication of its own (see the README's Notes section), so it
+    // shouldn't be reachable from outside this machine unless you
+    // deliberately choose that. Set to '0.0.0.0' (or a LAN address) only
+    // on a network you trust, ideally behind your own reverse proxy/auth.
+    host: '127.0.0.1',
     port: 8098,
   },
 };

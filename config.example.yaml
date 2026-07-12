@@ -79,7 +79,10 @@ scoring:
                              # between them
 
 server:
-  host: 0.0.0.0
+  host: 127.0.0.1  # loopback only, since this has no auth of its own;
+                   # use 0.0.0.0 (or a LAN address) with care, only on a
+                   # network you trust, ideally behind your own reverse
+                   # proxy/auth
   port: 8098
 
 # Feeds are managed from the web UI (Feeds tab: add, enable/disable, OPML
