@@ -472,8 +472,6 @@ body {
   border-top: 1px solid var(--hairline);
 }
 
-.topic-merge-row { align-self: stretch; }
-
 .topic-merge-warning {
   font-family: var(--mono);
   font-size: 0.72rem;
@@ -482,12 +480,44 @@ body {
 }
 
 .topic-merge-row {
+  align-self: stretch;
   display: grid;
   grid-template-columns: 1fr 2fr auto;
   align-items: center;
   gap: 0.6rem;
   padding: 0.3rem 0;
   border-top: 1px solid var(--hairline);
+}
+
+/* The model's own wording read like it was arguing against this merge —
+   shown, never dropped (the LLM call already did the expensive part),
+   just visually de-emphasized for the reader's own judgment. */
+.topic-merge-row.low-confidence { opacity: 0.55; }
+
+.topic-merge-manual {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.topic-merge-manual label {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.topic-merge-manual select {
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  padding: 0.25rem 0.4rem;
 }
 
 /* Other versions of the same news, expanded from the versions badge. */

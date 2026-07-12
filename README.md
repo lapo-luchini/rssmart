@@ -199,7 +199,13 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   classifier suggests it again later, it's silently redirected to the
   topic you kept rather than recreated. Each proposal shows both topics'
   article counts, so you can sanity-check the direction (and size of the
-  impact) before merging.
+  impact) before merging. Every proposal the model returns is shown — none
+  are silently dropped, since generating them is the slow part — but one
+  whose own wording reads like it's arguing against its own suggestion is
+  dimmed with a ⚠, for your judgment rather than a guess on the app's
+  part. Noticed a redundant pair yourself, or the tool didn't catch one?
+  The **manual merge** form below the proposals does the exact same
+  merge, from a plain from/to dropdown, without waiting on a proposal.
 
 ## Notes
 

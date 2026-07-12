@@ -386,7 +386,7 @@ test('propose-merges returns the LLM\'s filtered proposals, nothing applied', as
   });
   const res = await post('/api/topics/propose-merges');
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body.merges, [{ from: 'sports', to: 'tech', reason: 'test proposal' }]);
+  assert.deepEqual(res.body.merges, [{ from: 'sports', to: 'tech', reason: 'test proposal', lowConfidence: false }]);
 
   // propose-only: both topics must still exist, untouched
   const names = (await get('/api/topics')).body.map((t) => t.name).sort();

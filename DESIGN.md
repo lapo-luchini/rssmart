@@ -150,19 +150,24 @@ day-one spec was retired for exactly that reason; it's in git history).
   distinct enough to remain separate.") yet were included in `"merges"`
   anyway, alongside several "confident" ones that still violated the
   broader/narrower rule above (e.g. "artificial intelligence" ->
-  "machine learning", "computer science" -> "computing"). Two different
-  problems, two different fixes: the prompt now explicitly forbids
-  including a pair the model has decided to reject (with those exact
-  counter-examples added) — a prompt change whose real-world
-  effectiveness isn't yet re-verified live. Separately,
-  `normalizeMergeProposals` now also drops any proposal whose own
-  `reason` text contains self-rejecting language (`"skip"`, `"not a
-  synonym"`, `"remain separate"`, `"distinct enough"`, etc.) as a
-  deterministic backstop — this catches the self-contradiction bug
-  mechanically regardless of whether the prompt fix holds, but it
-  can't and doesn't catch a confidently-stated broader/narrower merge
-  the model doesn't contradict itself on; that class of mistake is only
-  as good as the prompt's own guidance.
+  "machine learning", "computer science" -> "computing"). The prompt now
+  explicitly forbids including a pair the model has decided to reject
+  (with those exact counter-examples added) — a change whose real-world
+  effectiveness isn't yet re-verified live. `normalizeMergeProposals`
+  flags (`lowConfidence: true`) any proposal whose own `reason` text
+  contains self-rejecting language (`"skip"`, `"not a synonym"`, `"remain
+  separate"`, `"distinct enough"`, etc.), but — on request, after first
+  trying outright removal — **never drops a structurally valid proposal**:
+  the LLM call is the expensive part of this whole feature, and the
+  reader would rather see everything it produced (dimmed, for a
+  contradicting one) than have results silently discarded after paying
+  for them. The flag can't and doesn't catch a confidently-stated
+  broader/narrower merge the model doesn't contradict itself on; that
+  class of mistake is only as good as the prompt's own guidance. A
+  **manual merge** form (same `POST /api/topics/merge` endpoint,
+  from/to `<select>`s populated from the already-loaded topic list) lets
+  the reader merge a pair they noticed themselves, independent of
+  whatever the LLM did or didn't propose.
 - **Semantic search (`src/search.js`) reuses the taste-learning embeddings,
   no vector index.** The query is embedded with the same model and the
   `query` task prefix, then ranked by brute-force cosine against

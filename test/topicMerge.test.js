@@ -37,7 +37,7 @@ test('proposeTopicMerges: valid proposals kept, unknown/self/duplicate-from ones
     const config = testConfig();
     const llm = new Ollama({ ...config.ollama, url: stub.url });
     const proposals = await proposeTopicMerges(db, llm);
-    assert.deepEqual(proposals, [{ from: 'artificial-intelligence', to: 'ai', reason: 'same concept' }]);
+    assert.deepEqual(proposals, [{ from: 'artificial-intelligence', to: 'ai', reason: 'same concept', lowConfidence: false }]);
   } finally {
     await stub.close();
   }
@@ -63,13 +63,14 @@ test('proposeTopicMerges: an overly long reason is truncated, not rejected', asy
 
 // A real reply, observed live: about half these entries explicitly
 // contradict themselves in their own "reason" ("...skipping merge",
-// "these should remain separate") yet still appear in "merges" — the
-// prompt now tells the model not to do this, but normalizeMergeProposals
-// must catch it mechanically regardless, since a model can misbehave
-// again. The other entries have no such contradiction and must survive
-// untouched, even though some of them are still questionable
-// broader/narrower pairs a smarter prompt (not this deterministic filter)
-// is responsible for discouraging.
+// "these should remain separate") — the prompt now tells the model not to
+// do this, but every proposal is still shown (the LLM call is the
+// expensive part; discarding output it already paid for isn't the
+// reader's preference), just flagged as lowConfidence for the reader's own
+// judgment rather than silently dropped. The other entries have no such
+// contradiction, even though some of them are still questionable
+// broader/narrower pairs a smarter prompt (not this flag) is responsible
+// for discouraging.
 const REAL_REPLY_MERGES = [
   { from: 'artificial intelligence', to: 'machine learning', reason: "In many technical taxonomies, these are treated as synonymous at the high level of interest; however, since 'artificial intelligence' is more common in general news and 'machine learning' is a subset," },
   { from: 'information technology', to: 'technology', reason: 'Information technology is a synonym for the broader technology category in most news contexts.' },
@@ -87,7 +88,7 @@ const REAL_REPLY_MERGES = [
   { from: 'telecommunications', to: 'networking', reason: 'While distinct in engineering, they are often collapsed in general news. However, I will keep them separate as they represent different industries.' },
 ];
 
-test('proposeTopicMerges: drops proposals whose own reason contradicts the merge (real observed reply)', async () => {
+test('proposeTopicMerges: every proposal survives; self-contradicting ones are flagged lowConfidence, not dropped (real observed reply)', async () => {
   const db = tempDb();
   const stub = await startOllamaStub();
   try {
@@ -98,8 +99,19 @@ test('proposeTopicMerges: drops proposals whose own reason contradicts the merge
     const llm = new Ollama({ ...config.ollama, url: stub.url });
     const proposals = await proposeTopicMerges(db, llm);
 
-    const froms = proposals.map((p) => p.from).sort();
-    assert.deepEqual(froms, [
+    assert.equal(proposals.length, REAL_REPLY_MERGES.length, 'nothing is dropped');
+    const lowConfidenceFroms = proposals.filter((p) => p.lowConfidence).map((p) => p.from).sort();
+    assert.deepEqual(lowConfidenceFroms, [
+      'software updates',
+      'internet history',
+      'film and television media',
+      'google chrome',
+      'github codespaces',
+      'remote work',
+      'telecommunications',
+    ].sort(), 'exactly the seven self-contradicting proposals are flagged');
+    const confidentFroms = proposals.filter((p) => !p.lowConfidence).map((p) => p.from).sort();
+    assert.deepEqual(confidentFroms, [
       'artificial intelligence',
       'computer science',
       'information technology',
@@ -107,7 +119,7 @@ test('proposeTopicMerges: drops proposals whose own reason contradicts the merge
       'smart home',
       'software engineering',
       'video games',
-    ].sort(), 'the seven self-contradicting proposals are dropped, the rest survive');
+    ].sort());
   } finally {
     await stub.close();
   }

@@ -56,13 +56,16 @@ Answer with JSON: {"merges": [{"from": "...", "to": "...", "reason": "..."}]}`;
 // Phrases that mean the model's own reason contradicts the merge it just
 // proposed (observed live: the model sometimes writes "...skipping merge"
 // or "these should remain separate" right in "reason", yet still includes
-// the pair in "merges" — the prompt above now tells it not to, but this is
-// a cheap, mechanical backstop in case a model does it anyway).
+// the pair in "merges" — the prompt above now tells it not to, but this
+// still flags it if a model does it anyway). The LLM call is the expensive
+// part of this whole operation, so a flagged proposal is shown, dimmed, for
+// the reader's own judgment — never silently discarded: it already cost
+// the time to generate, and the reader is the one deciding either way.
 const SELF_REJECTION = /\b(skip(ping)?|not (a )?synonyms?|(should|do) not merge|remain separate|keep(ing)? (them |it )?separate|distinct enough)\b/i;
 
-/** Keep only proposals that name two different, real, known topics, whose
- *  own reason doesn't contradict the merge, and drop any repeat "from"
- *  (first proposal for a given "from" wins). */
+/** Keep every proposal that names two different, real, known topics (drop
+ *  any repeat "from" — first proposal for a given "from" wins), flagging
+ *  ones whose own reason contradicts the merge rather than dropping them. */
 function normalizeMergeProposals(merges, knownTopics) {
   if (!Array.isArray(merges)) return [];
   const known = new Set(knownTopics.map((t) => t.toLowerCase()));
@@ -75,9 +78,9 @@ function normalizeMergeProposals(merges, knownTopics) {
     if (!from || !to || from === to) continue;
     if (!known.has(from) || !known.has(to)) continue;
     if (seen.has(from)) continue;
-    if (typeof m.reason === 'string' && SELF_REJECTION.test(m.reason)) continue;
     seen.add(from);
-    out.push({ from, to, reason: typeof m.reason === 'string' ? m.reason.trim().slice(0, 200) : '' });
+    const reason = typeof m.reason === 'string' ? m.reason.trim().slice(0, 200) : '';
+    out.push({ from, to, reason, lowConfidence: SELF_REJECTION.test(reason) });
   }
   return out;
 }

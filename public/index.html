@@ -99,18 +99,37 @@
         Nothing is changed until you approve a merge — it retags every affected
         article and blends the two topics' vote history, permanently.
       </p>
-      <div class="topic-merge-row" v-for="p in topicMergeProposals" :key="p.from + '>' + p.to">
+      <div class="topic-merge-row" :class="{ 'low-confidence': p.lowConfidence }"
+           v-for="p in topicMergeProposals" :key="p.from + '>' + p.to">
         <span>
           <strong>{{ p.from }}</strong> ({{ articlesByTopic[p.from] ?? 0 }}) →
           <strong>{{ p.to }}</strong> ({{ articlesByTopic[p.to] ?? 0 }})
         </span>
-        <span class="feed-notice">{{ p.reason }}</span>
+        <span class="feed-notice"
+              :title="p.lowConfidence ? 'the model\'s own wording here reads like it was arguing against this merge' : ''">
+          {{ p.reason }}<template v-if="p.lowConfidence"> ⚠</template>
+        </span>
         <span>
           <button class="mark" @click="applyTopicMerge(p)">merge</button>
           <button class="mark" @click="skipTopicMerge(p)">skip</button>
         </span>
       </div>
     </div>
+
+    <form class="topic-merge-manual" @submit.prevent="submitManualMerge">
+      <label for="manual-merge-from">merge a topic you noticed yourself, without waiting for a proposal</label>
+      <select id="manual-merge-from" v-model="manualMerge.from" required>
+        <option value="" disabled>from…</option>
+        <option v-for="t in topics" :key="t.name" :value="t.name">{{ t.name }} ({{ t.articles }})</option>
+      </select>
+      <span>→</span>
+      <select v-model="manualMerge.to" required>
+        <option value="" disabled>to…</option>
+        <option v-for="t in topics" :key="t.name" :value="t.name" :disabled="t.name === manualMerge.from">{{ t.name }} ({{ t.articles }})</option>
+      </select>
+      <button class="mark" type="submit" :disabled="!manualMerge.from || !manualMerge.to">merge</button>
+      <em v-if="manualMergeNotice" class="feed-notice">{{ manualMergeNotice }}</em>
+    </form>
   </section>
 
   <section class="feeds-panel" v-if="panel === 'feeds'">

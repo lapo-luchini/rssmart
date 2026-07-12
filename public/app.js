@@ -43,6 +43,8 @@ createApp({
       topicMergeProposals: [],
       topicMergeLoading: false,
       topicMergeNotice: '',
+      manualMerge: { from: '', to: '' },
+      manualMergeNotice: '',
       stats: null,
       expandedId: null,
       expandedVersions: {},
@@ -466,6 +468,26 @@ createApp({
         this.loadSidebarData();
       } catch (err) {
         this.topicMergeNotice = `Merge failed: ${err.message}`;
+      }
+    },
+
+    // Same endpoint as a reviewed proposal's "merge" button — for a
+    // redundant pair the reader noticed themselves, without waiting for
+    // (or instead of) an LLM proposal to happen to include it.
+    async submitManualMerge() {
+      const { from, to } = this.manualMerge;
+      if (!from || !to) return;
+      this.manualMergeNotice = '';
+      try {
+        await this.api('/api/topics/merge', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ from, to }),
+        });
+        this.manualMerge = { from: '', to: '' };
+        this.loadSidebarData();
+      } catch (err) {
+        this.manualMergeNotice = `Merge failed: ${err.message}`;
       }
     },
 
