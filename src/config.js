@@ -15,6 +15,12 @@ const DEFAULTS = {
     // supports it. null/omitted asks for the model's native dimension.
     embedDimensions: null,
     timeoutMs: 60_000,
+    // Finding redundant topics (src/topicMerge.js) reasons over the whole
+    // topic vocabulary at once, not one short article — a fundamentally
+    // slower request than per-article classification, and a rare,
+    // reader-initiated one, so it gets a much longer budget than
+    // timeoutMs rather than sharing it and risking a spurious abort.
+    topicMergeTimeoutMs: 300_000,
   },
   enrich: {
     workers: 2,

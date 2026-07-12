@@ -53,11 +53,14 @@ function normalizeMergeProposals(merges, knownTopics) {
  * capped suggestion list enrichOne uses — the long, rarely-used tail is
  * exactly where duplicates accumulate) and propose collapsing each into a
  * canonical survivor. Returns proposals only; nothing is applied.
+ * timeoutMs should be generous (see ollama.topicMergeTimeoutMs) — reasoning
+ * over the whole vocabulary at once is much slower than classifying one
+ * article, and this is a rare, reader-initiated call, not a hot path.
  */
-export async function proposeTopicMerges(db, llm) {
+export async function proposeTopicMerges(db, llm, timeoutMs) {
   const topics = existingTopicNames(db, 0);
   if (topics.length < 2) return [];
-  const reply = await llm.chatJSON(SYSTEM, mergePrompt(topics));
+  const reply = await llm.chatJSON(SYSTEM, mergePrompt(topics), { timeoutMs });
   return normalizeMergeProposals(reply.merges, topics);
 }
 

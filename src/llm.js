@@ -49,12 +49,12 @@ export class Ollama {
     }
   }
 
-  async #post(path, body) {
+  async #post(path, body, timeoutMs = this.timeoutMs) {
     const res = await fetch(`${this.url}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -63,8 +63,14 @@ export class Ollama {
     return res.json();
   }
 
-  /** Single-turn chat forced into JSON mode; returns the parsed object. */
-  async chatJSON(system, prompt, { numCtx } = {}) {
+  /**
+   * Single-turn chat forced into JSON mode; returns the parsed object.
+   * timeoutMs overrides the instance default for calls that are known to
+   * take longer than a typical per-article classification (e.g. reasoning
+   * over an entire topic vocabulary at once — see proposeTopicMerges,
+   * src/topicMerge.js).
+   */
+  async chatJSON(system, prompt, { numCtx, timeoutMs } = {}) {
     const body = {
       model: this.chatModel,
       stream: false,
@@ -81,14 +87,14 @@ export class Ollama {
 
     let data;
     try {
-      data = await this.#post('/api/chat', body);
+      data = await this.#post('/api/chat', body, timeoutMs);
     } catch (err) {
       // Some models/servers reject the think param outright — fall back
       // once and stop sending it.
       if (!this.disableThink || !/think/i.test(err.message)) throw err;
       this.disableThink = false;
       delete body.think;
-      data = await this.#post('/api/chat', body);
+      data = await this.#post('/api/chat', body, timeoutMs);
     }
     return parseJsonReply(data.message?.content);
   }

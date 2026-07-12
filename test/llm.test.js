@@ -56,3 +56,21 @@ test('chatJSON retries without think when the server rejects it, then stops send
     await new Promise((r) => server.close(r));
   }
 });
+
+test('chatJSON: a per-call timeoutMs overrides the instance default, not just adds to it', async () => {
+  // Never actually responds — only the abort proves which timeout won.
+  const server = http.createServer(() => {});
+  const url = await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () =>
+      resolve(`http://127.0.0.1:${server.address().port}`));
+  });
+
+  try {
+    const llm = new Ollama({ url, chatModel: 'm', embedModel: 'e', timeoutMs: 60_000 });
+    const start = Date.now();
+    await assert.rejects(() => llm.chatJSON('s', 'p', { timeoutMs: 50 }));
+    assert.ok(Date.now() - start < 5000, 'aborted using the short override, not the 60s instance default');
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});

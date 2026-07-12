@@ -112,6 +112,13 @@ day-one spec was retired for exactly that reason; it's in git history).
   old one. A later merge of the canonical topic itself repoints any
   alias that already pointed at it, so a chain (A -> B, later B -> C)
   still resolves to the final survivor rather than a dead intermediate.
+  Gets its own, longer timeout (`ollama.topicMergeTimeoutMs`, default 5
+  minutes) rather than sharing `ollama.timeoutMs` — reasoning over the
+  whole vocabulary in one call is a fundamentally slower request than
+  classifying one short article, and a real user hit a spurious 502
+  ("aborted due to timeout") before `chatJSON`'s `timeoutMs` option
+  existed as a per-call override (it previously always used the
+  instance's constructor default regardless of what a caller needed).
 - **Semantic search (`src/search.js`) reuses the taste-learning embeddings,
   no vector index.** The query is embedded with the same model and the
   `query` task prefix, then ranked by brute-force cosine against

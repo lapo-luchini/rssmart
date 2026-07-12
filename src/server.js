@@ -355,7 +355,7 @@ export function createApp(db, config) {
   // merge blends historical vote data per topic, not just a label).
   app.post('/api/topics/propose-merges', async (c) => {
     try {
-      const merges = await proposeTopicMerges(db, llm);
+      const merges = await proposeTopicMerges(db, llm, config.ollama.topicMergeTimeoutMs);
       return c.json({ merges });
     } catch (err) {
       return c.json({ error: `topic-merge proposal unavailable: ${err.message}` }, 502);

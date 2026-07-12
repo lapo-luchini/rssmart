@@ -21,6 +21,11 @@ ollama:
     document: ""
     query: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
   timeoutMs: 60000
+  topicMergeTimeoutMs: 300000  # "find redundant topics" reasons over the
+                               # whole topic vocabulary at once, much
+                               # slower than classifying one article — a
+                               # rare, reader-initiated call, so it gets
+                               # its own, more generous timeout
 
 enrich:
   workers: 2          # concurrent articles in the LLM pipeline; raising this
