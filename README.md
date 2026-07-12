@@ -226,9 +226,12 @@ run (after 5 failed attempts an article is parked as unclassifiable).
 - `pnpm run dbstats` (or `node scripts/dbstats.js`) reports file size, row
   counts, and a per-column breakdown of the `articles` table (the one that
   dominates the file) — read-only, safe to run anytime. Table/index-level
-  sizes come from SQLite's own `dbstat` accounting where available (Node
-  + better-sqlite3); `bun:sqlite`'s build doesn't include `dbstat`, so that
-  one section is skipped under Bun, everything else still works. Example,
+  sizes come from SQLite's own `dbstat` accounting where available; that's
+  always true under Node/better-sqlite3, but under Bun it depends on how
+  your particular `bun` binary was built (the official upstream release
+  lacks it; at least one NixOS-packaged build has it) — the script probes
+  for it and just skips that one section if it's missing, everything else
+  still works either way. Example,
   a real ~6,200-article database (38.3 MB total):
 
   | column | size | notes |

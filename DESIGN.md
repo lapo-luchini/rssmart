@@ -196,13 +196,25 @@ day-one spec was retired for exactly that reason; it's in git history).
   invocation ([oven-sh/bun#5090](https://github.com/oven-sh/bun/issues/5090));
   this project's suite still runs fine under Bun one file at a time, or
   under `node --test` (`pnpm test`) either way. One more difference found
-  while writing `scripts/dbstats.js`: SQLite's `dbstat` virtual table
-  (real, precise per-table/index byte sizes from its own page accounting)
-  exists under Node/better-sqlite3 but not under `bun:sqlite`'s bundled
-  build (`no such table: dbstat`) — the script catches that specific
-  failure and skips just that section under Bun rather than crashing;
-  everything else in it (row counts, per-column `LENGTH()` sums, which
-  work identically on both drivers) still runs.
+  while writing `scripts/dbstats.js`, and a genuinely inconsistent one:
+  SQLite's `dbstat` virtual table (real, precise per-table/index byte
+  sizes from its own page accounting) is always available under
+  Node/better-sqlite3, but under `bun:sqlite` it depends on *how that Bun
+  binary itself was built* — confirmed live: the official upstream
+  `bun-v1.3.13` and `1.3.14` release binaries both lack it
+  (`no such table: dbstat`), while a user's NixOS-packaged Bun 1.3.13 has
+  it and matches better-sqlite3's output exactly, byte for byte. Ruled
+  out version as the variable by testing the identical official 1.3.13
+  release directly; the likely explanation is packaging — NixOS commonly
+  re-links third-party binaries against nixpkgs' own system libraries
+  rather than shipping the vendor's static binary untouched, and a distro
+  SQLite package is more likely to enable `dbstat` than Bun's own
+  vendored build is. Not independently confirmed (no access to that
+  system), but it means "does bun:sqlite have dbstat" isn't a fixed fact
+  about the driver — it's environment-dependent, which is exactly why
+  the script treats it as an optional capability to probe for and
+  gracefully fall back on, not a hardcoded per-runtime branch the way
+  `src/db.js`'s actual driver selection is.
 - **`busy_timeout` is set explicitly, not left to the driver's default.**
   better-sqlite3 waits out lock contention by default; bun:sqlite does not
   — a real `SQLITE_BUSY` crash surfaced under genuine concurrent cron +
