@@ -126,12 +126,23 @@ day-one spec was retired for exactly that reason; it's in git history).
   with output tokens, not input. Confirmed by ruling out a competing
   theory first: a cold model reload (`ollama ps` showed the model
   unloading) was a plausible one-time cause, but a warm retry still took
-  2 minutes for 54 proposals, isolating the real cost to output size.
-  Fixed at the source rather than by further raising the timeout: the
-  prompt now asks for a 3-5 word `"reason"`, not a justification essay
-  (`normalizeMergeProposals` also hard-caps it to 60 chars as a
-  backstop) — it's a quick sanity check for the reader, not a rationale
-  that needs to earn its own paragraph.
+  2 minutes for 54 proposals, isolating the real cost to output size. A
+  first attempt at a fix (cutting `"reason"` to 3-5 words) traded away
+  something the same user actually valued for a marginal speed gain, and
+  was reverted — `"reason"` is back to a full short sentence, capped at
+  200 chars.
+  **The real, more important bug found in that same batch of proposals:**
+  the model was confusing "same concept, different name" (what a merge
+  should be) with "narrower category of a broader one" — proposing things
+  like "laptops" -> "hardware" and "hardware" -> "computing". A merge
+  isn't just a labeling fix in that shape: it would flatten a real,
+  meaningful distinction a reader's votes already rely on into a vaguer
+  bucket, silently hurting scoring granularity rather than just tidying
+  the vocabulary. The prompt now explicitly separates these two
+  relationships with the exact counter-examples that went wrong, and
+  tells the model that an uncertain call should be skipped, not
+  proposed — a missed merge costs nothing, a wrong one blends two topics'
+  vote history together irreversibly.
 - **Semantic search (`src/search.js`) reuses the taste-learning embeddings,
   no vector index.** The query is embedded with the same model and the
   `query` task prefix, then ranked by brute-force cosine against

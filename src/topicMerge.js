@@ -15,17 +15,29 @@ function mergePrompt(topics) {
   return `Here is the full list of topics currently in use, most-used first:
 ${topics.join(', ')}
 
-Some of these are redundant: different names for the same underlying concept
-(e.g. "ai" and "artificial-intelligence", or "eu" and "european-union").
-Find genuinely redundant pairs and propose collapsing each "from" topic into
-one canonical "to" topic. Only propose merges you are confident about — skip
-anything merely related but conceptually distinct (e.g. "sports" and
-"esports" are NOT the same topic, nor are "javascript" and "nodejs"). Prefer
-the clearer or more commonly used name as the canonical "to". Never propose
-merging a topic into itself, and never propose the same "from" topic in more
-than one merge. Keep "reason" to 3-5 words, not a full sentence — a short
-label like "same concept" or "Italian translation" is enough, since it's
-only shown for a reader's quick sanity check, not a justification essay.
+Some of these are redundant: literally the same concept, written differently
+— a translation, spelling/hyphenation variant, abbreviation, or synonym at
+the exact same level of specificity (e.g. "ai" and "artificial-intelligence",
+or "eu" and "european-union"). Find genuinely redundant pairs like that and
+propose collapsing each "from" topic into one canonical "to" topic.
+
+Do NOT propose a merge just because one topic is a broader category that
+includes the other — that is a completely different relationship from
+"same concept, different name", and merging them would destroy a real
+distinction a reader may care about. For example: "laptops" and "hardware"
+are NOT the same topic (laptops are one specific kind of hardware, not
+another name for hardware in general) — do not merge them. Likewise
+"hardware" and "computing" are NOT the same topic (computing is a much
+broader field) — do not merge them either. Also skip anything merely
+related but conceptually distinct even at the same level (e.g. "sports"
+and "esports" are NOT the same topic, nor are "javascript" and "nodejs").
+
+When genuinely unsure whether two topics are the same concept or a
+broader/narrower pair, do not propose the merge — a missed merge costs
+nothing, a wrong one silently blends two topics' vote history together.
+Prefer the clearer or more commonly used name as the canonical "to". Never
+propose merging a topic into itself, and never propose the same "from"
+topic in more than one merge.
 
 Answer with JSON: {"merges": [{"from": "...", "to": "...", "reason": "..."}]}`;
 }
@@ -45,7 +57,7 @@ function normalizeMergeProposals(merges, knownTopics) {
     if (!known.has(from) || !known.has(to)) continue;
     if (seen.has(from)) continue;
     seen.add(from);
-    out.push({ from, to, reason: typeof m.reason === 'string' ? m.reason.trim().slice(0, 60) : '' });
+    out.push({ from, to, reason: typeof m.reason === 'string' ? m.reason.trim().slice(0, 200) : '' });
   }
   return out;
 }

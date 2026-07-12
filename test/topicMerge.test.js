@@ -49,13 +49,13 @@ test('proposeTopicMerges: an overly long reason is truncated, not rejected', asy
   try {
     seedTopic(db, 'ai');
     seedTopic(db, 'artificial-intelligence');
-    const longReason = 'a'.repeat(200);
+    const longReason = 'a'.repeat(300);
     stub.chat = () => ({ merges: [{ from: 'artificial-intelligence', to: 'ai', reason: longReason }] });
     const config = testConfig();
     const llm = new Ollama({ ...config.ollama, url: stub.url });
     const [proposal] = await proposeTopicMerges(db, llm);
-    assert.equal(proposal.reason.length, 60);
-    assert.equal(proposal.reason, 'a'.repeat(60));
+    assert.equal(proposal.reason.length, 200);
+    assert.equal(proposal.reason, 'a'.repeat(200));
   } finally {
     await stub.close();
   }
