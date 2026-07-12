@@ -10,7 +10,8 @@
     "test": "node --test",
     "postinstall": "node scripts/vendor.js",
     "cron": "node bin/rssmart.js cron",
-    "serve": "node bin/rssmart.js serve"
+    "serve": "node bin/rssmart.js serve",
+    "dbstats": "node scripts/dbstats.js"
   },
   "keywords": [],
   "author": "Lapo Luchini <lapo@lapo.it>",

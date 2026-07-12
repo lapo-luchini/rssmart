@@ -195,7 +195,14 @@ day-one spec was retired for exactly that reason; it's in git history).
   pragma. `bun test` cannot run more than one `node:test`-based file per
   invocation ([oven-sh/bun#5090](https://github.com/oven-sh/bun/issues/5090));
   this project's suite still runs fine under Bun one file at a time, or
-  under `node --test` (`pnpm test`) either way.
+  under `node --test` (`pnpm test`) either way. One more difference found
+  while writing `scripts/dbstats.js`: SQLite's `dbstat` virtual table
+  (real, precise per-table/index byte sizes from its own page accounting)
+  exists under Node/better-sqlite3 but not under `bun:sqlite`'s bundled
+  build (`no such table: dbstat`) — the script catches that specific
+  failure and skips just that section under Bun rather than crashing;
+  everything else in it (row counts, per-column `LENGTH()` sums, which
+  work identically on both drivers) still runs.
 - **`busy_timeout` is set explicitly, not left to the driver's default.**
   better-sqlite3 waits out lock contention by default; bun:sqlite does not
   — a real `SQLITE_BUSY` crash surfaced under genuine concurrent cron +
