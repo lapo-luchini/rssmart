@@ -11,6 +11,18 @@
 
 import { cosine, bufToVec } from './enrich.js';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// How long recomputeScores works synchronously before handing control back
+// to the event loop. Measured live: a full sweep over a real ~6200-article
+// archive takes ~48s of near-continuous CPU (the kNN pass dominates); with
+// no yielding, that blocks every concurrent request — including a vote's
+// HTTP response — for the whole 48s. 150ms keeps the worst-case wait a
+// vote might see well under a second, while still keeping the per-chunk
+// SQLite transaction long enough that committing thousands of rows doesn't
+// turn into thousands of tiny fsyncs.
+const DEFAULT_YIELD_MS = 150;
+
 // Votes range -2..+2 ("WOW" votes count double). The Laplace ratio works on
 // the weighted magnitudes: SUM(MAX(v,0)) up-weight vs SUM(ABS(v)) total.
 const PREF_EXPR = `
@@ -77,8 +89,19 @@ const SAVE_SCORE = `
  * Called after classification batches (fresh depth/topics need scoring) and
  * by the debounced vote-driven recompute (see recomputeIfDue below); never
  * synchronously from the vote request itself — see DESIGN.md.
+ *
+ * Async and chunked: processes rows in bursts of at most `yieldEveryMs` of
+ * wall-clock work, each burst its own SQLite transaction, awaiting a
+ * `setTimeout(0)` between bursts so the event loop (and any concurrent
+ * request, e.g. a vote) gets a turn — see DESIGN.md for the ~48s measurement
+ * that made this necessary. `topicPref`/`feedPref`/`voted` are snapshotted
+ * once up front, same as before chunking; a vote that lands mid-run won't
+ * be reflected until the *next* recompute (its own instant recomputeOneScore
+ * still applies immediately, and may be transiently overwritten by a
+ * still-in-flight sweep's stale value until then — accepted, self-correcting
+ * tradeoff, documented in DESIGN.md).
  */
-export function recomputeScores(db, config) {
+export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD_MS } = {}) {
   const { weights, knn } = config.scoring;
 
   const topicPref = new Map(db.prepare(`
@@ -105,12 +128,22 @@ export function recomputeScores(db, config) {
   const voted = votedArticles(db);
 
   const save = db.prepare(SAVE_SCORE);
-  db.transaction(() => {
-    for (const row of rows) {
-      const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id), voted, weights, knn);
-      save.run(s.topics, s.embedding, s.depth, s.feed, s.total, row.id);
-    }
-  })();
+  let i = 0;
+  while (i < rows.length) {
+    const chunkStart = performance.now();
+    db.transaction(() => {
+      // do/while: always process at least one row per chunk before
+      // checking the time budget, so yieldEveryMs=0 (or any value too
+      // small to survive a single row) can't spin forever without i ever
+      // advancing.
+      do {
+        const row = rows[i++];
+        const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id), voted, weights, knn);
+        save.run(s.topics, s.embedding, s.depth, s.feed, s.total, row.id);
+      } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
+    })();
+    if (i < rows.length) await sleep(0);
+  }
 }
 
 /**
@@ -164,13 +197,13 @@ export function scheduleRecompute(db, delaySec) {
 }
 
 /** Run the debounced recompute if (and only if) its due time has passed. */
-export function recomputeIfDue(db, config) {
+export async function recomputeIfDue(db, config, opts) {
   const due = db.prepare(`
     SELECT 1 FROM meta
     WHERE key = '${RECOMPUTE_DUE_KEY}' AND value <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
   `).get();
   if (!due) return false;
-  recomputeScores(db, config);
+  await recomputeScores(db, config, opts);
   clearScheduledRecompute(db);
   return true;
 }

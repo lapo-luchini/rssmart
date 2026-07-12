@@ -13,7 +13,7 @@ let server;
 let ids;
 let ollamaStub;
 
-function seed() {
+async function seed() {
   db.prepare("INSERT INTO feeds (id, url, title) VALUES (1, 'http://f', 'Feed One')").run();
   // Positional placeholders, not named (@x) ones bound from an object:
   // better-sqlite3 and bun:sqlite disagree on the object-binding convention,
@@ -55,7 +55,7 @@ function seed() {
     VALUES (1, 'g6', 'Awaiting classification', ?, 'pending',
             '2026-06-30T00:00:00Z', '2026-06-30T10:00:00Z')
   `).run(compressText('body')).lastInsertRowid);
-  recomputeScores(db, testConfig());
+  await recomputeScores(db, testConfig());
 
   // Distinguishable text_embeddings for the semantic search tests: liked
   // and fresh are "tech"-like, sporty is orthogonal ("sports"-like), dupe
@@ -71,7 +71,7 @@ function seed() {
 
 before(async () => {
   db = tempDb();
-  ids = seed();
+  ids = await seed();
   ollamaStub = await startOllamaStub();
   ollamaStub.embed = (input) =>
     input.includes('sports') ? [0, 1, 0, 0] : [1, 0, 0, 0];

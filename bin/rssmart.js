@@ -149,14 +149,15 @@ if (mode === 'cron') {
 
   // Cheap, scoped scoring for whatever was just classified (see the same
   // reasoning in src/scheduler.js) — not a full recomputeScores() sweep,
-  // which takes ~48s against a real archive and would hold a write
-  // transaction that long, risking a concurrent serve process's own
-  // writes (e.g. a vote) past its busy_timeout. recomputeIfDue still
-  // applies the debounced vote-ripple recompute if it's actually due —
-  // needed here since a cron-only deployment (no serve process running)
-  // would otherwise never catch up on it at all.
+  // which takes ~48s against a real archive. recomputeIfDue still applies
+  // the debounced vote-ripple recompute if it's actually due — needed here
+  // since a cron-only deployment (no serve process running) would
+  // otherwise never catch up on it at all. That sweep now chunks itself
+  // into short (~150ms) transactions with a yield in between (scoring.js),
+  // so even here it no longer holds one long write transaction that could
+  // push a concurrent serve process's own write past its busy_timeout.
   for (const id of classifiedIds) recomputeOneScore(db, config, id);
-  recomputeIfDue(db, config);
+  await recomputeIfDue(db, config);
   db.close();
 
   const allFeedsFailed = ingest.feedsFailed > 0 && ingest.feedsOk === 0;

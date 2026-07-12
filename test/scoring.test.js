@@ -35,22 +35,22 @@ function seed(db, articles) {
 const score = (db, id) =>
   db.prepare('SELECT score FROM articles WHERE id = ?').get(id).score;
 
-test('no votes -> neutral preference and zero scores', () => {
+test('no votes -> neutral preference and zero scores', async () => {
   const db = tempDb();
   const ids = seed(db, [{ title: 'a', topics: ['tech'] }, { title: 'b' }]);
-  recomputeScores(db, testConfig());
+  await recomputeScores(db, testConfig());
   assert.equal(score(db, ids.a), 0);
   assert.equal(score(db, ids.b), 0, 'topicless article scores 0');
   assert.equal(topicPrefs(db)[0].pref, 0);
 });
 
-test('upvotes raise topic preference with Laplace smoothing', () => {
+test('upvotes raise topic preference with Laplace smoothing', async () => {
   const db = tempDb();
   const ids = seed(db, [
     { title: 'a', topics: ['tech'], vote: 1 },
     { title: 'b', topics: ['tech'] },
   ]);
-  recomputeScores(db, testConfig());
+  await recomputeScores(db, testConfig());
   // pref = (1+1)/(1+0+2)*2-1 = 1/3
   assert.ok(Math.abs(score(db, ids.b) - 1 / 3) < 1e-9);
   const [tech] = topicPrefs(db);
@@ -61,24 +61,24 @@ test('upvotes raise topic preference with Laplace smoothing', () => {
   assert.ok(Math.abs(tech.pref - 1 / 3) < 1e-9);
 });
 
-test('downvotes lower preference; multi-topic articles average', () => {
+test('downvotes lower preference; multi-topic articles average', async () => {
   const db = tempDb();
   const ids = seed(db, [
     { title: 'liked', topics: ['tech'], vote: 1 },
     { title: 'hated', topics: ['sports'], vote: -1 },
     { title: 'mixed', topics: ['tech', 'sports'] },
   ]);
-  recomputeScores(db, testConfig());
+  await recomputeScores(db, testConfig());
   // tech pref = 1/3, sports pref = -1/3 -> mixed averages to 0
   assert.ok(Math.abs(score(db, ids.mixed)) < 1e-9);
 
   // Flipping the sports vote to +1 makes both topics positive.
   db.prepare("UPDATE articles SET vote = 1 WHERE title = 'hated'").run();
-  recomputeScores(db, testConfig());
+  await recomputeScores(db, testConfig());
   assert.ok(Math.abs(score(db, ids.mixed) - 1 / 3) < 1e-9);
 });
 
-test('blended score combines topics, embedding kNN, depth and feed', () => {
+test('blended score combines topics, embedding kNN, depth and feed', async () => {
   const db = tempDb();
   const ids = seed(db, [
     { title: 'liked', topics: ['tech'], vote: 1 },
@@ -94,7 +94,7 @@ test('blended score combines topics, embedding kNN, depth and feed', () => {
 
   const config = testConfig();
   config.scoring.weights = { topics: 0.4, embedding: 0.3, depth: 0.2, feed: 0.1 };
-  recomputeScores(db, config);
+  await recomputeScores(db, config);
 
   const parts = (id) => db.prepare(`
     SELECT score, score_topics, score_embedding, score_depth, score_feed
@@ -125,13 +125,13 @@ test('blended score combines topics, embedding kNN, depth and feed', () => {
   // a WOW vote (+2) counts double everywhere: pref (2+1)/(2+2)*2-1 = 0.5,
   // kNN signal 2/2 = 1
   db.prepare('UPDATE articles SET vote = 2 WHERE id = ?').run(ids.liked);
-  recomputeScores(db, config);
+  await recomputeScores(db, config);
   const c2 = parts(ids.candidate);
   near(c2.score_topics, 0.4 * 0.5);
   near(c2.score_embedding, 0.3);
 });
 
-test('recomputeOneScore matches a full recomputeScores for that one article, and touches nothing else', () => {
+test('recomputeOneScore matches a full recomputeScores for that one article, and touches nothing else', async () => {
   const db = tempDb();
   const ids = seed(db, [
     { title: 'liked', topics: ['tech'], vote: 1 },
@@ -152,7 +152,7 @@ test('recomputeOneScore matches a full recomputeScores for that one article, and
     FROM articles WHERE id = ?
   `).get(id);
 
-  recomputeScores(db, config);
+  await recomputeScores(db, config);
   const groundTruth = parts(ids.candidate);
   const otherBefore = parts(ids.other);
   assert.ok(groundTruth.score !== 0, 'sanity: candidate has a non-trivial score to reproduce');
@@ -168,7 +168,7 @@ test('recomputeOneScore matches a full recomputeScores for that one article, and
   assert.deepEqual(parts(ids.other), otherBefore, 'recomputeOneScore never touches other articles');
 });
 
-test('scheduleRecompute + recomputeIfDue: debounced, and survives a process restart', () => {
+test('scheduleRecompute + recomputeIfDue: debounced, and survives a process restart', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'rssmart-debounce-'));
   const dbPath = join(dir, 'test.db');
   const config = testConfig();
@@ -178,7 +178,7 @@ test('scheduleRecompute + recomputeIfDue: debounced, and survives a process rest
 
   // scheduled far in the future: not due yet
   scheduleRecompute(db, 3600);
-  assert.equal(recomputeIfDue(db, config), false, 'not due yet');
+  assert.equal(await recomputeIfDue(db, config), false, 'not due yet');
   assert.equal(score(db, seedTitleId(db, 'b')), 0, 'no recompute happened');
 
   // force it overdue directly (bypassing the public API's positive-delay
@@ -191,18 +191,41 @@ test('scheduleRecompute + recomputeIfDue: debounced, and survives a process rest
   // reopen a fresh connection to the same file — simulates an app restart;
   // the pending due-marker must not have been an in-memory-only timer
   db = openDb(dbPath);
-  assert.equal(recomputeIfDue(db, config), true, 'overdue work runs on the next check after "restart"');
+  assert.equal(await recomputeIfDue(db, config), true, 'overdue work runs on the next check after "restart"');
   assert.ok(Math.abs(score(db, seedTitleId(db, 'b')) - 1 / 3) < 1e-9, 'the deferred recompute actually ran');
 
   // due-marker is cleared after running: nothing left to do
-  assert.equal(recomputeIfDue(db, config), false, 'idempotent: nothing pending after it already ran');
+  assert.equal(await recomputeIfDue(db, config), false, 'idempotent: nothing pending after it already ran');
 
   // clearScheduledRecompute cancels a still-pending (not yet due) marker
   scheduleRecompute(db, 3600);
   clearScheduledRecompute(db);
-  assert.equal(recomputeIfDue(db, config), false, 'cleared marker never fires');
+  assert.equal(await recomputeIfDue(db, config), false, 'cleared marker never fires');
 
   db.close();
+});
+
+test('recomputeScores yields to the event loop between chunks, never blocking it for the full run', async () => {
+  const db = tempDb();
+  // Enough rows that, with yieldEveryMs forced to 0 (yield after every
+  // single row), several yields happen before the sweep finishes - one
+  // yield wouldn't distinguish "yields once, then blocks anyway" from a
+  // genuinely non-blocking sweep.
+  seed(db, Array.from({ length: 20 }, (_, i) => ({
+    title: `t${i}`, topics: ['tech'], vote: i % 2 === 0 ? 1 : -1,
+  })));
+
+  let sideEffectRan = false;
+  const swept = recomputeScores(db, testConfig(), { yieldEveryMs: 0 }).then(() => 'swept');
+  const marker = new Promise((resolve) => setTimeout(() => {
+    sideEffectRan = true;
+    resolve('marker');
+  }, 0));
+
+  const winner = await Promise.race([swept, marker]);
+  assert.equal(winner, 'marker', 'an independent timer ran before the full sweep finished');
+  assert.ok(sideEffectRan);
+  await swept; // let the sweep actually finish before the db closes
 });
 
 function seedTitleId(db, title) {

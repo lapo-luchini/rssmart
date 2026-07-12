@@ -609,14 +609,36 @@ Two paths, with very different scaling:
   overwhelming majority of the archive by design (the app exists
   precisely because arrival outpaces reading): scoring only unread
   articles, and pruning old read-but-unvoted ones — both barely shrink N.
-  The remaining ladder rungs (cache voted vectors instead of re-reading
-  blobs each sweep; sqlite-vec/approximate NN if this ever gets truly
-  huge) are about the debounced sweep's *own* cost — `recomputeIfDue`
-  still runs a full `recomputeScores` when a vote-ripple debounce
-  actually elapses, and that call still blocks for the same ~48s. That
-  path is unchanged by this fix (votes genuinely do ripple to every
-  article's kNN term, unlike classification) and is a separate,
-  currently unaddressed risk.
+  `recomputeIfDue`'s own debounced sweep (the one that fires when a
+  vote-ripple debounce actually elapses) had this exact same blocking
+  problem: it's still the same expensive `recomputeScores`. **Fixed**:
+  `recomputeScores` is now async and chunked — it processes rows in
+  bursts of at most `yieldEveryMs` (default 150ms) of synchronous work,
+  each burst its own SQLite transaction, `await`ing a `setTimeout(0)`
+  between bursts so the event loop (and any concurrent request) gets a
+  turn. `topicPref`/`feedPref`/`voted` are still snapshotted once up
+  front — a vote landing mid-sweep gets its own instant
+  `recomputeOneScore` as always, but may be transiently overwritten by
+  the in-flight sweep's stale value for that one article until the
+  *next* sweep corrects it; accepted, self-correcting tradeoff (the
+  alternative, invalidating/restarting the whole sweep on a mid-flight
+  vote, isn't worth the complexity for a discrepancy this small and
+  short-lived). `scheduler.js`'s `scoreTick` guards against overlapping
+  sweeps (`scoring` boolean) since it's now a long-running async job
+  instead of a single blocking call. Verified live against the real
+  ~6200-article/170-voted archive, server running, a vote fired via real
+  HTTP while a forced-due sweep was genuinely in flight: on Node, the
+  sweep ran end-to-end in ~46s and votes at ~0.3s and ~20s into it
+  returned in 666ms and 372ms; on Bun, votes returned in 631ms and
+  606ms during a sweep that took noticeably longer than Node's (observed
+  in the 90-115s range for the same archive on the same machine) — a
+  real Bun-vs-Node performance gap for this workload worth investigating
+  separately sometime, but orthogonal to this fix, since the thing that
+  mattered (a vote never waits anywhere near the sweep's full duration)
+  held on both runtimes. The remaining ladder rungs (cache voted vectors
+  instead of re-reading blobs each sweep; sqlite-vec/approximate NN if
+  this ever gets truly huge) are about the sweep's total *duration*, not
+  urgent now that duration no longer blocks anything.
 - **Nothing prunes articles.** The archive grows forever (~6 KB of
   embeddings per article plus text). Fine for years at current intake;
   see retention above.

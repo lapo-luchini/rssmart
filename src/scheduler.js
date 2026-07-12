@@ -109,13 +109,22 @@ export function startScheduler(db, config, {
     }
   };
 
-  const scoreTick = () => {
+  // recomputeIfDue's full sweep now yields periodically (see scoring.js) so
+  // it never blocks concurrent requests for its whole ~48s, but it's still
+  // one long-running async job — this guard just stops scoreEveryMs ticks
+  // from starting a second overlapping sweep while one is already in flight.
+  let scoring = false;
+  const scoreTick = async () => {
+    if (scoring) return;
+    scoring = true;
     try {
-      if (recomputeIfDue(db, config)) {
+      if (await recomputeIfDue(db, config)) {
         log('scheduler: recomputed scores (debounced after recent votes)');
       }
     } catch (err) {
       logError('scheduler score:', err.message);
+    } finally {
+      scoring = false;
     }
   };
 
