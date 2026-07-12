@@ -76,6 +76,21 @@ day-one spec was retired for exactly that reason; it's in git history).
   runtime that has `Float16Array` but falls below the declared `engines`
   minimum gets a warning, not a hard stop; neither `engines` field is
   actually enforced by a package manager by default.
+- **Only the N most-used topics are suggested to the classifier
+  (`enrich.maxSuggestedTopics`, default 150), not the full vocabulary.**
+  The topic vocabulary only grows (352 topics by 2026-07-12, growing
+  ~14/day, 18% used by exactly one article — a sign of semantic
+  duplication, not healthy reuse), and the full list rides in every
+  classification prompt, competing with the article text and
+  guidelines/notes for context window. `existingTopicNames`
+  (`src/enrich.js`) sorts by usage count, most-used first, then slices to
+  the configured limit — falsy (0/null) shows the full list. This bounds
+  prompt cost regardless of how large the vocabulary gets, but is
+  deliberately just a *suggestion-list* cap: it doesn't touch
+  already-tagged articles, and a topic outside the cap can still be
+  reused if the model names it anyway (`normalizeTopics` has no
+  existing-list restriction). It does not fix the underlying redundancy
+  itself — see the topic-merge tooling entry below for that.
 - **Semantic search (`src/search.js`) reuses the taste-learning embeddings,
   no vector index.** The query is embedded with the same model and the
   `query` task prefix, then ranked by brute-force cosine against
@@ -441,17 +456,12 @@ Two paths, with very different scaling:
   origin-page fetching refuses private/loopback targets (SSRF) unless
   `enrich.allowPrivateFetch` is set. Residual, accepted: DNS-rebinding
   TOCTOU on page fetches — firewall the process if that ever matters.
-- **The topic vocabulary is unbounded.** It reached 283 by 2026-07-07 and
-  only grows — nothing merges, retires, or caps it. Two knock-on costs: the
-  Topics tab becomes less browsable, and the full topic list rides in every
-  classification prompt, so it competes with the article text and the
-  reader's guidelines/notes for the model's context window (see `num_ctx`
-  sizing below — a large vocabulary no longer risks silent truncation, but
-  the list itself keeps growing regardless). Deferred fix: cap what's shown
-  to the model to, say, the ~100 most-used topics, letting rarely-assigned
-  ones fade out of the *suggestion* list (they'd remain valid on articles
-  already tagged with them — this only changes what the classifier is
-  nudged toward, not stored data).
+- **The topic vocabulary itself is still unbounded, even though its prompt
+  cost is now capped (see `existingTopicNames` below).** Nothing merges or
+  retires topics on its own, so the Topics tab keeps getting less
+  browsable and genuinely redundant near-duplicates (e.g. "ai" vs
+  "artificial-intelligence") keep accumulating in the DB — nothing
+  currently fixes that at the source, only bounds its cost downstream.
 - **`num_ctx` must stay stable across requests, not just "large enough".**
   Changing `num_ctx` between calls makes Ollama reload the model, at a real
   time cost. `contextTokens` (`src/enrich.js`) therefore sizes it from

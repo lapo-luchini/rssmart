@@ -29,6 +29,14 @@ const DEFAULTS = {
     // (e.g. an anchor into a shared listing/archive page), not just a
     // quality heuristic. See fetchArticleText in src/fetchpage.js.
     maxArticleChars: 50_000,
+    // The topic vocabulary only grows (nothing merges/retires topics on its
+    // own — see docs/scripts for topic-merge tooling), and the full list
+    // rides in every classification prompt. Capping what's *suggested* to
+    // the classifier bounds that cost regardless of how large the
+    // vocabulary gets; it doesn't touch already-tagged articles or stop a
+    // topic outside the cap from being reused if the model names it anyway
+    // (see existingTopicNames, src/enrich.js). 0 or null shows the full list.
+    maxSuggestedTopics: 150,
   },
   cron: {
     maxRunMs: 300_000,

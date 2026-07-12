@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
-import { enrichPending, cosine, bufToVec, sampleText } from '../src/enrich.js';
+import { enrichPending, cosine, bufToVec, sampleText, existingTopicNames } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
 import { compressText } from '../src/compress.js';
 
@@ -50,6 +50,33 @@ test('num_ctx grows with a large topic vocabulary, not just article length', asy
   } finally {
     await stub.close();
   }
+});
+
+test('existingTopicNames: most-used first, capped, uncapped when falsy', () => {
+  const db = tempDb();
+  seedArticle(db, { title: 'a' });
+  seedArticle(db, { title: 'b' });
+  seedArticle(db, { title: 'c' });
+  const insertTopic = db.prepare('INSERT INTO topics (name) VALUES (?) RETURNING id');
+  const link = db.prepare('INSERT INTO article_topics (article_id, topic_id) VALUES (?, ?)');
+  const { id: popular } = insertTopic.get('popular');
+  const { id: medium } = insertTopic.get('medium');
+  const { id: rare } = insertTopic.get('rare');
+  insertTopic.get('unused'); // exists but tagged on nothing
+  link.run(1, popular);
+  link.run(2, popular);
+  link.run(3, popular);
+  link.run(1, medium);
+  link.run(2, medium);
+  link.run(1, rare);
+
+  assert.deepEqual(
+    existingTopicNames(db, 0),
+    ['popular', 'medium', 'rare', 'unused'],
+    'uncapped: most-used first, ties broken alphabetically (unused counts as 0)',
+  );
+  assert.deepEqual(existingTopicNames(db, 2), ['popular', 'medium'], 'capped to the top N by usage');
+  assert.deepEqual(existingTopicNames(db, null), existingTopicNames(db, 0), 'null and 0 both mean uncapped');
 });
 
 test('cosine similarity basics', () => {

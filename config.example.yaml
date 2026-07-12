@@ -43,6 +43,12 @@ enrich:
                           # html, no matter how well it extracted — a safety
                           # net against pages that aren't really one article
                           # (e.g. an anchor into a shared listing/archive page)
+  maxSuggestedTopics: 150 # only the N most-used topics are shown to the
+                          # classifier (bounds prompt/context growth as the
+                          # vocabulary grows); already-tagged articles are
+                          # unaffected, and a topic outside this cap can
+                          # still be reused if the model names it anyway.
+                          # 0 or omit to show the full list.
 
 cron:
   maxRunMs: 300000    # time budget per cron run; unfinished classification

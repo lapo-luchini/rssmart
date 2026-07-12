@@ -77,6 +77,12 @@ Configure in `config.yaml`:
   against pages that aren't really a single article (e.g. an `#anchor`
   into a shared listing/archive page, which fetches the same huge page
   every time since fragments never reach the server).
+- `enrich.maxSuggestedTopics` (default 150) — the topic vocabulary only
+  grows, and the full list rides in every classification prompt; this
+  shows the classifier only the N most-used topics, bounding that cost
+  regardless of how large the vocabulary gets. Already-tagged articles
+  are unaffected, and a topic outside the cap can still be reused if the
+  model names it anyway. 0 shows the full list.
 
 ## Usage
 

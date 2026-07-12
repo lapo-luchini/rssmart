@@ -264,12 +264,29 @@ function resolveGroupRoot(db, matchedId, articleId) {
   return root === articleId ? null : root;
 }
 
-/** Classify + summarize + embed one article and persist the outcome. */
-async function enrichOne(db, llm, article, recent, enrichCfg) {
-  const existing = db
-    .prepare('SELECT name FROM topics ORDER BY name')
+/**
+ * Topic names to suggest to the classifier, most-used first (helps both
+ * the model favor genuinely common topics and, when capped, keeps the
+ * ones actually worth reusing rather than an arbitrary alphabetical
+ * prefix). `limit` bounds prompt/context growth as the vocabulary grows
+ * unboundedly — falsy (0/null) shows the full list.
+ */
+export function existingTopicNames(db, limit) {
+  const names = db
+    .prepare(`
+      SELECT t.name FROM topics t
+      LEFT JOIN article_topics at ON at.topic_id = t.id
+      GROUP BY t.id
+      ORDER BY COUNT(at.article_id) DESC, t.name ASC
+    `)
     .all()
     .map((r) => r.name);
+  return limit ? names.slice(0, limit) : names;
+}
+
+/** Classify + summarize + embed one article and persist the outcome. */
+async function enrichOne(db, llm, article, recent, enrichCfg) {
+  const existing = existingTopicNames(db, enrichCfg.maxSuggestedTopics);
   const text = await articleText(db, article, enrichCfg);
 
   const guidelines = db
