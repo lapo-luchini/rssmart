@@ -795,6 +795,25 @@ Two paths, with very different scaling:
   the sweep's total *duration*, not urgent now that duration no
   longer blocks anything and is down to single-digit seconds either
   way.
+- **Ant (antjs.org) investigated as a third runtime, not adopted.** It
+  looked promising on the two things this project cares most about:
+  `Float16Array` and `WebAssembly.instantiate` both work natively.
+  The blocker is SQLite - there is no `node:sqlite`, no
+  `better-sqlite3`/`sqlite3` support, nothing built in at all. Ant does
+  expose a raw FFI (`ant:ffi`, `dlopen`) capable of loading the
+  system's real `libsqlite3` and calling its C API directly (confirmed
+  via Ant's own FFI example), so a driver is *possible* - but only by
+  hand-writing a full `sqlite3_prepare_v2`/`bind`/`step`/`column_*`
+  binding to match `better-sqlite3`'s `.prepare().run()/.get()/.all()`
+  interface `src/db.js` already assumes, including correct BLOB byte-
+  length handling for the embedding/compressed-text columns - real
+  scope and real correctness risk (a marshaling bug here means data
+  corruption) for a runtime that shipped two versions in the course of
+  investigating it. Decided to wait rather than build and maintain a
+  third from-scratch driver: [ant#51](https://github.com/theMackabu/ant/issues/51)
+  asks upstream about SQLite support directly; revisit once that (or
+  `node:sqlite`/`better-sqlite3` support) lands rather than re-doing
+  this investigation from scratch.
 - **Nothing prunes articles.** The archive grows forever (~6 KB of
   embeddings per article plus text). Fine for years at current intake;
   see retention above.
