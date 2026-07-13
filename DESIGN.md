@@ -647,9 +647,46 @@ Two paths, with very different scaling:
   JS number arrays instead of typed arrays, still 2.5× slower, though
   interestingly plain arrays were JSC's *fastest* representation of the
   four (beating even `Float32Array` there), while V8 preferred
-  `Float32Array` and put plain arrays second-worst. Net conclusion:
-  JSC is inherently worse than V8 at this loop shape regardless of
-  representation, not fixable by picking a different array type.
+  `Float32Array` and put plain arrays second-worst.
+
+  **Caveat on those specific numbers, found afterward**: that
+  microbenchmark called one shared `cosine()` function sequentially
+  across all four vector types (Float16, then Float32, then Float64,
+  then plain arrays) in the same process. Per a Bun maintainer
+  (`robobun`)'s reply on [bun#34063](https://github.com/oven-sh/bun/issues/34063)
+  (opened by this project's own author, not a third party - filed
+  2026-07-13, open/unresolved as of writing, reproduced on Bun
+  1.3.13/1.3.14, same versions tested here): "once the `a[i]` access
+  site has seen a Float16Array, JSC can no longer use its optimized
+  typed-array path there, and every later call (including the float32
+  one) pays for it" - their own benchmark showed `Float32Array` alone
+  at ~1.77us degrading to ~3.25us once mixed with other types through a
+  shared function. That means this project's own 6.6x/4.8x/8.9x/2.5x
+  figures likely aren't clean isolated per-type measurements either -
+  the qualitative conclusion (Bun slower here) still stands, but not
+  necessarily at exactly those ratios, since the call site measuring
+  Float32Array/Float64Array/plain-arrays had already been polluted by
+  the earlier Float16Array calls at that same site.
+
+  The **more precise root cause**, per the same reply: JavaScriptCore
+  has no JIT support for `Float16Array` on x86-64 at all, forcing a
+  slow C++ fallback path regardless of monomorphism - confirmed to
+  match this project's own test environment (`process.arch` is `x64`).
+  This is stronger, not weaker, support for the fix actually shipped
+  below: the later, decision-driving benchmark (9-10x Node / 46-51x Bun,
+  further down) used a dedicated single-type script - `Float16Array`
+  only, throughout, no call-site mixing - so it isn't subject to the
+  polymorphism artifact above, and this maintainer explanation gives it
+  a harder architectural reason (no JIT path at all) rather than just
+  "JSC seems worse at this." The bug reporter's own conclusion in that
+  thread was also to move the hot path to WebAssembly - the same
+  direction taken independently here before reading that reply.
+
+  Since it's a confirmed, currently-open upstream bug with no fix or
+  workaround yet, not a misconfiguration on this project's side, the
+  WASM route below remains the practical mitigation until Bun resolves
+  it - worth revisiting (the JS path could get simpler again) if/when
+  that issue closes.
 
   **Optimized anyway, on a different axis**: checked live against the
   real archive (6200 stored vectors, plus a 2000-row sample of the
