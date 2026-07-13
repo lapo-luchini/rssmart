@@ -46,6 +46,25 @@ test('no votes -> neutral preference and zero scores', async () => {
   assert.ok(result.ms >= 0, 'reports how long it took');
 });
 
+test('topicPrefs marks which topics are within the LLM-suggested cap, matching existingTopicNames exactly', () => {
+  const db = tempDb();
+  seed(db, [
+    { title: 'a1', topics: ['popular'] },
+    { title: 'a2', topics: ['popular'] },
+    { title: 'a3', topics: ['popular'] },
+    { title: 'b1', topics: ['medium'] },
+    { title: 'b2', topics: ['medium'] },
+    { title: 'c1', topics: ['rare'] },
+  ]);
+
+  const withCap = topicPrefs(db, 2); // only the top 2 most-used topics fit
+  const byName = Object.fromEntries(withCap.map((t) => [t.name, t.suggested]));
+  assert.deepEqual(byName, { popular: true, medium: true, rare: false });
+
+  const uncapped = topicPrefs(db); // maxSuggested falsy -> field omitted entirely
+  assert.ok(uncapped.every((t) => !('suggested' in t)), 'no cap given -> no suggested field at all');
+});
+
 test('upvotes raise topic preference with Laplace smoothing', async () => {
   const db = tempDb();
   const ids = seed(db, [

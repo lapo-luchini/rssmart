@@ -9,7 +9,7 @@
 // so score = score_topics + score_embedding + score_depth + score_feed.
 // Everything derives from votes at recompute time — no training state.
 
-import { bufToVec } from './enrich.js';
+import { bufToVec, existingTopicNames } from './enrich.js';
 import { createDotBatcher } from './wasmDot.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -32,9 +32,18 @@ const PREF_EXPR = `
   * 2 - 1
 `;
 
-/** Per-topic stats for the API/UI: preference, votes, article count. */
-export function topicPrefs(db) {
-  return db.prepare(`
+/**
+ * Per-topic stats for the API/UI: preference, votes, article count.
+ * `maxSuggested` (falsy = skip) marks each topic `suggested: true/false` -
+ * whether it's among the top-`maxSuggested` most-used topics that actually
+ * ride in the classification prompt (`existingTopicNames`, same function,
+ * same ranking, so this can never drift from what the LLM is really shown).
+ * A topic outside that cap can still get used - the model can name it
+ * anyway and `normalizeTopics` has no restriction - `suggested: false` just
+ * means it isn't *offered* as a suggestion, not that it's unusable.
+ */
+export function topicPrefs(db, maxSuggested) {
+  const rows = db.prepare(`
     SELECT t.id, t.name,
            COUNT(at.article_id) AS articles,
            COALESCE(SUM(MAX(a.vote, 0)), 0) AS up,
@@ -46,6 +55,10 @@ export function topicPrefs(db) {
     GROUP BY t.id
     ORDER BY t.name
   `).all();
+
+  if (!maxSuggested) return rows;
+  const suggested = new Set(existingTopicNames(db, maxSuggested));
+  return rows.map((r) => ({ ...r, suggested: suggested.has(r.name) }));
 }
 
 /**

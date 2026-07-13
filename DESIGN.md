@@ -90,7 +90,12 @@ day-one spec was retired for exactly that reason; it's in git history).
   already-tagged articles, and a topic outside the cap can still be
   reused if the model names it anyway (`normalizeTopics` has no
   existing-list restriction). It does not fix the underlying redundancy
-  itself — see the topic-merge tooling entry below for that.
+  itself — see the topic-merge tooling entry below for that. The Topics
+  tab surfaces which side of the cap each topic is on, deliberately
+  understated (a `title` tooltip on the topic name, no color/badge/icon) —
+  `topicPrefs(db, maxSuggested)` (`src/scoring.js`) marks each row
+  `suggested: true/false` using `existingTopicNames` itself, so this can
+  never drift out of sync with what the LLM is actually shown.
 - **Topic merges are propose-review-approve, never automatic
   (`src/topicMerge.js`).** Unlike a plain relabel, collapsing topic A into
   topic B retroactively blends their vote history — `topicPrefs`
