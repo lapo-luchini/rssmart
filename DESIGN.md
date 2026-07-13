@@ -91,8 +91,12 @@ day-one spec was retired for exactly that reason; it's in git history).
   reused if the model names it anyway (`normalizeTopics` has no
   existing-list restriction). It does not fix the underlying redundancy
   itself — see the topic-merge tooling entry below for that. The Topics
-  tab surfaces which side of the cap each topic is on, deliberately
-  understated (a `title` tooltip on the topic name, no color/badge/icon) —
+  tab surfaces which side of the cap each topic is on: understated at rest
+  but readable at a glance without hovering, not a loud badge/color —
+  reuses the exact dimming already applied to a disabled feed's name
+  (`.feed-row.inactive .feed-name { opacity: 0.45; }`, `style.css`), just
+  toggled by `suggested === false` instead of `!active`. A `title`
+  tooltip on the same element spells out why, for anyone who does hover.
   `topicPrefs(db, maxSuggested)` (`src/scoring.js`) marks each row
   `suggested: true/false` using `existingTopicNames` itself, so this can
   never drift out of sync with what the LLM is actually shown.
