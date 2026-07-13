@@ -368,13 +368,26 @@ test('topics, feeds and stats endpoints', async () => {
   assert.ok(tech.pref > 0);
 
   const feeds = await get('/api/feeds');
-  assert.equal(feeds.body[0].articles, 6);
+  assert.equal(feeds.body.find((f) => f.id === 1).articles, 6);
 
   const stats = await get('/api/stats');
   assert.deepEqual(
     { total: stats.body.total, duplicates: stats.body.duplicates, pending: stats.body.pending },
     { total: 6, duplicates: 1, pending: 1 },
   );
+});
+
+test('a feed with zero ever-ingested articles reports 0 unread, not a phantom-row miscount', async () => {
+  // Regression: COALESCE(SUM(a.read_at IS NULL), 0) miscounted 1 unread for
+  // a feed with NO articles at all, because the LEFT JOIN's single
+  // all-NULL placeholder row has a.read_at IS NULL true (that operator is
+  // true-for-actual-NULL, unlike most others) even though there's no
+  // article. A dead/404 feed (0 successful fetches ever) hits this every
+  // time - reported live as "unread 1/0" in the Feeds tab.
+  db.prepare("INSERT INTO feeds (id, url, title, ok_count, error_count) VALUES (99, 'http://dead.example/rss', 'Dead Feed', 0, 77)").run();
+  const feeds = await get('/api/feeds');
+  const dead = feeds.body.find((f) => f.id === 99);
+  assert.deepEqual({ articles: dead.articles, unread: dead.unread }, { articles: 0, unread: 0 });
 });
 
 test('propose-merges returns the LLM\'s filtered proposals, nothing applied', async () => {

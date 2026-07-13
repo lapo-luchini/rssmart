@@ -380,7 +380,7 @@ export function createApp(db, config) {
            f.next_fetch_at, f.fetch_interval_min,
            f.ok_count, f.error_count,
            COUNT(a.id) AS articles,
-           COALESCE(SUM(a.read_at IS NULL), 0) AS unread,
+           COUNT(CASE WHEN a.read_at IS NULL THEN a.id END) AS unread,
            AVG(CASE WHEN a.vote != 0 THEN a.vote END) AS avg_vote,
            COALESCE(SUM(a.vote != 0), 0) AS votes,
            ROUND(COUNT(CASE WHEN COALESCE(a.published_at, a.created_at)
