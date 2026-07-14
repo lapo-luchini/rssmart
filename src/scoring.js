@@ -144,6 +144,25 @@ function makeVotedBatcher(voted) {
   return createDotBatcher(voted.map((v) => v.vec), voted[0].vec.length);
 }
 
+// Cache for recomputeOneScore: reuses the voted set and WASM batcher
+// across consecutive calls. Invalidated when a vote changes the set.
+let _singleScoreBatcher = null;
+let _singleScoreVoted = null;
+
+function getSingleScoreBatcher(db) {
+  if (!_singleScoreBatcher) {
+    _singleScoreVoted = votedArticles(db);
+    _singleScoreBatcher = makeVotedBatcher(_singleScoreVoted);
+  }
+  return { voted: _singleScoreVoted, batcher: _singleScoreBatcher };
+}
+
+export function clearSingleScoreBatcher() {
+  _singleScoreBatcher?.free();
+  _singleScoreBatcher = null;
+  _singleScoreVoted = null;
+}
+
 function scoreParts(row, topicPref, feedPref, voted, weights, knn, scratch, batcher) {
   const topics = weights.topics * (topicPref ?? 0);
   const embedding = weights.embedding * knnScore(row, voted, knn, scratch, batcher);
@@ -258,14 +277,9 @@ export function recomputeOneScore(db, config, articleId) {
     SELECT ${PREF_EXPR} AS pref FROM articles a WHERE a.feed_id = ?
   `).get(row.feed_id).pref;
 
-  const voted = votedArticles(db);
-  const batcher = makeVotedBatcher(voted);
-  try {
-    const s = scoreParts(row, topicPref, feedPref, voted, weights, knn, makeKnnScratch(knn), batcher);
-    db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.total, articleId);
-  } finally {
-    batcher?.free();
-  }
+  const { voted, batcher } = getSingleScoreBatcher(db);
+  const s = scoreParts(row, topicPref, feedPref, voted, weights, knn, makeKnnScratch(knn), batcher);
+  db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.total, articleId);
 }
 
 const RECOMPUTE_DUE_KEY = 'score_recompute_due_at';
