@@ -160,7 +160,7 @@ export function createApp(db, config) {
   const llm = new Ollama(config.ollama);
 
   app.get('/api/articles', async (c) => {
-    const query = Object.fromEntries(new URL(c.req.url).searchParams);
+    const query = c.req.query();
     const q = (query.q ?? '').trim();
     const isSemantic = query.semantic === '1' && q;
 
