@@ -177,7 +177,8 @@ export async function ingestMastodonFeed(db, feed, mastodon) {
  * Called once on startup so the scheduler picks it up.
  */
 export function syncMastodonFeed(db, config) {
-  if (!config.mastodon?.url || !config.mastodon?.token) return;
+  const m = new Mastodon(config.mastodon ?? {});
+  if (!m.configured) return;
   db.prepare(`
     INSERT INTO feeds (url, title, html_url, type, active, fetch_interval_min)
     VALUES (?, 'Mastodon Home Timeline', ?, 'mastodon', 1, 5)
@@ -201,7 +202,7 @@ export async function ingestAll(db, config, { parser, onFeed, dueOnly = false } 
     .prepare(`SELECT id, url, title, type, fetch_interval_min FROM feeds WHERE active = 1 ${due}`)
     .all();
 
-  const mastodon = config.mastodon?.url ? new Mastodon(config.mastodon) : null;
+  const mastodon = new Mastodon(config.mastodon ?? {});
 
   const summary = { feedsOk: 0, feedsFailed: 0, added: 0, skipped: 0, errors: [], feeds: [] };
   let index = 0;
@@ -209,7 +210,7 @@ export async function ingestAll(db, config, { parser, onFeed, dueOnly = false } 
     index++;
     try {
       if (feed.type === 'mastodon') {
-        if (!mastodon) throw new Error('Mastodon not configured (url/token missing)');
+        if (!mastodon.configured) throw new Error('Mastodon not configured (url + token or username/password required)');
         const { added } = await ingestMastodonFeed(db, feed, mastodon);
         summary.feedsOk++;
         summary.added += added;

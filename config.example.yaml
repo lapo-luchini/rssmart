@@ -86,12 +86,15 @@ scoring:
                               # between them
 
 # Mastodon (or Friendica) personal API feed: fetches your home timeline
-# as articles with proper per-post authors. Get a token from your
-# instance's Settings > Development > New Application — read-only access
-# is enough, no OAuth dance needed. Omit or leave empty to disable.
+# as articles with proper per-post authors. Two auth methods:
+#   - token: Bearer token (Mastodon: Settings > Development > New App)
+#   - username + password: HTTP Basic Auth (Friendica, no token UI)
+# Omit or leave empty to disable.
 mastodon:
   url: https://mastodon.social   # or your Friendica instance URL
-  token: ''                       # personal access token
+  token: ''                       # Bearer token (Mastodon)
+  username: ''                    # HTTP Basic Auth (Friendica)
+  password: ''
 
 server:
   host: 127.0.0.1  # loopback only, since this has no auth of its own;
