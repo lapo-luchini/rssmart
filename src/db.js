@@ -152,6 +152,8 @@ const MIGRATIONS = [
   },
   // v14 — persist the exploratory bonus so it displays in the score tooltip.
   "ALTER TABLE articles ADD COLUMN score_bonus REAL NOT NULL DEFAULT 0;",
+  // v15 — distinguish RSS/Atom feeds from Mastodon API sources.
+  "ALTER TABLE feeds ADD COLUMN type TEXT NOT NULL DEFAULT 'rss';",
 ];
 
 /**

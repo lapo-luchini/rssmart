@@ -1,4 +1,4 @@
-import { ingestAll } from './ingest.js';
+import { ingestAll, syncMastodonFeed } from './ingest.js';
 import { enrichPending, reembedMissing } from './enrich.js';
 import { recomputeOneScore, recomputeIfDue } from './scoring.js';
 import { Ollama } from './llm.js';
@@ -29,6 +29,7 @@ export function startScheduler(db, config, {
 } = {}) {
   const owner = `serve-${process.pid}`;
   const llm = new Ollama(config.ollama);
+  syncMastodonFeed(db, config);
 
   let fetching = false;
   const fetchTick = async () => {

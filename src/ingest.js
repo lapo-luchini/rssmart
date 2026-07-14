@@ -2,6 +2,7 @@ import Parser from 'rss-parser';
 import { sanitizeHtml } from './html.js';
 import { charsetFromContentType, decodeBytes } from './charset.js';
 import { compressText } from './compress.js';
+import { Mastodon } from './mastodon.js';
 
 // Feed-provided links end up in <a href> in the UI: allow http(s) only.
 const httpUrl = (u) =>
@@ -125,6 +126,66 @@ export async function ingestFeed(db, feed, parser) {
 }
 
 /**
+ * Fetch one Mastodon timeline (home feed). A single Mastodon account is
+ * stored as one feed row with type='mastodon'. Each post becomes an article
+ * with the poster's display name as author.
+ */
+export async function ingestMastodonFeed(db, feed, mastodon) {
+  const sinceRow = db.prepare(`
+    SELECT guid FROM articles WHERE feed_id = ? ORDER BY id DESC LIMIT 1
+  `).get(feed.id);
+  const sinceId = sinceRow?.guid?.startsWith('mastodon:')
+    ? sinceRow.guid.slice(9)
+    : null;
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO articles
+      (feed_id, guid, url, title, author, published_at, content)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const posts = await mastodon.homeTimeline(sinceId);
+  let added = 0;
+
+  db.transaction(() => {
+    for (const post of posts) {
+      const { changes } = insert.run(
+        feed.id,
+        post.guid,
+        post.url,
+        post.title,
+        post.author,
+        post.publishedAt,
+        compressText(sanitizeHtml(post.content)),
+      );
+      added += changes;
+    }
+    db.prepare(`
+      UPDATE feeds SET
+        last_fetched_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+        last_status = 'ok',
+        ok_count = ok_count + 1
+      WHERE id = ?
+    `).run(feed.id);
+  })();
+
+  return { added };
+}
+
+/**
+ * Ensure the Mastodo timeline feed exists in the feeds table.
+ * Called once on startup so the scheduler picks it up.
+ */
+export function syncMastodonFeed(db, config) {
+  if (!config.mastodon?.url || !config.mastodon?.token) return;
+  db.prepare(`
+    INSERT INTO feeds (url, title, html_url, type, active, fetch_interval_min)
+    VALUES (?, 'Mastodon Home Timeline', ?, 'mastodon', 1, 5)
+    ON CONFLICT (url) DO UPDATE SET active = 1
+  `).run(config.mastodon.url, config.mastodon.url);
+}
+
+/**
  * Fetch active feeds. One feed failing never aborts the run; the error is
  * recorded on the feed row and in the returned summary. opts.onFeed, if
  * given, is called as each feed completes (for live CLI progress).
@@ -137,21 +198,33 @@ export async function ingestAll(db, config, { parser, onFeed, dueOnly = false } 
     ? "AND (next_fetch_at IS NULL OR next_fetch_at <= strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
     : '';
   const feeds = db
-    .prepare(`SELECT id, url, title, fetch_interval_min FROM feeds WHERE active = 1 ${due}`)
+    .prepare(`SELECT id, url, title, type, fetch_interval_min FROM feeds WHERE active = 1 ${due}`)
     .all();
+
+  const mastodon = config.mastodon?.url ? new Mastodon(config.mastodon) : null;
 
   const summary = { feedsOk: 0, feedsFailed: 0, added: 0, skipped: 0, errors: [], feeds: [] };
   let index = 0;
   for (const feed of feeds) {
     index++;
     try {
-      const { added, skipped } = await ingestFeed(db, feed, parser);
-      summary.feedsOk++;
-      summary.added += added;
-      summary.skipped += skipped;
-      summary.feeds.push({ url: feed.url, added, skipped });
-      scheduleNextFetch(db, feed, config);
-      onFeed?.({ url: feed.url, added, skipped, index, total: feeds.length });
+      if (feed.type === 'mastodon') {
+        if (!mastodon) throw new Error('Mastodon not configured (url/token missing)');
+        const { added } = await ingestMastodonFeed(db, feed, mastodon);
+        summary.feedsOk++;
+        summary.added += added;
+        summary.feeds.push({ url: feed.url, added, skipped: 0 });
+        scheduleNextFetch(db, feed, config);
+        onFeed?.({ url: feed.url, added, index, total: feeds.length });
+      } else {
+        const { added, skipped } = await ingestFeed(db, feed, parser);
+        summary.feedsOk++;
+        summary.added += added;
+        summary.skipped += skipped;
+        summary.feeds.push({ url: feed.url, added, skipped });
+        scheduleNextFetch(db, feed, config);
+        onFeed?.({ url: feed.url, added, skipped, index, total: feeds.length });
+      }
     } catch (err) {
       summary.feedsFailed++;
       summary.errors.push({ url: feed.url, error: err.message });

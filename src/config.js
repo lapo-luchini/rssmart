@@ -80,6 +80,10 @@ const DEFAULTS = {
     // genuinely exceptional.
     hotDecayPerDay: 0.05,
   },
+  mastodon: {
+    url: '',
+    token: '',
+  },
   server: {
     // Loopback-only by default: this is a personal-use reader with no
     // authentication of its own (see the README's Notes section), so it
@@ -130,6 +134,7 @@ export function loadConfig(path) {
     enrich: { ...DEFAULTS.enrich, ...user.enrich },
     cron: { ...DEFAULTS.cron, ...user.cron },
     scheduler: { ...DEFAULTS.scheduler, ...user.scheduler },
+    mastodon: { ...DEFAULTS.mastodon, ...user.mastodon },
     scoring: {
       ...DEFAULTS.scoring,
       ...user.scoring,

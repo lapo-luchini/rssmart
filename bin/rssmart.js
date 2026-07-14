@@ -2,7 +2,7 @@
 import { parseArgs } from 'node:util';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
-import { syncFeeds, ingestAll } from '../src/ingest.js';
+import { syncFeeds, syncMastodonFeed, ingestAll } from '../src/ingest.js';
 import { Ollama } from '../src/llm.js';
 import { enrichPending, syncEmbeddingSpace, reembedMissing } from '../src/enrich.js';
 import { recomputeOneScore, recomputeIfDue } from '../src/scoring.js';
@@ -62,6 +62,7 @@ if (mode === 'cron') {
   const info = (...args) => verbose && log(...args);
 
   syncFeeds(db, config.feeds);
+  syncMastodonFeed(db, config);
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {
     logError(
@@ -166,6 +167,7 @@ if (mode === 'cron') {
   const allFeedsFailed = ingest.feedsFailed > 0 && ingest.feedsOk === 0;
   process.exit(allFeedsFailed ? 1 : 0);
 } else {
+  syncMastodonFeed(db, config);
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {
     log(
