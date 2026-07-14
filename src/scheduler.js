@@ -40,6 +40,7 @@ export function startScheduler(db, config, {
         log(`scheduler: ${plural(r.added, 'new article')} from ${plural(r.feedsOk, 'feed')}` +
           (r.feedsFailed ? `, ${r.feedsFailed} failed` : ''));
       }
+      if (r.added > 0) classifierWorkPending = -1;
     } catch (err) {
       logError('scheduler fetch:', err.message);
     } finally {
@@ -47,11 +48,17 @@ export function startScheduler(db, config, {
     }
   };
 
-  const hasClassifierWork = () => db.prepare(`
-    SELECT COUNT(*) AS c FROM articles
-    WHERE (status = 'pending' AND enrich_attempts < ?)
-       OR (status = 'enriched' AND (embedding IS NULL OR text_embedding IS NULL))
-  `).get(config.enrich.maxAttempts).c > 0;
+  let classifierWorkPending = -1; // -1 = unknown, 0 = none, >0 = count
+  const hasClassifierWork = () => {
+    if (classifierWorkPending < 0) {
+      classifierWorkPending = db.prepare(`
+        SELECT COUNT(*) AS c FROM articles
+        WHERE (status = 'pending' AND enrich_attempts < ?)
+           OR (status = 'enriched' AND (embedding IS NULL OR text_embedding IS NULL))
+      `).get(config.enrich.maxAttempts).c;
+    }
+    return classifierWorkPending > 0;
+  };
 
   // One lease-guarded batch: re-embed vectors missing in the current
   // embedding space first, then classify pending articles.
@@ -88,6 +95,7 @@ export function startScheduler(db, config, {
       log(`scheduler: classified ${plural(r.enriched, 'article')} (avg ${avg.toFixed(1)}s each)` +
         (r.failed ? `, ${r.failed} failed` : ''));
     }
+    classifierWorkPending = -1; // invalidate after batch
   };
 
   let enriching = false;
