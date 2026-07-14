@@ -82,8 +82,16 @@ scoring:
                              # shift anyone's kNN term) is expensive at scale,
                              # so it's debounced this many seconds after your
                              # last vote — raise it if you tend to vote in
-                             # long sessions and don't need scores to settle
-                             # between them
+                              # long sessions and don't need scores to settle
+                              # between them
+
+# Mastodon (or Friendica) personal API feed: fetches your home timeline
+# as articles with proper per-post authors. Get a token from your
+# instance's Settings > Development > New Application — read-only access
+# is enough, no OAuth dance needed. Omit or leave empty to disable.
+mastodon:
+  url: https://mastodon.social   # or your Friendica instance URL
+  token: ''                       # personal access token
 
 server:
   host: 127.0.0.1  # loopback only, since this has no auth of its own;

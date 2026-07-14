@@ -392,7 +392,7 @@ export function createApp(db, config) {
     if (feedListKey === key) return feedListCache;
     feedListKey = key;
     feedListCache = db.prepare(`
-      SELECT f.id, f.url, f.title, f.html_url, f.active, f.last_fetched_at, f.last_status,
+      SELECT f.id, f.url, f.title, f.html_url, f.type, f.active, f.last_fetched_at, f.last_status,
              f.next_fetch_at, f.fetch_interval_min,
              f.ok_count, f.error_count,
              COUNT(a.id) AS articles,
