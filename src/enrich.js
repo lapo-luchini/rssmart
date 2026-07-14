@@ -395,7 +395,13 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     );
   })();
 
-  recent.push({ id: article.id, vec });
+  // Keep recent within the rolling window — prune entries whose
+  // creation date has fallen outside dupWindowDays since enrichment.
+  const cutoff = new Date(Date.now() - enrichCfg.dupWindowDays * 24 * 60 * 60 * 1000).toISOString();
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (recent[i].createdAt < cutoff) recent.splice(i, 1);
+  }
+  recent.push({ id: article.id, vec, createdAt: article.created_at });
   return { topics, summary, depth, duplicateOf, vec };
 }
 
@@ -432,7 +438,7 @@ export async function enrichPending(
   // Reader-requested reclassifications first, then newest first: fresh
   // articles are worth reading now, a backlog of old ones can wait.
   const nextPending = db.prepare(`
-    SELECT id, url, title, content, full_content, depth, enrich_note
+    SELECT id, url, title, content, full_content, depth, enrich_note, created_at
     FROM articles
     WHERE status = 'pending' AND enrich_attempts < ?
       AND id NOT IN (SELECT value FROM json_each(?))
@@ -442,11 +448,11 @@ export async function enrichPending(
 
   // Embeddings of recent, already-enriched articles for duplicate detection.
   const recent = db.prepare(`
-    SELECT id, embedding FROM articles
+    SELECT id, embedding, created_at FROM articles
     WHERE embedding IS NOT NULL
       AND created_at >= datetime('now', ?)
   `).all(`-${dupWindowDays} days`)
-    .map((r) => ({ id: r.id, vec: bufToVec(r.embedding) }));
+    .map((r) => ({ id: r.id, vec: bufToVec(r.embedding), createdAt: r.created_at }));
 
   // Queue position for progress display: n = attempted this run, m = n plus
   // what's still pending (m can grow while ingestion adds articles).
