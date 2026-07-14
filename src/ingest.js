@@ -181,9 +181,12 @@ export function syncMastodonFeed(db, config) {
   if (!m.configured) return;
   db.prepare(`
     INSERT INTO feeds (url, title, html_url, type, active, fetch_interval_min)
-    VALUES (?, 'Mastodon Home Timeline', ?, 'mastodon', 1, 5)
+    VALUES (?, 'Fediverse', ?, 'mastodon', 1, 5)
     ON CONFLICT (url) DO UPDATE SET active = 1
   `).run(config.mastodon.url, config.mastodon.url);
+
+  // Update title for existing feed rows that still have the old default
+  db.prepare("UPDATE feeds SET title = 'Fediverse' WHERE type = 'mastodon' AND title = 'Mastodon Home Timeline'").run();
 }
 
 /**

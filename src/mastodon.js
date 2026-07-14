@@ -56,17 +56,19 @@ export class Mastodon {
 }
 
 function normalize(status, instanceUrl) {
-  const acct = status.account?.acct ?? 'unknown';
-  const html = status.content ?? '';
+  // Boosts (reblogs) have content='' in the wrapper; the real post is nested.
+  const post = status.reblog ?? status;
+  const acct = post.account?.acct ?? 'unknown';
+  const html = post.content ?? '';
   const plain = html.replace(/<[^>]*>/g, '').trim();
 
   return {
     id: status.id,
     guid: `mastodon:${status.id}`,
-    url: status.url || `${instanceUrl}/@${acct}/${status.id}`,
+    url: post.url || `${instanceUrl}/@${acct}/${status.id}`,
     title: plain.slice(0, 120) || '(no content)',
     content: html,
-    author: status.account?.display_name || acct,
-    publishedAt: status.created_at,
+    author: post.account?.display_name || acct,
+    publishedAt: post.created_at,
   };
 }
