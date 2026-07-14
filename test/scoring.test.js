@@ -123,10 +123,14 @@ test('blended score combines topics, embedding kNN, depth and feed', async () =>
   `).get(id);
   const near = (x, y) => assert.ok(Math.abs(x - y) < 1e-9, `${x} != ${y}`);
 
-  // candidate: tech pref 1/3, identical embedding to the liked article
-  // (kNN signal = vote/2 = 0.5), depth 5 -> +1, feed pref 1/3
+  // candidate: tech pref 1/3 blended 70/30 with topic-neighbor signal
+  // (identical embedding + same topic as liked → neighbor vote/2 = 0.5),
+  // anti-kNN up pass (same vec → sim=1, value=0.5), depth 5 → +1, feed pref 1/3
+  const topicBase = 1 / 3;
+  const topicNeighbor = 0.5;
+  const blendedTopic = topicBase * 0.7 + topicNeighbor * 0.3;
   const c = parts(ids.candidate);
-  near(c.score_topics, 0.4 / 3);
+  near(c.score_topics, 0.4 * blendedTopic);
   near(c.score_embedding, 0.3 / 2);
   near(c.score_depth, 0.2);
   near(c.score_feed, 0.1 / 3);
@@ -143,23 +147,23 @@ test('blended score combines topics, embedding kNN, depth and feed', async () =>
   const l = parts(ids.liked);
   near(l.score_embedding, 0);
 
-  // a WOW vote (+2) counts double everywhere: pref (2+1)/(2+2)*2-1 = 0.5,
-  // kNN signal 2/2 = 1
+  // a WOW vote (+2) counts double: pref (2+1)/(2+2)*2-1 = 0.5,
+  // topic-neighbor signal = 2/2 = 1, blended 70/30 = 0.5*0.7+1*0.3 = 0.65
   db.prepare('UPDATE articles SET vote = 2 WHERE id = ?').run(ids.liked);
   await recomputeScores(db, config);
   const c2 = parts(ids.candidate);
-  near(c2.score_topics, 0.4 * 0.5);
+  near(c2.score_topics, 0.4 * (0.5 * 0.7 + 1 * 0.3));
   near(c2.score_embedding, 0.3);
 });
 
-test('embedding kNN keeps only the k nearest voted articles, not the whole voted set', async () => {
+test('embedding anti-kNN: separate up/down passes, each limited to k', async () => {
   const db = tempDb();
   const ids = seed(db, [
-    { title: 'v1', vote: 2 },  // WOW up -> vote/2 = 1
-    { title: 'v2', vote: -2 }, // WOW down -> vote/2 = -1
+    { title: 'v1', vote: 2 },  // WOW up -> abs/2 = 1
+    { title: 'v2', vote: -2 }, // WOW down -> abs/2 = 1
     { title: 'v3', vote: 1 },
     { title: 'v4', vote: 1 },
-    { title: 'v5', vote: 1 },  // similarity clamps to 0 - excluded either way
+    { title: 'v5', vote: 1 },  // similarity clamps to 0 — excluded either way
     { title: 'candidate' },
   ]);
   const cos = (deg) => {
@@ -175,23 +179,24 @@ test('embedding kNN keeps only the k nearest voted articles, not the whole voted
 
   const config = testConfig();
   config.scoring.weights = { topics: 0, embedding: 1, depth: 0, feed: 0 };
-  config.scoring.knn = 2; // fewer than the 5 voted articles - forces top-k truncation
+  config.scoring.knn = 2; // each polarity gets its own k=2 limit
   await recomputeScores(db, config);
 
   const embScore = db.prepare('SELECT score_embedding FROM articles WHERE id = ?').get(ids.candidate).score_embedding;
-  // only v1 (sim 1) and v2 (sim ~0.866) survive the k=2 cutoff - v3/v4/v5 must
-  // be excluded even though they'd otherwise contribute to the weighted average
-  const sim1 = 1;
-  const sim2 = Math.cos((30 * Math.PI) / 180);
-  const expected = (sim1 * 1 + sim2 * -1) / (sim1 + sim2);
+  // up pass: v1 (sim 1, abs/2=1) and v3 (sim 0.5, abs/2=0.5) surviving k=2
+  // down pass: v2 (sim ~0.866, abs/2=1) alone (k=2 but only 1 downvote)
+  const sim1 = 1, sim2 = Math.cos((30 * Math.PI) / 180), sim3 = 0.5;
+  const up = (sim1 * 1 + sim3 * 0.5) / (sim1 + sim3);
+  const down = sim2 * 1 / sim2;
+  const expected = Math.max(-1, Math.min(1, up - down));
   assert.ok(Math.abs(embScore - expected) < 1e-3, `expected ~${expected}, got ${embScore}`);
 });
 
-test('embedding kNN tie at the k-th cutoff keeps the earlier-inserted (lower id) voted article', async () => {
+test('anti-kNN: up and down passes are independent — tied similarity does not starve either polarity', async () => {
   const db = tempDb();
   const ids = seed(db, [
-    { title: 'first', vote: 2 },  // inserted first, tied similarity
-    { title: 'second', vote: -2 }, // inserted second, same similarity as "first"
+    { title: 'first', vote: 2 },   // up, abs/2 = 1
+    { title: 'second', vote: -2 },  // down, abs/2 = 1
     { title: 'candidate' },
   ]);
   const vec = vecBuf(1, 0);
@@ -201,14 +206,13 @@ test('embedding kNN tie at the k-th cutoff keeps the earlier-inserted (lower id)
 
   const config = testConfig();
   config.scoring.weights = { topics: 0, embedding: 1, depth: 0, feed: 0 };
-  config.scoring.knn = 1; // only room for one of the two identical-similarity votes
+  config.scoring.knn = 1; // each polarity gets its own k=1
   await recomputeScores(db, config);
 
   const embScore = db.prepare('SELECT score_embedding FROM articles WHERE id = ?').get(ids.candidate).score_embedding;
-  // "first" (vote/2 = 1) wins the tie over "second" (vote/2 = -1) - matching
-  // voted's original (insertion) order, the same tie-break a stable sort on
-  // {sim, vote} pairs would have produced.
-  assert.ok(Math.abs(embScore - 1) < 1e-9, `expected 1 (first's vote wins the tie), got ${embScore}`);
+  // up pass picks "first" (sim=1), down pass picks "second" (sim=1)
+  // anti-kNN = 1 − 1 = 0 — neither polarity dominates, they cancel
+  assert.ok(Math.abs(embScore) < 1e-9, `expected 0 (up-down cancel), got ${embScore}`);
 });
 
 test('recomputeOneScore matches a full recomputeScores for that one article, and touches nothing else', async () => {

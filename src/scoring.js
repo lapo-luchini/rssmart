@@ -90,58 +90,12 @@ export function topicPrefs(db, maxSuggested, halflifeYears) {
 }
 
 /**
- * Similarity-weighted vote average of the k nearest voted articles.
- * `scratch` is a pair of same-length arrays (>= k) the caller owns and
- * reuses across every row in a sweep - maintaining the top-k highest
- * similarities by insertion into this small sorted-descending window,
- * instead of a filter+map+sort+slice that would allocate a {sim, vote}
- * object per candidate and sort the *entire* voted list on every one of
- * the ~1M row x voted-article pairs a full recompute makes (170 voted x
- * 6200 rows). Insertion is cheap here because most candidates never beat
- * the current k-th best once the window fills, and even the worst case
- * only ever shifts within the k-sized window, never the full voted list.
- * Ties keep voted's original order (matching Array.prototype.sort's
- * stable-sort semantics), since the shift condition is strict (`<`, not
- * `<=`). See DESIGN.md for the measured effect and why plain arrays, not
- * typed ones.
- *
- * `batcher` (see wasmDot.js) supplies every pairwise similarity in
- * `pairSims`, one WASM call per row instead of one JS cosine() call per
- * voted article - see DESIGN.md for why (Float16Array element access is
- * dramatically slower in JS, especially on Bun, than decoding once and
- * computing in compiled code).
+ * Top-k insertion into a descending-sorted window of `{sims, votes}` at
+ * position `insertAt` (the first free slot while filling, the worst rank
+ * once full). Reused across every row in a sweep — see DESIGN.md for why
+ * the top-k-per-row allocation is dramatically more expensive than this
+ * in-place insertion.
  */
-function knnScore(row, voted, k, scratch, batcher) {
-  if (!row.text_embedding || voted.length === 0 || k === 0) return 0;
-  const vec = bufToVec(row.text_embedding);
-  const pairSims = batcher.query(vec);
-  const { sims, votes } = scratch;
-  let count = 0;
-
-  for (let j = 0; j < voted.length; j++) {
-    const v = voted[j];
-    if (v.id === row.id) continue;
-    const sim = Math.max(pairSims[j], 0);
-    if (count < k) {
-      insertDescending(sims, votes, count, sim, v.vote / 2);
-      count++;
-    } else if (sim > sims[k - 1]) {
-      insertDescending(sims, votes, k - 1, sim, v.vote / 2);
-    }
-  }
-
-  let total = 0;
-  let weighted = 0;
-  for (let i = 0; i < count; i++) {
-    total += sims[i];
-    weighted += sims[i] * votes[i];
-  }
-  return total === 0 ? 0 : weighted / total;
-}
-
-// Shift sim/vote into sims/votes' descending-sorted [0, insertAt] window,
-// overwriting whatever was at insertAt (the first free slot while filling,
-// the worst-ranked slot once full - either way, the entry being replaced).
 function insertDescending(sims, votes, insertAt, sim, vote) {
   let i = insertAt - 1;
   while (i >= 0 && sims[i] < sim) {
@@ -151,6 +105,86 @@ function insertDescending(sims, votes, insertAt, sim, vote) {
   }
   sims[i + 1] = sim;
   votes[i + 1] = vote;
+}
+
+/**
+ * Fill a top-k heap for voted articles matching a filter, returning the
+ * similarity-weighted vote average. Used by knnScore for separate upvote
+ * and downvote passes.
+ */
+function weightedKnn(pairSims, voted, k, scratch, rowId, filter) {
+  const { sims, votes } = scratch;
+  let count = 0;
+
+  for (let j = 0; j < voted.length; j++) {
+    const v = voted[j];
+    if (v.id === rowId || !filter(v)) continue;
+    const sim = Math.max(pairSims[j], 0);
+    if (sim <= 0) continue;
+    if (count < k) {
+      insertDescending(sims, votes, count, sim, Math.abs(v.vote) / 2);
+      count++;
+    } else if (sim > sims[k - 1]) {
+      insertDescending(sims, votes, k - 1, sim, Math.abs(v.vote) / 2);
+    }
+  }
+
+  let total = 0;
+  let weighted = 0;
+  for (let i = 0; i < count; i++) {
+    total += sims[i];
+    weighted += sims[i] * votes[i];
+  }
+  return total === 0 ? null : weighted / total;
+}
+
+/**
+ * Anti-kNN: separate similarity-weighted averages for upvoted and downvoted
+ * articles, combined as up − down. This way a small cluster of downvoted
+ * articles can strongly suppress similar content, even when upvotes vastly
+ * outnumber downvotes.
+ */
+function knnScore(row, voted, k, scratches, batcher, pairSims) {
+  if (!row.text_embedding || voted.length === 0 || k === 0) return 0;
+
+  const up = weightedKnn(pairSims, voted, k, scratches.up, row.id, (v) => v.vote > 0);
+  const down = weightedKnn(pairSims, voted, k, scratches.down, row.id, (v) => v.vote < 0);
+
+  const result = (up ?? 0) - (down ?? 0);
+  return Math.max(-1, Math.min(1, result));
+}
+
+/**
+ * Topic-neighbor preference: among voted articles that share at least one
+ * topic with the article being scored, compute a similarity-weighted vote
+ * average. This captures intra-topic preference differences — e.g. within
+ * "security" you upvote exploit techniques but downvote CVE announcements.
+ * The pairSims (from the batcher query that knnScore already called) are
+ * reused to avoid a second WASM round-trip per row.
+ */
+function topicNeighborScore(pairSims, voted, rowId, topicMap, halflifeYears) {
+  const rowTopics = topicMap.get(rowId);
+  if (!rowTopics || rowTopics.size === 0) return null;
+
+  let simSum = 0;
+  let weightedSum = 0;
+  for (let j = 0; j < voted.length; j++) {
+    const v = voted[j];
+    if (v.id === rowId || v.vote === 0) continue;
+    // Skip articles with no topic overlap
+    const vTopics = topicMap.get(v.id);
+    if (!vTopics || !topicOverlap(rowTopics, vTopics)) continue;
+    const sim = Math.max(pairSims[j], 0);
+    if (sim <= 0) continue;
+    simSum += sim;
+    weightedSum += sim * (v.vote / 2);
+  }
+  return simSum > 0 ? weightedSum / simSum : null;
+}
+
+function topicOverlap(a, b) {
+  for (const t of a) { if (b.has(t)) return true; }
+  return false;
 }
 
 function votedArticles(db, halflifeYears) {
@@ -173,8 +207,25 @@ function votedArticles(db, halflifeYears) {
   });
 }
 
-function makeKnnScratch(k) {
-  return { sims: new Array(k), votes: new Array(k) };
+function makeKnnScratches(k) {
+  return {
+    up: { sims: new Array(k), votes: new Array(k) },
+    down: { sims: new Array(k), votes: new Array(k) },
+  };
+}
+
+/**
+ * Exploratory bonus: articles whose embedding is far from all voted
+ * articles get a small positive lift (0.05). This prevents the system
+ * from only ever surfacing content similar to what you already know,
+ * helping serendipitous discovery on unvoted topics or styles.
+ */
+function exploratoryBonus(pairSims) {
+  let maxSim = 0;
+  for (let j = 0; j < pairSims.length; j++) {
+    if (pairSims[j] > maxSim) maxSim = pairSims[j];
+  }
+  return maxSim < 0.3 ? 0.05 : 0;
 }
 
 // A null batcher when there's no voted set to compare against - knnScore's
@@ -207,18 +258,44 @@ export function clearSingleScoreBatcher() {
   _singleScoreHalflife = null;
 }
 
-function scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, scratch, batcher) {
-  const topics = weights.topics * (topicPref ?? 0);
-  const embedding = weights.embedding * knnScore(row, voted, knn, scratch, batcher);
+function scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, scratches, batcher, topicMap, halflife) {
+  // Embedding kNN (anti-kNN: separate up/down passes) shares the batcher
+  // query with topic-neighbor and exploratory bonus below.
+  let embedding = 0;
+  let topicNeighbor = null;
+  let bonus = 0;
+
+  if (row.text_embedding && voted.length > 0) {
+    const vec = bufToVec(row.text_embedding);
+    const pairSims = batcher.query(vec);
+    embedding = weights.embedding * knnScore(row, voted, knn, scratches, batcher, pairSims);
+    topicNeighbor = topicNeighborScore(pairSims, voted, row.id, topicMap, halflife);
+    bonus = exploratoryBonus(pairSims);
+  }
+
+  // Topic signal: blend aggregate preference (from the article's topic
+  // labels) with the embedding-weighted preference of same-topic voted
+  // articles. Within a broad topic like "security" this separates
+  // sub-categories you feel differently about.
+  const topicBase = topicPref ?? 0;
+  const blendedTopic = topicNeighbor != null
+    ? topicBase * 0.7 + topicNeighbor * 0.3
+    : topicBase;
+  const topics = weights.topics * blendedTopic;
+
   const depth = weights.depth * (row.depth ? (row.depth - 3) / 2 : 0);
+
   // Feed and author are blended when both exist: 70% source record,
-  // 30% author record — the author signal pulls the feed score toward
-  // that writer's own track record (relevant for multi-author feeds).
+  // 30% author record.
   let feed = weights.feed * (feedPref ?? 0);
   if (authorPref != null && row.author) {
     feed = feed * 0.7 + weights.feed * authorPref * 0.3;
   }
-  return { topics, embedding, depth, feed, total: topics + embedding + depth + feed };
+
+  // Exploratory bonus lifts unfamiliar content above the noise floor.
+  const total = topics + embedding + depth + feed + bonus;
+
+  return { topics, embedding, depth, feed, bonus, total };
 }
 
 const SAVE_SCORE = `
@@ -280,7 +357,19 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
     'SELECT id, feed_id, vote, depth, text_embedding, author FROM articles',
   ).all();
   const voted = votedArticles(db, halflife);
-  const scratch = makeKnnScratch(knn);
+  const scratches = makeKnnScratches(knn);
+
+  // Load article-to-topics mapping for topic-neighbor scoring.
+  const topicMap = new Map();
+  for (const r of db.prepare(`
+    SELECT at.article_id, t.name FROM article_topics at
+    JOIN topics t ON t.id = at.topic_id
+  `).all()) {
+    let s = topicMap.get(r.article_id);
+    if (!s) { s = new Set(); topicMap.set(r.article_id, s); }
+    s.add(r.name);
+  }
+
   const batcher = makeVotedBatcher(voted);
 
   try {
@@ -296,7 +385,7 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
         do {
           const row = rows[i++];
           const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
-            authorPref.get(row.author), voted, weights, knn, scratch, batcher);
+            authorPref.get(row.author), voted, weights, knn, scratches, batcher, topicMap, halflife);
           save.run(s.topics, s.embedding, s.depth, s.feed, s.total, row.id);
         } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
       })();
@@ -345,7 +434,26 @@ export function recomputeOneScore(db, config, articleId) {
   }
 
   const { voted, batcher } = getSingleScoreBatcher(db, halflife);
-  const s = scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, makeKnnScratch(knn), batcher);
+
+  // Build topic map for topic-neighbor scoring — batch load voted article topics.
+  const topicMap = new Map();
+  const rowTopics = db.prepare(`
+    SELECT t.name FROM article_topics at JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ?
+  `).all(articleId).map((r) => r.name);
+  topicMap.set(articleId, new Set(rowTopics));
+  const votedIds = voted.filter((v) => v.id !== articleId).map((v) => v.id);
+  if (votedIds.length) {
+    for (const r of db.prepare(`
+      SELECT at.article_id, t.name FROM article_topics at
+      JOIN topics t ON t.id = at.topic_id
+      WHERE at.article_id IN (${votedIds.map(() => '?').join(',')})
+    `).all(...votedIds)) {
+      let s = topicMap.get(r.article_id);
+      if (!s) { s = new Set(); topicMap.set(r.article_id, s); }
+      s.add(r.name);
+    }
+  }
+  const s = scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, makeKnnScratches(knn), batcher, topicMap, halflife);
   db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.total, articleId);
 }
 
