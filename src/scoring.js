@@ -26,11 +26,20 @@ const DEFAULT_YIELD_MS = 150;
 
 // Votes range -2..+2 ("WOW" votes count double). The Laplace ratio works on
 // the weighted magnitudes: SUM(MAX(v,0)) up-weight vs SUM(ABS(v)) total.
-const PREF_EXPR = `
-  (COALESCE(SUM(MAX(a.vote, 0)), 0) + 1.0)
-  / (COALESCE(SUM(ABS(a.vote)), 0) + 2.0)
-  * 2 - 1
-`;
+// With optional recency decay: vote × 2^(-age / halflife) via exp/ln in SQL.
+function decayedVoteExpr(alias = 'a', halflifeYears) {
+  if (!halflifeYears) return `${alias}.vote`;
+  return `${alias}.vote * exp(-ln(2) * (julianday('now') - julianday(COALESCE(${alias}.voted_at, ${alias}.created_at))) / (${halflifeYears} * 365.25))`;
+}
+
+function makePrefExpr(halflifeYears) {
+  const v = decayedVoteExpr('a', halflifeYears);
+  return `
+    (COALESCE(SUM(MAX(${v}, 0)), 0) + 1.0)
+    / (COALESCE(SUM(ABS(${v})), 0) + 2.0)
+    * 2 - 1
+  `;
+}
 
 /**
  * Per-topic stats for the API/UI: preference, votes, article count.
@@ -47,23 +56,23 @@ const PREF_EXPR = `
 let _topicPrefsKey = null;
 let _topicPrefsCache = null;
 
-export function topicPrefs(db, maxSuggested) {
+export function topicPrefs(db, maxSuggested, halflifeYears) {
   const state = db.prepare(`
     SELECT COALESCE(SUM(vote != 0), 0) AS voteCount,
            COALESCE(SUM(status = 'enriched'), 0) AS enrichedCount,
            (SELECT COUNT(*) FROM topic_aliases) AS aliasCount
     FROM articles
   `).get();
-  const key = `${state.voteCount}:${state.enrichedCount}:${state.aliasCount}:${maxSuggested ?? ''}`;
+  const key = `${state.voteCount}:${state.enrichedCount}:${state.aliasCount}:${maxSuggested ?? ''}:${halflifeYears ?? ''}`;
 
   if (_topicPrefsKey === key) return _topicPrefsCache;
 
   const rows = db.prepare(`
     SELECT t.id, t.name,
            COUNT(at.article_id) AS articles,
-           COALESCE(SUM(MAX(a.vote, 0)), 0) AS up,
-           COALESCE(SUM(MAX(-a.vote, 0)), 0) AS down,
-           ${PREF_EXPR} AS pref
+           COALESCE(SUM(MAX(${decayedVoteExpr('a', halflifeYears)}, 0)), 0) AS up,
+           COALESCE(SUM(MAX(-${decayedVoteExpr('a', halflifeYears)}, 0)), 0) AS down,
+           ${makePrefExpr(halflifeYears)} AS pref
     FROM topics t
     LEFT JOIN article_topics at ON at.topic_id = t.id
     LEFT JOIN articles a ON a.id = at.article_id
@@ -144,11 +153,24 @@ function insertDescending(sims, votes, insertAt, sim, vote) {
   votes[i + 1] = vote;
 }
 
-function votedArticles(db) {
-  return db.prepare(`
-    SELECT id, vote, text_embedding FROM articles
+function votedArticles(db, halflifeYears) {
+  const rows = db.prepare(`
+    SELECT id, vote, text_embedding, COALESCE(voted_at, created_at) AS vote_time
+    FROM articles
     WHERE vote != 0 AND text_embedding IS NOT NULL
-  `).all().map((r) => ({ id: r.id, vote: r.vote, vec: bufToVec(r.text_embedding) }));
+  `).all();
+
+  if (!halflifeYears) {
+    return rows.map((r) => ({ id: r.id, vote: r.vote, vec: bufToVec(r.text_embedding) }));
+  }
+
+  const now = Date.now();
+  const ln2OverHalflifeMs = Math.LN2 / (halflifeYears * 365.25 * 86400000);
+  return rows.map((r) => {
+    const age = now - new Date(r.vote_time).getTime();
+    const decay = age > 0 ? Math.exp(-ln2OverHalflifeMs * age) : 1;
+    return { id: r.id, vote: r.vote * decay, vec: bufToVec(r.text_embedding) };
+  });
 }
 
 function makeKnnScratch(k) {
@@ -167,11 +189,13 @@ function makeVotedBatcher(voted) {
 // across consecutive calls. Invalidated when a vote changes the set.
 let _singleScoreBatcher = null;
 let _singleScoreVoted = null;
+let _singleScoreHalflife = null;
 
-function getSingleScoreBatcher(db) {
-  if (!_singleScoreBatcher) {
-    _singleScoreVoted = votedArticles(db);
+function getSingleScoreBatcher(db, halflifeYears) {
+  if (!_singleScoreBatcher || _singleScoreHalflife !== halflifeYears) {
+    _singleScoreVoted = votedArticles(db, halflifeYears);
     _singleScoreBatcher = makeVotedBatcher(_singleScoreVoted);
+    _singleScoreHalflife = halflifeYears;
   }
   return { voted: _singleScoreVoted, batcher: _singleScoreBatcher };
 }
@@ -180,13 +204,20 @@ export function clearSingleScoreBatcher() {
   _singleScoreBatcher?.free();
   _singleScoreBatcher = null;
   _singleScoreVoted = null;
+  _singleScoreHalflife = null;
 }
 
-function scoreParts(row, topicPref, feedPref, voted, weights, knn, scratch, batcher) {
+function scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, scratch, batcher) {
   const topics = weights.topics * (topicPref ?? 0);
   const embedding = weights.embedding * knnScore(row, voted, knn, scratch, batcher);
   const depth = weights.depth * (row.depth ? (row.depth - 3) / 2 : 0);
-  const feed = weights.feed * (feedPref ?? 0);
+  // Feed and author are blended when both exist: 70% source record,
+  // 30% author record — the author signal pulls the feed score toward
+  // that writer's own track record (relevant for multi-author feeds).
+  let feed = weights.feed * (feedPref ?? 0);
+  if (authorPref != null && row.author) {
+    feed = feed * 0.7 + weights.feed * authorPref * 0.3;
+  }
   return { topics, embedding, depth, feed, total: topics + embedding + depth + feed };
 }
 
@@ -216,11 +247,13 @@ const SAVE_SCORE = `
  */
 export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD_MS } = {}) {
   const start = performance.now();
-  const { weights, knn } = config.scoring;
+  const { weights, knn, voteDecayHalflifeYears: halflife } = config.scoring;
+
+  const pref = makePrefExpr(halflife);
 
   const topicPref = new Map(db.prepare(`
     WITH tp AS (
-      SELECT at.topic_id AS topic_id, ${PREF_EXPR} AS pref
+      SELECT at.topic_id AS topic_id, ${pref} AS pref
       FROM article_topics at
       JOIN articles a ON a.id = at.article_id
       GROUP BY at.topic_id
@@ -232,14 +265,21 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
   `).all().map((r) => [r.id, r.pref]));
 
   const feedPref = new Map(db.prepare(`
-    SELECT a.feed_id AS id, ${PREF_EXPR} AS pref
+    SELECT a.feed_id AS id, ${pref} AS pref
     FROM articles a GROUP BY a.feed_id
   `).all().map((r) => [r.id, r.pref]));
 
+  const authorPref = new Map(db.prepare(`
+    SELECT a.author AS name, ${pref} AS pref
+    FROM articles a
+    WHERE a.author IS NOT NULL AND a.author != ''
+    GROUP BY a.author
+  `).all().map((r) => [r.name, r.pref]));
+
   const rows = db.prepare(
-    'SELECT id, feed_id, vote, depth, text_embedding FROM articles',
+    'SELECT id, feed_id, vote, depth, text_embedding, author FROM articles',
   ).all();
-  const voted = votedArticles(db);
+  const voted = votedArticles(db, halflife);
   const scratch = makeKnnScratch(knn);
   const batcher = makeVotedBatcher(voted);
 
@@ -255,7 +295,8 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
         // advancing.
         do {
           const row = rows[i++];
-          const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id), voted, weights, knn, scratch, batcher);
+          const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
+            authorPref.get(row.author), voted, weights, knn, scratch, batcher);
           save.run(s.topics, s.embedding, s.depth, s.feed, s.total, row.id);
         } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
       })();
@@ -275,16 +316,17 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
  * recomputeIfDue).
  */
 export function recomputeOneScore(db, config, articleId) {
-  const { weights, knn } = config.scoring;
+  const { weights, knn, voteDecayHalflifeYears: halflife } = config.scoring;
+  const pref = makePrefExpr(halflife);
 
   const row = db.prepare(
-    'SELECT id, feed_id, depth, text_embedding FROM articles WHERE id = ?',
+    'SELECT id, feed_id, depth, text_embedding, author FROM articles WHERE id = ?',
   ).get(articleId);
   if (!row) return;
 
   const topicPref = db.prepare(`
     SELECT AVG(pref) AS pref FROM (
-      SELECT at.topic_id AS topic_id, ${PREF_EXPR} AS pref
+      SELECT at.topic_id AS topic_id, ${pref} AS pref
       FROM article_topics at
       JOIN articles a ON a.id = at.article_id
       WHERE at.topic_id IN (SELECT topic_id FROM article_topics WHERE article_id = ?)
@@ -293,11 +335,17 @@ export function recomputeOneScore(db, config, articleId) {
   `).get(articleId).pref;
 
   const feedPref = db.prepare(`
-    SELECT ${PREF_EXPR} AS pref FROM articles a WHERE a.feed_id = ?
+    SELECT ${pref} AS pref FROM articles a WHERE a.feed_id = ?
   `).get(row.feed_id).pref;
 
-  const { voted, batcher } = getSingleScoreBatcher(db);
-  const s = scoreParts(row, topicPref, feedPref, voted, weights, knn, makeKnnScratch(knn), batcher);
+  let authorPref = null;
+  if (row.author) {
+    const r = db.prepare(`SELECT ${pref} AS pref FROM articles a WHERE a.author = ?`).get(row.author);
+    if (r) authorPref = r.pref;
+  }
+
+  const { voted, batcher } = getSingleScoreBatcher(db, halflife);
+  const s = scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, makeKnnScratch(knn), batcher);
   db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.total, articleId);
 }
 

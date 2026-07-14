@@ -53,12 +53,17 @@ const DEFAULTS = {
     maxIntervalMin: 1440,
   },
   scoring: {
-    knn: 20,
+    knn: 30,
+    // Vote recency decay: older votes contribute less to all vote-derived
+    // signals (topic preference, embedding kNN, feed/author record). The
+    // halflife is in years; a vote aged one halflife counts half as much.
+    // 0 or null disables decay (all votes equal regardless of age).
+    voteDecayHalflifeYears: 1.5,
     weights: {
-      topics: 0.4,
-      embedding: 0.3,
-      depth: 0.2,
-      feed: 0.1,
+      topics: 0.3,
+      embedding: 0.4,
+      depth: 0.1,
+      feed: 0.2,
     },
     // A vote updates its own article's score instantly (cheap: just that
     // article's topic/feed prefs plus a scan of the — usually small —

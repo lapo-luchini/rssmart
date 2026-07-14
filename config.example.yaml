@@ -69,12 +69,14 @@ scheduler:
 # An article's interest score blends four signals, each -1..+1 and neutral
 # when it has no data yet. Weights need not sum to 1.
 scoring:
-  knn: 20             # how many similar voted articles the embedding signal uses
+  knn: 30             # how many similar voted articles the embedding signal uses
+  voteDecayHalflifeYears: 1.5  # vote recency decay: a vote aged one halflife
+                               # counts half. 0/null disables decay.
   weights:
-    topics: 0.4       # votes on the article's topics
-    embedding: 0.3    # votes on articles with similar text (style/genre taste)
-    depth: 0.2        # LLM substance rating: rewards real reporting/analysis
-    feed: 0.1         # the source's own vote record
+    topics: 0.3       # votes on the article's topics
+    embedding: 0.4    # votes on articles with similar text (style/genre taste)
+    depth: 0.1        # LLM substance rating: rewards real reporting/analysis
+    feed: 0.2         # source + author blended vote record
   recomputeDebounceSec: 120  # a vote updates its own article's score instantly;
                              # rescoring every *other* article (the vote can
                              # shift anyone's kNN term) is expensive at scale,

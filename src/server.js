@@ -349,7 +349,7 @@ export function createApp(db, config) {
   });
 
   app.get('/api/topics', (c) => {
-    return c.json(topicPrefs(db, config.enrich.maxSuggestedTopics));
+    return c.json(topicPrefs(db, config.enrich.maxSuggestedTopics, config.scoring.voteDecayHalflifeYears));
   });
 
   // Propose-only: nothing is applied until the reader approves each merge
@@ -374,7 +374,7 @@ export function createApp(db, config) {
     } catch (err) {
       return c.json({ error: err.message }, 400);
     }
-    return c.json(topicPrefs(db, config.enrich.maxSuggestedTopics));
+    return c.json(topicPrefs(db, config.enrich.maxSuggestedTopics, config.scoring.voteDecayHalflifeYears));
   });
 
   let feedListKey = null;
