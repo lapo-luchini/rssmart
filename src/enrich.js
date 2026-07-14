@@ -282,8 +282,9 @@ export function existingTopicNames(db, limit) {
       LEFT JOIN article_topics at ON at.topic_id = t.id
       GROUP BY t.id
       ORDER BY COUNT(at.article_id) DESC, t.name ASC
+      ${limit ? 'LIMIT ?' : ''}
     `)
-    .all()
+    .all(...(limit ? [limit] : []))
     .map((r) => r.name);
   return limit ? names.slice(0, limit) : names;
 }
