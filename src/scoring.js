@@ -42,7 +42,22 @@ const PREF_EXPR = `
  * anyway and `normalizeTopics` has no restriction - `suggested: false` just
  * means it isn't *offered* as a suggestion, not that it's unusable.
  */
+// Cache for topicPrefs — version key detects vote, enrichment, and
+// merge changes so the aggregation query only runs when needed.
+let _topicPrefsKey = null;
+let _topicPrefsCache = null;
+
 export function topicPrefs(db, maxSuggested) {
+  const state = db.prepare(`
+    SELECT COALESCE(SUM(vote != 0), 0) AS voteCount,
+           COALESCE(SUM(status = 'enriched'), 0) AS enrichedCount,
+           (SELECT COUNT(*) FROM topic_aliases) AS aliasCount
+    FROM articles
+  `).get();
+  const key = `${state.voteCount}:${state.enrichedCount}:${state.aliasCount}:${maxSuggested ?? ''}`;
+
+  if (_topicPrefsKey === key) return _topicPrefsCache;
+
   const rows = db.prepare(`
     SELECT t.id, t.name,
            COUNT(at.article_id) AS articles,
@@ -56,9 +71,13 @@ export function topicPrefs(db, maxSuggested) {
     ORDER BY t.name
   `).all();
 
-  if (!maxSuggested) return rows;
-  const suggested = new Set(existingTopicNames(db, maxSuggested));
-  return rows.map((r) => ({ ...r, suggested: suggested.has(r.name) }));
+  const result = !maxSuggested
+    ? rows
+    : rows.map((r) => ({ ...r, suggested: new Set(existingTopicNames(db, maxSuggested)).has(r.name) }));
+
+  _topicPrefsKey = key;
+  _topicPrefsCache = result;
+  return result;
 }
 
 /**
