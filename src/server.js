@@ -376,20 +376,36 @@ export function createApp(db, config) {
     return c.json(topicPrefs(db, config.enrich.maxSuggestedTopics));
   });
 
-  const feedList = () => db.prepare(`
-    SELECT f.id, f.url, f.title, f.html_url, f.active, f.last_fetched_at, f.last_status,
-           f.next_fetch_at, f.fetch_interval_min,
-           f.ok_count, f.error_count,
-           COUNT(a.id) AS articles,
-           COUNT(CASE WHEN a.read_at IS NULL THEN a.id END) AS unread,
-           AVG(CASE WHEN a.vote != 0 THEN a.vote END) AS avg_vote,
-           COALESCE(SUM(a.vote != 0), 0) AS votes,
-           ROUND(COUNT(CASE WHEN COALESCE(a.published_at, a.created_at)
-                                 >= datetime('now', '-28 days') THEN 1 END) / 4.0, 1)
-             AS per_week
-    FROM feeds f LEFT JOIN articles a ON a.feed_id = f.id
-    GROUP BY f.id ORDER BY f.active DESC, COALESCE(f.title, f.url)
-  `).all();
+  let feedListKey = null;
+  let feedListCache = null;
+  const feedList = () => {
+    const state = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM feeds) AS feedCount,
+        COALESCE((SELECT SUM(active) FROM feeds), 0) AS activeSum,
+        (SELECT COUNT(*) FROM articles) AS articleCount,
+        COALESCE((SELECT SUM(vote != 0) FROM articles), 0) AS voteCount,
+        COALESCE((SELECT SUM(read_at IS NULL) FROM articles), 0) AS unreadCount
+    `).get();
+    const key = `${state.feedCount}:${state.activeSum}:${state.articleCount}:${state.voteCount}:${state.unreadCount}`;
+    if (feedListKey === key) return feedListCache;
+    feedListKey = key;
+    feedListCache = db.prepare(`
+      SELECT f.id, f.url, f.title, f.html_url, f.active, f.last_fetched_at, f.last_status,
+             f.next_fetch_at, f.fetch_interval_min,
+             f.ok_count, f.error_count,
+             COUNT(a.id) AS articles,
+             COUNT(CASE WHEN a.read_at IS NULL THEN a.id END) AS unread,
+             AVG(CASE WHEN a.vote != 0 THEN a.vote END) AS avg_vote,
+             COALESCE(SUM(a.vote != 0), 0) AS votes,
+             ROUND(COUNT(CASE WHEN COALESCE(a.published_at, a.created_at)
+                                   >= datetime('now', '-28 days') THEN 1 END) / 4.0, 1)
+               AS per_week
+      FROM feeds f LEFT JOIN articles a ON a.feed_id = f.id
+      GROUP BY f.id ORDER BY f.active DESC, COALESCE(f.title, f.url)
+    `).all();
+    return feedListCache;
+  };
 
   const upsertFeed = db.prepare(`
     INSERT INTO feeds (url, title, html_url, active) VALUES (?, ?, ?, 1)
