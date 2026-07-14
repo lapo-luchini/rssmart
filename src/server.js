@@ -266,7 +266,8 @@ export function createApp(db, config) {
     const { changes } = db.prepare(`
       UPDATE articles
       SET vote = ?,
-          read_at = CASE WHEN ? != 0 THEN COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ELSE read_at END
+          read_at = CASE WHEN ? != 0 THEN COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ELSE read_at END,
+          voted_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
       WHERE id = ?
     `).run(vote, vote, id);
     if (!changes) return c.json({ error: 'not found' }, 404);
@@ -277,7 +278,7 @@ export function createApp(db, config) {
     recomputeOneScore(db, config, id);
     scheduleRecompute(db, config.scoring.recomputeDebounceSec);
     const row = db.prepare(`
-      SELECT id, vote, read_at, score,
+      SELECT id, vote, read_at, voted_at, score,
              score_topics, score_embedding, score_depth, score_feed
       FROM articles WHERE id = ?
     `).get(id);

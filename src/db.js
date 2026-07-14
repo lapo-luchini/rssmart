@@ -143,6 +143,13 @@ const MIGRATIONS = [
     merged_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
   );
   `,
+  // v13 — track when a vote was last changed, for recency-weighted scoring
+  // (voteDecayHalflifeYears in scoring config). Existing votes backfilled
+  // from read_at (the closest approximation available at migration time).
+  (db) => {
+    db.exec("ALTER TABLE articles ADD COLUMN voted_at TEXT");
+    db.exec("UPDATE articles SET voted_at = read_at WHERE vote != 0");
+  },
 ];
 
 /**
