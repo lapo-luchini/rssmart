@@ -341,10 +341,12 @@ createApp({
       if (!article || this.triageBusy) return;
       this.triageBusy = true;
       try {
+        // Clear on match: clicking the same button again resets to neutral
+        const actual = article.vote === value ? 0 : value;
         const updated = await this.api(`/api/articles/${article.id}/vote`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ vote: value }),
+          body: JSON.stringify({ vote: actual }),
         });
         Object.assign(article, updated);
         await this.triageAdvance();
@@ -573,7 +575,7 @@ createApp({
     },
 
     // Voting escalates: ▲ = interesting (+1), ▲ again = WOW (+2), again = clear.
-    voteCycle(article, direction) {
+    voteClick(article, direction) {
       const current = article.vote * direction; // 0, 1 or 2 in this direction
       const next = current === 2 ? 0 : (current + 1) * direction;
       return this.vote(article, next);

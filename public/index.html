@@ -200,10 +200,10 @@
       </div>
       <div class="triage-controls">
         <button class="back" v-if="triagePos > 0" @click="triageBack" title="← or ⌫">← back</button>
-        <button class="wow" :class="{ on: triageCurrent.vote === 2 }" @click="triageVote(2)" title="Shift+↑">▲▲ WOW</button>
-        <button class="more" :class="{ on: triageCurrent.vote === 1 }" @click="triageVote(1)" title="↑">▲ more</button>
-        <button class="less" :class="{ on: triageCurrent.vote === -1 }" @click="triageVote(-1)" title="↓">▼ less</button>
-        <button class="never" :class="{ on: triageCurrent.vote === -2 }" @click="triageVote(-2)" title="Shift+↓">▼▼ never</button>
+        <button class="vote up wow" :class="{ on: triageCurrent.vote === 2, max: triageCurrent.vote === 2 }" @click="triageVote(2)" title="Shift+↑">▲▲ WOW</button>
+        <button class="vote up more" :class="{ on: triageCurrent.vote === 1 }" @click="triageVote(1)" title="↑">▲ more</button>
+        <button class="vote down less" :class="{ on: triageCurrent.vote === -1 }" @click="triageVote(-1)" title="↓">▼ less</button>
+        <button class="vote down never" :class="{ on: triageCurrent.vote === -2, max: triageCurrent.vote === -2 }" @click="triageVote(-2)" title="Shift+↓">▼▼ never</button>
         <button class="skip" @click="triageSkip()" title="→, space or enter">→ skip</button>
       </div>
     </div>
@@ -265,11 +265,11 @@
         </span>
         <span class="actions">
           <button class="vote up" :class="{ on: a.vote > 0, max: a.vote === 2 }"
-                  @click="voteCycle(a, 1)"
+                  @click="voteClick(a, 1)"
                   :title="a.vote === 1 ? 'WOW! (click once more to clear)' : a.vote === 2 ? 'clear vote' : 'more like this'"
                   aria-label="More like this">{{ a.vote === 2 ? '▲▲' : '▲' }}</button>
           <button class="vote down" :class="{ on: a.vote < 0, max: a.vote === -2 }"
-                  @click="voteCycle(a, -1)"
+                  @click="voteClick(a, -1)"
                   :title="a.vote === -1 ? 'never again! (click once more to clear)' : a.vote === -2 ? 'clear vote' : 'less like this'"
                   aria-label="Less like this">{{ a.vote === -2 ? '▼▼' : '▼' }}</button>
           <button class="mark" @click="toggleRead(a)">{{ a.read_at ? 'unread' : 'mark read' }}</button>
@@ -312,11 +312,11 @@
       <button class="mark reader-close" @click="closeReader">← back (esc)</button>
       <span class="reader-spacer"></span>
       <button class="vote up" :class="{ on: readerArticle.vote > 0, max: readerArticle.vote === 2 }"
-              @click="voteCycle(readerArticle, 1)"
+              @click="voteClick(readerArticle, 1)"
               :title="readerArticle.vote === 1 ? 'WOW! (click once more to clear)' : readerArticle.vote === 2 ? 'clear vote' : 'more like this'"
               aria-label="More like this">{{ readerArticle.vote === 2 ? '▲▲' : '▲' }}</button>
       <button class="vote down" :class="{ on: readerArticle.vote < 0, max: readerArticle.vote === -2 }"
-              @click="voteCycle(readerArticle, -1)"
+              @click="voteClick(readerArticle, -1)"
               :title="readerArticle.vote === -1 ? 'never again! (click once more to clear)' : readerArticle.vote === -2 ? 'clear vote' : 'less like this'"
               aria-label="Less like this">{{ readerArticle.vote === -2 ? '▼▼' : '▼' }}</button>
       <button class="mark" @click="toggleRead(readerArticle)">{{ readerArticle.read_at ? 'unread' : 'mark read' }}</button>
