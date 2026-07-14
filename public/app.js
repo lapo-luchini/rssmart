@@ -778,15 +778,18 @@ createApp({
       };
     },
 
-    // The four learned components behind an article's score. Values are the
-    // already-weighted contributions, so they sum to the total.
+    // The components behind an article's score. Values are the already-
+    // weighted contributions, so they sum to the total (plus a possible
+    // exploratory bonus for content in unvoted embedding regions).
     scoreParts(a) {
-      return [
+      const parts = [
         { label: 'topic votes', value: a.score_topics },
         { label: 'similar articles', value: a.score_embedding },
         { label: a.depth ? `depth (${a.depth}/5)` : 'depth (unrated)', value: a.score_depth },
         { label: 'source record', value: a.score_feed },
       ];
+      if (a.score_bonus) parts.push({ label: 'exploratory bonus', value: a.score_bonus });
+      return parts;
     },
 
     fmtPart(value) {

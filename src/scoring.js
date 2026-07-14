@@ -300,7 +300,7 @@ function scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, s
 
 const SAVE_SCORE = `
   UPDATE articles
-  SET score_topics = ?, score_embedding = ?, score_depth = ?, score_feed = ?, score = ?
+  SET score_topics = ?, score_embedding = ?, score_depth = ?, score_feed = ?, score_bonus = ?, score = ?
   WHERE id = ?
 `;
 
@@ -386,7 +386,7 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
           const row = rows[i++];
           const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
             authorPref.get(row.author), voted, weights, knn, scratches, batcher, topicMap, halflife);
-          save.run(s.topics, s.embedding, s.depth, s.feed, s.total, row.id);
+          save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.total, row.id);
         } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
       })();
       if (i < rows.length) await sleep(0);
@@ -454,7 +454,7 @@ export function recomputeOneScore(db, config, articleId) {
     }
   }
   const s = scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, makeKnnScratches(knn), batcher, topicMap, halflife);
-  db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.total, articleId);
+  db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.total, articleId);
 }
 
 const RECOMPUTE_DUE_KEY = 'score_recompute_due_at';

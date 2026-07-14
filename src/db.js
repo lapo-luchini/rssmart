@@ -150,6 +150,8 @@ const MIGRATIONS = [
     db.exec("ALTER TABLE articles ADD COLUMN voted_at TEXT");
     db.exec("UPDATE articles SET voted_at = read_at WHERE vote != 0");
   },
+  // v14 — persist the exploratory bonus so it displays in the score tooltip.
+  "ALTER TABLE articles ADD COLUMN score_bonus REAL NOT NULL DEFAULT 0;",
 ];
 
 /**

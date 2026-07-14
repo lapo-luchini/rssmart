@@ -25,7 +25,7 @@ const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public')
 const ARTICLE_COLUMNS = `
   a.id, a.feed_id, a.url, a.title, a.author, a.published_at, a.summary,
   a.status, a.duplicate_of, a.score, a.vote, a.read_at, a.created_at,
-  a.depth, a.score_topics, a.score_embedding, a.score_depth, a.score_feed,
+  a.depth, a.score_topics, a.score_embedding, a.score_depth, a.score_feed, a.score_bonus,
   a.enrich_note,
   f.title AS feed_title,
   (SELECT group_concat(t.name, '|') FROM article_topics at
@@ -279,7 +279,7 @@ export function createApp(db, config) {
     scheduleRecompute(db, config.scoring.recomputeDebounceSec);
     const row = db.prepare(`
       SELECT id, vote, read_at, voted_at, score,
-             score_topics, score_embedding, score_depth, score_feed
+             score_topics, score_embedding, score_depth, score_feed, score_bonus
       FROM articles WHERE id = ?
     `).get(id);
     return c.json(row);
