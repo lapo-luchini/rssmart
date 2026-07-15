@@ -100,21 +100,38 @@ export function startScheduler(db, config, {
   };
 
   let enriching = false;
+  let enrichStartedAt = 0;
   const enrichTick = async () => {
-    if (enriching) return;
+    if (enriching) {
+      if (enrichStartedAt && Date.now() - enrichStartedAt > batchMs + 30_000) {
+        logError('scheduler enrich: stuck for ' + ((Date.now() - enrichStartedAt) / 1000).toFixed(0) + 's — resetting');
+        enriching = false;
+      } else {
+        return;
+      }
+    }
     enriching = true;
+    enrichStartedAt = Date.now();
     try {
-      if (hasClassifierWork() && acquireLease(db, owner)) {
-        try {
-          await classifyBatch();
-        } finally {
-          releaseLease(db, owner);
-        }
+      const hasWork = hasClassifierWork();
+      if (!hasWork) {
+        enrichStartedAt = 0;
+        return;
+      }
+      if (!acquireLease(db, owner)) {
+        log('scheduler enrich: enrichment lease held by another process');
+        return;
+      }
+      try {
+        await classifyBatch();
+      } finally {
+        releaseLease(db, owner);
       }
     } catch (err) {
       logError('scheduler enrich:', err.message);
     } finally {
       enriching = false;
+      enrichStartedAt = 0;
     }
   };
 
