@@ -14,6 +14,12 @@ import { checkRuntime } from '../src/runtime-check.js';
 
 checkRuntime();
 
+// Log unhandled promise rejections instead of crashing — one stray rejection
+// in a background loop shouldn't take down the whole application.
+process.on('unhandledRejection', (err) => {
+  logError('unhandled rejection:', err?.message ?? err);
+});
+
 const USAGE = `Usage: rssmart <mode> [options]
 
 Modes:

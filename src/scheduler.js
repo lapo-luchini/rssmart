@@ -102,22 +102,11 @@ export function startScheduler(db, config, {
   let enriching = false;
   let enrichStartedAt = 0;
   const enrichTick = async () => {
-    if (enriching) {
-      if (enrichStartedAt && Date.now() - enrichStartedAt > batchMs + 30_000) {
-        logError('scheduler enrich: stuck for ' + ((Date.now() - enrichStartedAt) / 1000).toFixed(0) + 's — resetting');
-        enriching = false;
-      } else {
-        return;
-      }
-    }
+    if (enriching) return;
     enriching = true;
     enrichStartedAt = Date.now();
     try {
-      const hasWork = hasClassifierWork();
-      if (!hasWork) {
-        enrichStartedAt = 0;
-        return;
-      }
+      if (!hasClassifierWork()) return;
       if (!acquireLease(db, owner)) {
         log('scheduler enrich: enrichment lease held by another process');
         return;
@@ -134,6 +123,17 @@ export function startScheduler(db, config, {
       enrichStartedAt = 0;
     }
   };
+
+  // Independent watchdog: if a batch runs longer than 2× batchMs, force-reset
+  // enriching so the next timer tick can start fresh. The old batch may still
+  // be running in the background but its finally block will set enriching to
+  // false harmlessly (already reset by the watchdog).
+  const enrichWatchdog = setInterval(() => {
+    if (enriching && enrichStartedAt && Date.now() - enrichStartedAt > batchMs * 2) {
+      logError('scheduler enrich watchdog: batch stuck for ' + ((Date.now() - enrichStartedAt) / 1000).toFixed(0) + 's — force reset');
+      enriching = false;
+    }
+  }, enrichEveryMs);
 
   // recomputeIfDue's full sweep now yields periodically (see scoring.js) so
   // it never blocks concurrent requests for its whole ~48s, but it's still
@@ -160,6 +160,7 @@ export function startScheduler(db, config, {
     setInterval(fetchTick, fetchEveryMs),
     setInterval(enrichTick, enrichEveryMs),
     setInterval(scoreTick, scoreEveryMs),
+    enrichWatchdog,
   ];
   for (const t of timers) t.unref?.();
   fetchTick();
