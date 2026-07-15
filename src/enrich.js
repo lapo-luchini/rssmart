@@ -118,6 +118,46 @@ function findDuplicate(vec, articleId, recent, threshold) {
 }
 
 /**
+ * Find the first external link in HTML content, excluding the article's own
+ * URL, profile mentions, and hashtag searches.
+ */
+function firstExternalLink(html, articleUrl) {
+  const hrefRe = /<a[^>]+href="(https?:\/\/[^"]+)"/gi;
+  let match;
+  while ((match = hrefRe.exec(html)) !== null) {
+    const url = match[1];
+    if (url === articleUrl) continue;
+    if (/\/@\w+/.test(url) || /\/(tags?|search)\//.test(url)) continue;
+    return url;
+  }
+  return articleUrl || null;
+}
+
+/**
+ * When text is very short and the content contains an external link, fetch
+ * that link's readable content and append it after a separator. Persists the
+ * combined content as full_content so the reader view gets the same result.
+ */
+async function expandShortContent(text, html, article, db, enrichCfg) {
+  const { linkExpandMaxChars, allowPrivateFetch, maxArticleChars } = enrichCfg;
+  if (!linkExpandMaxChars || text.length >= linkExpandMaxChars) return { text, html };
+  const url = firstExternalLink(html ?? '', article.url);
+  if (!url) return { text, html };
+  let page;
+  try {
+    page = await fetchArticleText(url, { allowPrivate: allowPrivateFetch, maxChars: maxArticleChars });
+  } catch {
+    return { text, html };
+  }
+  if (!page || page.text.length <= text.length) return { text, html };
+  const combinedText = text + '\n\n---\n\n' + page.text;
+  const combinedHtml = (html ?? '') + '\n\n<hr>\n\n' + page.html;
+  db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
+    .run(compressText(combinedHtml), article.id);
+  return { text: combinedText, html: combinedHtml };
+}
+
+/**
  * The text the LLM sees: the origin page's readable content when the RSS
  * entry is too thin (fetched once and stored), the RSS content otherwise.
  */
@@ -126,7 +166,7 @@ async function articleText(db, article, enrichCfg) {
   const rssText = stripHtml(article.content);
   const { fetchMinChars, allowPrivateFetch, maxArticleChars } = enrichCfg;
   if (!article.url || !fetchMinChars || rssText.length >= fetchMinChars) {
-    return rssText;
+    return (await expandShortContent(rssText, article.content, article, db, enrichCfg)).text;
   }
   const page = await fetchArticleText(article.url, {
     allowPrivate: allowPrivateFetch,
@@ -138,7 +178,7 @@ async function articleText(db, article, enrichCfg) {
   // Persist immediately so a later classify failure doesn't refetch.
   db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
     .run(compressText(page.html), article.id);
-  return page.text;
+  return (await expandShortContent(page.text, page.html, article, db, enrichCfg)).text;
 }
 
 /**
@@ -155,7 +195,10 @@ export async function getReaderContent(db, article, config) {
   const cachedFullContent = decompressText(article.full_content);
   if (cachedFullContent) return { html: cachedFullContent, source: 'cached' };
   const rssHtml = decompressText(article.content) ?? '';
-  if (!article.url) return { html: rssHtml, source: 'feed' };
+  if (!article.url) {
+    const expanded = await expandShortContent(stripHtml(rssHtml), rssHtml, article, db, config.enrich);
+    return { html: expanded.html, source: 'feed' };
+  }
 
   const page = await fetchArticleText(article.url, {
     allowPrivate: config.enrich.allowPrivateFetch,
@@ -163,10 +206,12 @@ export async function getReaderContent(db, article, config) {
   }).catch(() => null);
 
   if (!page || stripHtml(page.html).length <= stripHtml(rssHtml).length) {
-    return { html: rssHtml, source: 'feed' };
+    const expanded = await expandShortContent(stripHtml(rssHtml), rssHtml, article, db, config.enrich);
+    return { html: expanded.html, source: 'feed' };
   }
   db.prepare('UPDATE articles SET full_content = ? WHERE id = ?').run(compressText(page.html), article.id);
-  return { html: page.html, source: 'fetched' };
+  const expanded = await expandShortContent(page.text, page.html, article, db, config.enrich);
+  return { html: expanded.html, source: 'fetched' };
 }
 
 /**

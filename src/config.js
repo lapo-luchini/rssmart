@@ -43,6 +43,11 @@ const DEFAULTS = {
     // topic outside the cap from being reused if the model names it anyway
     // (see existingTopicNames, src/enrich.js). 0 or null shows the full list.
     maxSuggestedTopics: 150,
+    // When an article's stripped text is shorter than this and the content
+    // contains an external link, rssmart fetches that link, extracts the
+    // readable text, and appends it below a `---` separator. Set to 0 to
+    // disable. Useful for links shared on the Fediverse or terse RSS items.
+    linkExpandMaxChars: 200,
   },
   cron: {
     maxRunMs: 300_000,
