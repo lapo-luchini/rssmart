@@ -68,7 +68,7 @@ export function startScheduler(db, config, {
     const deadline = started + batchMs;
     const heartbeat = () => acquireLease(db, owner);
 
-    const re = await reembedMissing(db, config, llm, { deadline, onItem: heartbeat });
+    const re = await reembedMissing(db, config, llm, { deadline, onItem: () => { heartbeat(); lastArticleDoneAt = Date.now(); } });
     if (re.reembedded) log(`scheduler: re-embedded ${plural(re.reembedded, 'article')}`);
 
     // A newly-classified article needs its own score computed (fresh
@@ -87,6 +87,7 @@ export function startScheduler(db, config, {
       deadline,
       onItem: (item) => {
         heartbeat();
+        lastArticleDoneAt = Date.now();
         if (!item.error) classifiedIds.push(item.id);
       },
     });
@@ -101,10 +102,12 @@ export function startScheduler(db, config, {
 
   let enriching = false;
   let enrichStartedAt = 0;
+  let lastArticleDoneAt = 0;
   const enrichTick = async () => {
     if (enriching) return;
     enriching = true;
     enrichStartedAt = Date.now();
+    lastArticleDoneAt = 0;
     try {
       if (!hasClassifierWork()) return;
       if (!acquireLease(db, owner)) {
@@ -124,13 +127,15 @@ export function startScheduler(db, config, {
     }
   };
 
-  // Independent watchdog: if a batch runs longer than 2× batchMs, force-reset
-  // enriching so the next timer tick can start fresh. The old batch may still
-  // be running in the background but its finally block will set enriching to
-  // false harmlessly (already reset by the watchdog).
+  // Independent watchdog: fires every enrichEveryMs. Uses the per-article
+  // completion timestamp so a slow-but-moving batch (processing one article
+  // every 90s) does not trigger a false reset — only a single article stuck
+  // for > 2× batchMs will.
   const enrichWatchdog = setInterval(() => {
-    if (enriching && enrichStartedAt && Date.now() - enrichStartedAt > batchMs * 2) {
-      logError('scheduler enrich watchdog: batch stuck for ' + ((Date.now() - enrichStartedAt) / 1000).toFixed(0) + 's — force reset');
+    if (!enriching || !enrichStartedAt) return;
+    const latestProgress = lastArticleDoneAt || enrichStartedAt;
+    if (Date.now() - latestProgress > batchMs * 2) {
+      logError('scheduler enrich watchdog: no progress for ' + ((Date.now() - latestProgress) / 1000).toFixed(0) + 's — force reset');
       enriching = false;
     }
   }, enrichEveryMs);
