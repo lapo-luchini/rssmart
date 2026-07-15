@@ -140,7 +140,8 @@ function firstExternalLink(html, articleUrl) {
  */
 async function expandShortContent(text, html, article, db, enrichCfg) {
   const { linkExpandMaxChars, allowPrivateFetch, maxArticleChars } = enrichCfg;
-  if (!linkExpandMaxChars || text.length >= linkExpandMaxChars) return { text, html };
+  const textWithoutUrls = text.replace(/https?:\/\/[^\s]+/g, '').trim();
+  if (!linkExpandMaxChars || textWithoutUrls.length >= linkExpandMaxChars) return { text, html };
   const url = firstExternalLink(html ?? '', article.url);
   if (!url) return { text, html };
   let page;
