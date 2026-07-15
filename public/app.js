@@ -70,7 +70,7 @@ createApp({
     topicsRanked() {
       const value = (t, key) => ({
         name: t.name.toLowerCase(),
-        votes: t.up + t.down,
+        votes: t.up - t.down,
       }[key] ?? t[key]);
       return this.sortRows(this.topics, this.topicSort, value);
     },
