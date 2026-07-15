@@ -22,6 +22,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export function startScheduler(db, config, {
   log = () => {},
+  verbose = false,
   fetchEveryMs = 60_000,
   enrichEveryMs = 15_000,
   scoreEveryMs = 15_000,
@@ -88,7 +89,12 @@ export function startScheduler(db, config, {
       onItem: (item) => {
         heartbeat();
         lastArticleDoneAt = Date.now();
-        if (!item.error) classifiedIds.push(item.id);
+        if (item.error) {
+          if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" failed: ${item.error}`);
+        } else {
+          if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" -> [${item.topics?.join(', ')}]${item.depth ? ` depth ${item.depth}/5` : ''}${item.duplicateOf ? ` (repeat of #${item.duplicateOf})` : ''}`);
+          classifiedIds.push(item.id);
+        }
       },
     });
     for (const id of classifiedIds) recomputeOneScore(db, config, id);

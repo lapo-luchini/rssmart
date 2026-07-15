@@ -196,7 +196,7 @@ if (mode === 'cron') {
     });
   }
   if (config.scheduler.enabled) {
-    startScheduler(db, config, { log });
+    startScheduler(db, config, { log, verbose: values.verbose || values.debug });
     log('internal scheduler active: fetching due feeds, classifying pending articles');
   }
 }
