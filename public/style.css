@@ -57,7 +57,9 @@ body {
   font-size: 0.72rem;
   color: var(--muted);
   text-align: right;
+  cursor: pointer;
 }
+.wire-stats:hover { color: var(--ink); }
 
 /* ---- toolbar ----------------------------------------------------------- */
 

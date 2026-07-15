@@ -12,7 +12,7 @@
 
   <header class="masthead">
     <h1>rssmart</h1>
-    <p class="wire-stats" v-if="stats">
+    <p class="wire-stats" v-if="stats" @click="loadSidebarData" title="click to refresh">
       {{ stats.unread }} unread · {{ stats.total }} total<span v-if="stats.pending"> · {{ stats.pending }} awaiting classification</span><span v-if="stats.errors"> · {{ stats.errors }} unclassifiable</span>
     </p>
   </header>
