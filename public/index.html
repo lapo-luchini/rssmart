@@ -163,6 +163,7 @@
       <span :class="{ 'feed-error': f.error_count > f.ok_count }">{{ f.ok_count }}✓ {{ f.error_count }}✗</span>
       <span>{{ f.unread }}/{{ f.articles }}</span>
       <span>
+        <button class="mark" @click="filterFeed(f.id)">show</button>
         <button class="mark" @click="setFeedActive(f, !f.active)">{{ f.active ? 'disable' : 'enable' }}</button>
       </span>
     </div>

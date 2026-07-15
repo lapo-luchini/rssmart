@@ -70,8 +70,8 @@ export function topicPrefs(db, maxSuggested, halflifeYears) {
   const rows = db.prepare(`
     SELECT t.id, t.name,
            COUNT(at.article_id) AS articles,
-           COALESCE(SUM(MAX(${decayedVoteExpr('a', halflifeYears)}, 0)), 0) AS up,
-           COALESCE(SUM(MAX(-${decayedVoteExpr('a', halflifeYears)}, 0)), 0) AS down,
+           ROUND(COALESCE(SUM(MAX(${decayedVoteExpr('a', halflifeYears)}, 0)), 0)) AS up,
+           ROUND(COALESCE(SUM(MAX(-${decayedVoteExpr('a', halflifeYears)}, 0)), 0)) AS down,
            ${makePrefExpr(halflifeYears)} AS pref
     FROM topics t
     LEFT JOIN article_topics at ON at.topic_id = t.id

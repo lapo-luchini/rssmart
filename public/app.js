@@ -574,6 +574,12 @@ createApp({
       this.reload();
     },
 
+    filterFeed(id) {
+      this.panel = null;
+      this.feedId = id;
+      this.reload();
+    },
+
     // Voting escalates: ▲ = interesting (+1), ▲ again = WOW (+2), again = clear.
     voteClick(article, direction) {
       const current = article.vote * direction; // 0, 1 or 2 in this direction
