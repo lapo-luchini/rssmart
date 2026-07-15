@@ -188,6 +188,7 @@
       <p class="triage-progress">{{ triageProcessed }} processed this session</p>
       <div class="story-meta">
         <span class="source">{{ triageCurrent.feed_title || 'feed' }}</span>
+        <span v-if="triageCurrent.author" class="author" :title="triageCurrent.author">{{ triageCurrent.author }}</span>
         <time :title="fullDate(triageCurrent.published_at || triageCurrent.created_at)">{{ ago(triageCurrent.published_at || triageCurrent.created_at) }}</time>
         <a v-if="triageCurrent.url" class="mark" :href="triageCurrent.url" target="_blank" rel="noopener"
            title="open in a new tab (o)">open original ↗</a>
@@ -240,6 +241,7 @@
           </span>
         </span>
         <span class="source">{{ a.feed_title || 'feed' }}</span>
+        <span v-if="a.author" class="author" :title="a.author">{{ a.author }}</span>
         <time :datetime="a.published_at || a.created_at" :title="fullDate(a.published_at || a.created_at)">{{ ago(a.published_at || a.created_at) }}</time>
         <span v-if="a.similarity !== undefined" class="flag" title="semantic match strength for this search">{{ Math.round(a.similarity * 100) }}% match</span>
         <button v-if="a.versions > 1 && !dupes" class="flag flag-link"
@@ -327,6 +329,7 @@
         <h1 class="reader-title">{{ readerArticle.title }}</h1>
         <div class="story-meta reader-meta">
           <span class="source">{{ readerArticle.feed_title || 'feed' }}</span>
+          <span v-if="readerArticle.author" class="author" :title="readerArticle.author">{{ readerArticle.author }}</span>
           <time :title="fullDate(readerArticle.published_at || readerArticle.created_at)">{{ ago(readerArticle.published_at || readerArticle.created_at) }}</time>
           <em v-if="readerSource === 'feed'" class="feed-notice"
               title="the full article couldn't be fetched or extracted; showing the feed's own summary">feed excerpt only</em>

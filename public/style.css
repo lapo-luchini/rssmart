@@ -295,6 +295,15 @@ body {
   max-width: 14rem;
 }
 
+.author {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 10rem;
+}
+
+.author::before { content: '· '; }
+
 .flag {
   border: 1px solid var(--hairline);
   border-radius: 3px;
