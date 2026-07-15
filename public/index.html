@@ -80,7 +80,7 @@
     <div class="feed-row topic-grid" v-for="t in topicsRanked" :key="t.id" :class="{ inactive: t.suggested === false }">
       <span class="feed-name" :title="t.suggested === false ? 'not currently suggested to the classifier — outside the top most-used topics (it can still be reused if named)' : 'suggested to the classifier as a known topic'"><strong>{{ t.name }}</strong></span>
       <span :style="{ color: tint(t.pref, 45) }">{{ fmtPart(t.pref) }}</span>
-      <span>▲{{ t.up }} ▼{{ t.down }}</span>
+      <span>{{ (t.up + t.down).toFixed(1) }} <span class="vote-counts">(▲{{ t.up_raw }} ▼{{ t.down_raw }})</span></span>
       <span>{{ t.articles }}</span>
       <span><button class="mark" @click="filterTopic(t.name)">show articles</button></span>
     </div>
