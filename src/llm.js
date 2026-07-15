@@ -56,11 +56,17 @@ export class Ollama {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });
+    // Read body text with its own timeout: AbortSignal only protects the
+    // initial request phase, not res.json() — which can hang forever if
+    // Ollama sends headers but the body stream stalls.
+    const text = await Promise.race([
+      res.text(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`response body read timed out after ${timeoutMs}ms`)), timeoutMs)),
+    ]);
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
       throw new Error(`ollama ${path} -> ${res.status} ${text.slice(0, 200)}`);
     }
-    return res.json();
+    return JSON.parse(text);
   }
 
   /**
