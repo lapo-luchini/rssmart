@@ -50,23 +50,25 @@ export class Ollama {
   }
 
   async #post(path, body, timeoutMs = this.timeoutMs) {
-    const res = await fetch(`${this.url}${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    // Read body text with its own timeout: AbortSignal only protects the
-    // initial request phase, not res.json() — which can hang forever if
-    // Ollama sends headers but the body stream stalls.
-    const text = await Promise.race([
-      res.text(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error(`response body read timed out after ${timeoutMs}ms`)), timeoutMs)),
-    ]);
-    if (!res.ok) {
-      throw new Error(`ollama ${path} -> ${res.status} ${text.slice(0, 200)}`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${this.url}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      // controller.signal stays alive past the initial request — aborting
+      // during body reading closes the connection and rejects res.text().
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`ollama ${path} -> ${res.status} ${text.slice(0, 200)}`);
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
     }
-    return JSON.parse(text);
   }
 
   /**
