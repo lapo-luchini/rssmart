@@ -112,13 +112,14 @@ export class Ollama {
    * Half precision is ample for cosine similarity and halves storage
    * (see bufToVec) — Node needs v24+ for native Float16Array, no
    * hand-rolled bit manipulation.
+   * dimensions overrides the instance default for this call.
    */
-  async embed(text, kind = 'document') {
+  async embed(text, kind = 'document', dimensions) {
     const body = {
       model: this.embedModel,
       input: (this.embedPrefixes[kind] ?? '') + text,
     };
-    if (this.embedDimensions) body.dimensions = this.embedDimensions;
+    body.dimensions = dimensions ?? this.embedDimensions;
     const data = await this.#post('/api/embed', body);
     const vec = data.embeddings?.[0];
     if (!Array.isArray(vec) || vec.length === 0) {

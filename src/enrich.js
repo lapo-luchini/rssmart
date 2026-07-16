@@ -227,29 +227,31 @@ export async function getReaderContent(db, article, config) {
  * once (2026-07-11, float32 -> float16) so upgrading always invalidates
  * old vectors even for installs whose model/dimensions didn't change.
  */
-export function syncEmbeddingSpace(db, config) {
-  const current = `${config.ollama.embedModel}::${config.ollama.embedDimensions ?? 'default'}::f16`;
-  const stored = db
-    .prepare("SELECT value FROM meta WHERE key = 'embed_model'")
-    .get()?.value;
-  if (stored === current) return { changed: false };
-
+/**
+ * Track and detect embedding space changes separately for dedup and
+ * text embeddings — they can now use different dimensions.
+ */
+function checkEmbeddingSpace(db, config, column, key, dims) {
+  const current = `${config.ollama.embedModel}::${dims ?? 'default'}::f16`;
+  const stored = db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value;
+  if (stored === current) return false;
   const record = () => db.prepare(`
-    INSERT INTO meta (key, value) VALUES ('embed_model', ?)
+    INSERT INTO meta (key, value) VALUES (?, ?)
     ON CONFLICT (key) DO UPDATE SET value = excluded.value
-  `).run(current);
-
-  const { c } = db.prepare(`
-    SELECT COUNT(*) AS c FROM articles
-    WHERE embedding IS NOT NULL OR text_embedding IS NOT NULL
-  `).get();
-  if (c === 0) {
-    record();
-    return { changed: false };
-  }
-  db.exec('UPDATE articles SET embedding = NULL, text_embedding = NULL');
+  `).run(key, current);
+  const { c } = db.prepare(`SELECT COUNT(*) AS c FROM articles WHERE ${column} IS NOT NULL`).get();
+  if (c === 0) { record(); return false; }
+  db.prepare(`UPDATE articles SET ${column} = NULL`).run();
   record();
-  return { changed: true, from: stored ?? 'unknown', cleared: c };
+  return true;
+}
+
+export function syncEmbeddingSpace(db, config) {
+  const dedupDims = config.ollama.dedupEmbedDimensions ?? config.ollama.embedDimensions;
+  const dedupChanged = checkEmbeddingSpace(db, config, 'embedding', 'embed_model_dedup', dedupDims);
+  const textChanged = checkEmbeddingSpace(db, config, 'text_embedding', 'embed_model_text', config.ollama.embedDimensions);
+  if (!dedupChanged && !textChanged) return { changed: false };
+  return { changed: true, cleared: (dedupChanged ? 1 : 0) + (textChanged ? 1 : 0), dedupChanged, textChanged };
 }
 
 /**
@@ -267,6 +269,8 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
   if (!(await llm.available())) {
     return { ...result, skipped: true, reason: `ollama not reachable at ${llm.url}` };
   }
+
+  const dedupDims = config.ollama.dedupEmbedDimensions ?? config.ollama.embedDimensions;
 
   const tried = [];
   const next = db.prepare(`
@@ -287,6 +291,7 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
       const text = stripHtml(decompressText(article.full_content ?? article.content));
       const vec = await llm.embed(
         `${article.title}\n${article.summary ?? sampleText(text, 500)}`,
+        'document', dedupDims,
       );
       const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
       save.run(Buffer.from(vec.buffer), Buffer.from(textVec.buffer), article.id);
@@ -409,7 +414,10 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
   // Two embeddings with different jobs: the summary embedding is stylistically
   // uniform (our own voice) and drives duplicate detection; the raw-text
   // embedding keeps the article's own register for similarity-based scoring.
-  const vec = await llm.embed(`${article.title}\n${summary}`);
+  // The dedup embedding uses fewer dimensions — Matryoshka-trained models
+  // retain near-perfect cosine accuracy at 64 dims for duplicate detection.
+  const dedupDims = enrichCfg.dedupEmbedDimensions ?? null;
+  const vec = await llm.embed(`${article.title}\n${summary}`, 'document', dedupDims);
   const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
   const duplicateOf = resolveGroupRoot(
     db,

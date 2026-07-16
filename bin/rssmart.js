@@ -72,8 +72,7 @@ if (mode === 'cron') {
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {
     logError(
-      `embedding model changed (${space.from} -> ${config.ollama.embedModel}): ` +
-        `${space.cleared} stored vector(s) cleared, re-embedding`,
+      `embedding space changed: ${space.cleared} column(s) cleared, re-embedding`,
     );
   }
 
@@ -176,10 +175,7 @@ if (mode === 'cron') {
   syncMastodonFeed(db, config);
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {
-    log(
-      `embedding model changed (${space.from} -> ${config.ollama.embedModel}): ` +
-        `${space.cleared} stored vector(s) cleared, the scheduler will re-embed`,
-    );
+    log(`embedding space changed: ${space.cleared} column(s) cleared, the scheduler will re-embed`);
   }
   const app = createApp(db, config);
   const port = Number(values.port) || config.server.port;

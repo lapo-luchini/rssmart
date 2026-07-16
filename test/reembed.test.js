@@ -28,7 +28,8 @@ test('syncEmbeddingSpace records, detects changes, clears stale vectors', () => 
   // model changed: vectors cleared
   config.ollama.embedModel = 'model-b';
   const r = syncEmbeddingSpace(db, config);
-  assert.deepEqual(r, { changed: true, from: 'model-a::default::f16', cleared: 1 });
+  assert.equal(r.changed, true);
+  assert.equal(r.cleared, 2);
   const art = db.prepare('SELECT embedding, text_embedding FROM articles').get();
   assert.equal(art.embedding, null);
   assert.equal(art.text_embedding, null);
@@ -38,7 +39,6 @@ test('syncEmbeddingSpace records, detects changes, clears stale vectors', () => 
   seedEnriched(legacy, 'old');
   const l = syncEmbeddingSpace(legacy, testConfig());
   assert.equal(l.changed, true);
-  assert.equal(l.from, 'unknown');
 });
 
 test('reembedMissing fills vectors with the document prefix, respects deadline', async () => {

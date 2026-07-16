@@ -14,6 +14,10 @@ const DEFAULTS = {
     // top of the float16 format): opt-in, since not every embedding model
     // supports it. null/omitted asks for the model's native dimension.
     embedDimensions: null,
+    // Dedup embeddings (summary-based) use fewer dims — cosine duplicates
+    // are detectable at much lower resolution than taste/kNN needs.
+    // null/omitted falls back to embedDimensions.
+    dedupEmbedDimensions: 64,
     timeoutMs: 60_000,
     // Finding redundant topics (src/topicMerge.js) reasons over the whole
     // topic vocabulary at once, not one short article — a fundamentally
