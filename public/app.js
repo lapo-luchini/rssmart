@@ -432,6 +432,21 @@ createApp({
         if (e.key === 'Escape') {
           e.preventDefault();
           this.closeReader();
+        } else if (e.key === 'ArrowUp' && !e.shiftKey) {
+          e.preventDefault();
+          this.voteClick(this.readerArticle, 1);
+        } else if (e.key === 'ArrowUp' && e.shiftKey) {
+          e.preventDefault();
+          this.voteClick(this.readerArticle, 2);
+        } else if (e.key === 'ArrowDown' && !e.shiftKey) {
+          e.preventDefault();
+          this.voteClick(this.readerArticle, -1);
+        } else if (e.key === 'ArrowDown' && e.shiftKey) {
+          e.preventDefault();
+          this.voteClick(this.readerArticle, -2);
+        } else if ((e.key === 'o' || e.key === 'O') && this.readerArticle.url) {
+          e.preventDefault();
+          window.open(this.readerArticle.url, '_blank', 'noopener');
         }
         return;
       }
