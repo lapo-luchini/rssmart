@@ -88,8 +88,8 @@ scoring:
                              # shift anyone's kNN term) is expensive at scale,
                              # so it's debounced this many seconds after your
                              # last vote — raise it if you tend to vote in
-                              # long sessions and don't need scores to settle
-                              # between them
+                             # long sessions and don't need scores to settle
+                             # between them
 
 # Mastodon (or Friendica) personal API feed: fetches your home timeline
 # as articles with proper per-post authors. Two auth methods:
