@@ -56,6 +56,10 @@ enrich:
                           # unaffected, and a topic outside this cap can
                           # still be reused if the model names it anyway.
                           # 0 or omit to show the full list.
+  linkExpandMaxChars: 400  # if an article's text (excluding URLs) is shorter
+                           # than this, rssmart fetches the first external link
+                           # and appends the readable content below "---".
+                           # 0 to disable.
 
 cron:
   maxRunMs: 300000    # time budget per cron run; unfinished classification

@@ -51,7 +51,7 @@ const DEFAULTS = {
     // contains an external link, rssmart fetches that link, extracts the
     // readable text, and appends it below a `---` separator. Set to 0 to
     // disable. Useful for links shared on the Fediverse or terse RSS items.
-    linkExpandMaxChars: 200,
+    linkExpandMaxChars: 400,
   },
   cron: {
     maxRunMs: 300_000,
