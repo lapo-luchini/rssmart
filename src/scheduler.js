@@ -67,9 +67,12 @@ export function startScheduler(db, config, {
   const classifyBatch = async () => {
     const started = Date.now();
     const deadline = started + batchMs;
-    const heartbeat = () => acquireLease(db, owner);
+    const heartbeat = () => {
+      lastArticleDoneAt = Date.now();
+      acquireLease(db, owner);
+    };
 
-    const re = await reembedMissing(db, config, llm, { deadline, onItem: () => { heartbeat(); lastArticleDoneAt = Date.now(); } });
+    const re = await reembedMissing(db, config, llm, { deadline, onItem: heartbeat });
     if (re.reembedded) log(`scheduler: re-embedded ${plural(re.reembedded, 'article')}`);
 
     // A newly-classified article needs its own score computed (fresh
@@ -88,7 +91,6 @@ export function startScheduler(db, config, {
       deadline,
       onItem: (item) => {
         heartbeat();
-        lastArticleDoneAt = Date.now();
         if (item.error) {
           if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" failed: ${item.error}`);
         } else {
@@ -139,9 +141,9 @@ export function startScheduler(db, config, {
   // for > 2× batchMs will.
   const enrichWatchdog = setInterval(() => {
     if (!enriching || !enrichStartedAt) return;
-    const latestProgress = lastArticleDoneAt || enrichStartedAt;
-    if (Date.now() - latestProgress > batchMs * 2) {
-      logError('scheduler enrich watchdog: no progress for ' + ((Date.now() - latestProgress) / 1000).toFixed(0) + 's — force reset');
+    const latestProgress = Date.now() - (lastArticleDoneAt || enrichStartedAt);
+    if (latestProgress > batchMs * 2) {
+      logError('scheduler enrich watchdog: no progress for ' + (latestProgress / 1000).toFixed(0) + 's — force reset');
       enriching = false;
     }
   }, enrichEveryMs);
