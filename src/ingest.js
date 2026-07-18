@@ -95,7 +95,7 @@ export async function ingestFeed(db, feed, parser) {
     for (const item of parsed.items ?? []) {
       const guid = item.guid ?? item.id ?? item.link;
       const title = item.title;
-      if (!guid || title == null || typeof title !== 'string' || !title.trim()) {
+      if (!guid || !title || typeof title !== 'string') {
         skipped++;
         continue;
       }
