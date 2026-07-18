@@ -94,7 +94,8 @@ export async function ingestFeed(db, feed, parser) {
   db.transaction(() => {
     for (const item of parsed.items ?? []) {
       const guid = item.guid ?? item.id ?? item.link;
-      if (!guid || !item.title) {
+      const title = item.title;
+      if (!guid || title == null || typeof title !== 'string' || !title.trim()) {
         skipped++;
         continue;
       }
@@ -104,7 +105,7 @@ export async function ingestFeed(db, feed, parser) {
         feed.id,
         String(guid),
         httpUrl(item.link),
-        item.title.trim(),
+        title.trim(),
         item.creator ?? item.author ?? null,
         item.isoDate ?? null,
         compressText(sanitizeHtml(content)),
