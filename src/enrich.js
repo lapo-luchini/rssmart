@@ -478,7 +478,7 @@ export async function enrichPending(
   db,
   config,
   llm,
-  { onItem, deadline, waitForMore, pollMs = 1000 } = {},
+  { onItem, onArticleStart, deadline, waitForMore, pollMs = 1000 } = {},
 ) {
   const { maxAttempts, dupWindowDays } = config.enrich;
 
@@ -549,6 +549,7 @@ export async function enrichPending(
     countPending.get(maxAttempts, JSON.stringify(tried)).c;
 
   const processOne = async (article) => {
+    onArticleStart?.();
     try {
       const { topics, summary, depth, duplicateOf } =
         await enrichOne(db, llm, article, recent, config.enrich);

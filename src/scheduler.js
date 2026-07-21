@@ -89,6 +89,7 @@ export function startScheduler(db, config, {
     const classifiedIds = [];
     const r = await enrichPending(db, config, llm, {
       deadline,
+      onArticleStart: markArticleStart,
       onItem: (item) => {
         heartbeat();
         if (item.error) {
@@ -110,11 +111,13 @@ export function startScheduler(db, config, {
 
   let enriching = false;
   let enrichStartedAt = 0;
+  let lastArticleStartedAt = 0;
   let lastArticleDoneAt = 0;
   const enrichTick = async () => {
     if (enriching) return;
     enriching = true;
     enrichStartedAt = Date.now();
+    lastArticleStartedAt = 0;
     lastArticleDoneAt = 0;
     try {
       if (!hasClassifierWork()) return;
@@ -135,14 +138,18 @@ export function startScheduler(db, config, {
     }
   };
 
-  // Independent watchdog: fires every enrichEveryMs. Logs when a single
-  // article takes unusually long, but does NOT force-reset — doing so would
-  // leave the old batch running while a new one starts, creating competing
-  // Ollama requests and wasting memory on duplicate WASM batchers.
+  // Track per-article progress for the watchdog below.
+  const markArticleStart = () => { lastArticleStartedAt = Date.now(); };
+
+  // Independent watchdog: fires every enrichEveryMs. Uses the most recent
+  // of (article start, article completion, batch start) to measure progress.
+  // A single article can take 3-4 minutes when LLM calls all timeout and
+  // retry — the threshold must exceed that worst case.
   const enrichWatchdog = setInterval(() => {
     if (!enriching || !enrichStartedAt) return;
-    const idleSince = Date.now() - (lastArticleDoneAt || enrichStartedAt);
-    if (idleSince > batchMs * 2) {
+    const latestProgress = lastArticleDoneAt || lastArticleStartedAt || enrichStartedAt;
+    const idleSince = Date.now() - latestProgress;
+    if (idleSince > 600_000) { // 10 minutes — safely past even 3× timeout articles
       logError('scheduler enrich watchdog: no progress for ' + (idleSince / 1000).toFixed(0) + 's');
     }
   }, enrichEveryMs);
