@@ -120,13 +120,7 @@ export function startScheduler(db, config, {
         (r.failed ? `, ${r.failed} failed` : ''));
     }
     classifierWorkPending = -1; // invalidate after batch
-    // Safety: if the batch completed but enriching somehow stayed true (which
-    // the try/finally in enrichTick should prevent), clear it explicitly here
-    // so the next timer tick can start a new batch.
-    if (enriching) {
-      logError('scheduler enrich: batch completed but enriching was left true — correcting');
-      enriching = false;
-    }
+    enriching = false;
   };
 
   let enriching = false;
