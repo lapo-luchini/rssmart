@@ -135,16 +135,15 @@ export function startScheduler(db, config, {
     }
   };
 
-  // Independent watchdog: fires every enrichEveryMs. Uses the per-article
-  // completion timestamp so a slow-but-moving batch (processing one article
-  // every 90s) does not trigger a false reset — only a single article stuck
-  // for > 2× batchMs will.
+  // Independent watchdog: fires every enrichEveryMs. Logs when a single
+  // article takes unusually long, but does NOT force-reset — doing so would
+  // leave the old batch running while a new one starts, creating competing
+  // Ollama requests and wasting memory on duplicate WASM batchers.
   const enrichWatchdog = setInterval(() => {
     if (!enriching || !enrichStartedAt) return;
-    const latestProgress = Date.now() - (lastArticleDoneAt || enrichStartedAt);
-    if (latestProgress > batchMs * 2) {
-      logError('scheduler enrich watchdog: no progress for ' + (latestProgress / 1000).toFixed(0) + 's — force reset');
-      enriching = false;
+    const idleSince = Date.now() - (lastArticleDoneAt || enrichStartedAt);
+    if (idleSince > batchMs * 2) {
+      logError('scheduler enrich watchdog: no progress for ' + (idleSince / 1000).toFixed(0) + 's');
     }
   }, enrichEveryMs);
 
