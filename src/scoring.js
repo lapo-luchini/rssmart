@@ -234,21 +234,24 @@ function exploratoryBonus(pairSims) {
 // A null batcher when there's no voted set to compare against - knnScore's
 // own `voted.length === 0` guard means it's never actually dereferenced,
 // but avoids creating (and needing to free) an empty WASM batcher.
-function makeVotedBatcher(voted) {
+function makeVotedBatcher(voted, reuse) {
   if (voted.length === 0) return null;
-  return createDotBatcher(voted.map((v) => v.vec), voted[0].vec.length);
+  return createDotBatcher(voted.map((v) => v.vec), voted[0].vec.length, reuse);
 }
 
 // Cache for recomputeOneScore: reuses the voted set and WASM batcher
 // across consecutive calls. Invalidated when a vote changes the set.
+// The old batcher's WASM allocations are recycled to avoid fragmenting
+// WASM linear memory over long-running serve sessions.
 let _singleScoreBatcher = null;
 let _singleScoreVoted = null;
 let _singleScoreHalflife = null;
 
 function getSingleScoreBatcher(db, halflifeYears) {
   if (!_singleScoreBatcher || _singleScoreHalflife !== halflifeYears) {
+    const old = _singleScoreBatcher;
     _singleScoreVoted = votedArticles(db, halflifeYears);
-    _singleScoreBatcher = makeVotedBatcher(_singleScoreVoted);
+    _singleScoreBatcher = makeVotedBatcher(_singleScoreVoted, old);
     _singleScoreHalflife = halflifeYears;
   }
   return { voted: _singleScoreVoted, batcher: _singleScoreBatcher };

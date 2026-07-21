@@ -148,6 +148,14 @@ export function startScheduler(db, config, {
     }
   }, enrichEveryMs);
 
+  // Log memory usage every 5 minutes to detect leaks.
+  const memLog = setInterval(() => {
+    try {
+      const u = process.memoryUsage();
+      log(`scheduler: mem rss=${(u.rss / 1024 / 1024).toFixed(0)}MB heap=${(u.heapUsed / 1024 / 1024).toFixed(0)}/${(u.heapTotal / 1024 / 1024).toFixed(0)}MB`);
+    } catch {}
+  }, 300_000);
+
   // recomputeIfDue's full sweep now yields periodically (see scoring.js) so
   // it never blocks concurrent requests for its whole ~48s, but it's still
   // one long-running async job — this guard just stops scoreEveryMs ticks
@@ -174,6 +182,7 @@ export function startScheduler(db, config, {
     setInterval(enrichTick, enrichEveryMs),
     setInterval(scoreTick, scoreEveryMs),
     enrichWatchdog,
+    memLog,
   ];
   for (const t of timers) t.unref?.();
   fetchTick();

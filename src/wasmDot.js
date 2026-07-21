@@ -33,46 +33,60 @@ const { memory, alloc_f32, free_f32, dot_batch } = instance.exports;
  *
  * `.free()` releases the WASM-side buffers; call it exactly once when done
  * (recomputeScores/recomputeOneScore do this in a finally block).
+ *
+ * When `reuse` is a previous batcher, its WASM allocations are recycled
+ * if they're large enough for the new candidate set — avoiding repeated
+ * free/alloc cycles that fragment WASM linear memory over long runs.
  */
-export function createDotBatcher(candidates, dims) {
+export function createDotBatcher(candidates, dims, reuse) {
   const n = candidates.length;
   for (const c of candidates) {
     if (c.length !== dims) {
       throw new Error(`createDotBatcher: candidate vector has ${c.length} dims, expected ${dims}`);
     }
   }
-  const candPtr = alloc_f32(n * dims);
-  const queryPtr = alloc_f32(dims);
-  const outPtr = alloc_f32(n);
+
+  let candPtr, queryPtr, outPtr;
+  let candCapacity = 0;
+  if (reuse && reuse._candCapacity >= n && reuse._dims === dims) {
+    // Recycle the old batcher's allocations — avoids WASM heap fragmentation
+    candPtr = reuse._candPtr;
+    queryPtr = reuse._queryPtr;
+    outPtr = reuse._outPtr;
+    candCapacity = reuse._candCapacity;
+    reuse._freed = true;
+  } else {
+    if (reuse) reuse.free();
+    candPtr = alloc_f32(n * dims);
+    queryPtr = alloc_f32(dims);
+    outPtr = alloc_f32(n);
+    candCapacity = n;
+  }
 
   const candView = new Float32Array(memory.buffer, candPtr, n * dims);
   for (let i = 0; i < n; i++) candView.set(candidates[i], i * dims);
 
   return {
+    _candPtr: candPtr,
+    _queryPtr: queryPtr,
+    _outPtr: outPtr,
+    _candCapacity: candCapacity,
+    _dims: dims,
+    _freed: false,
     query(vec) {
-      // WASM does no bounds checking on the raw pointer arithmetic below -
-      // a length mismatch here wouldn't cleanly return a wrong answer (the
-      // way the old cosine()'s `a.length !== b.length` guard did), it
-      // would silently read/write past the query buffer into whatever
-      // WASM memory follows it. Cheap enough to check every call, and the
-      // failure mode it prevents is memory corruption, not just a bad
-      // score - worth it even though a mismatch should never actually
-      // happen (every stored embedding is the current embedding space's
-      // dimension by construction; see syncEmbeddingSpace in enrich.js).
       if (vec.length !== dims) {
         throw new Error(`createDotBatcher: query vector has ${vec.length} dims, expected ${dims}`);
       }
-      // memory.buffer can be a new ArrayBuffer if WASM memory grew since
-      // the last call (e.g. from a concurrent batcher's own allocation) -
-      // re-view fresh every time rather than caching a view across calls.
       new Float32Array(memory.buffer, queryPtr, dims).set(vec);
       dot_batch(queryPtr, candPtr, dims, n, outPtr);
       return new Float32Array(memory.buffer, outPtr, n);
     },
     free() {
-      free_f32(candPtr, n * dims);
+      if (this._freed) return;
+      this._freed = true;
+      free_f32(candPtr, candCapacity * dims);
       free_f32(queryPtr, dims);
-      free_f32(outPtr, n);
+      free_f32(outPtr, candCapacity);
     },
   };
 }
