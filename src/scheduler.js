@@ -87,19 +87,32 @@ export function startScheduler(db, config, {
     // (measured live), which used to make every concurrent request,
     // including a vote, hang until this batch's recompute finished.
     const classifiedIds = [];
-    const r = await enrichPending(db, config, llm, {
-      deadline,
-      onArticleStart: markArticleStart,
-      onItem: (item) => {
-        heartbeat();
-        if (item.error) {
-          if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" failed: ${item.error}`);
-        } else {
-          if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" -> [${item.topics?.join(', ')}]${item.depth ? ` depth ${item.depth}/5` : ''}${item.duplicateOf ? ` (repeat of #${item.duplicateOf})` : ''}`);
-          classifiedIds.push(item.id);
-        }
-      },
-    });
+    const enrichTimeout = batchMs + 120_000; // batch deadline + 2 minutes margin
+    let r;
+    let batchTimer;
+    try {
+      r = await Promise.race([
+        enrichPending(db, config, llm, {
+          deadline,
+          onArticleStart: markArticleStart,
+          onItem: (item) => {
+            heartbeat();
+            if (item.error) {
+              if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" failed: ${item.error}`);
+            } else {
+              if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" -> [${item.topics?.join(', ')}]${item.depth ? ` depth ${item.depth}/5` : ''}${item.duplicateOf ? ` (repeat of #${item.duplicateOf})` : ''}`);
+              classifiedIds.push(item.id);
+            }
+          },
+        }),
+        new Promise((_, reject) => { batchTimer = setTimeout(() => reject(new Error('enrichPending timed out')), enrichTimeout); }),
+      ]);
+    } catch (err) {
+      logError('scheduler enrich batch:', err.message);
+      r = { enriched: 0, failed: 0, errors: [], timedOut: true };
+    } finally {
+      clearTimeout(batchTimer);
+    }
     for (const id of classifiedIds) recomputeOneScore(db, config, id);
     if (r.enriched || r.failed) {
       const avg = (Date.now() - started) / (r.enriched + r.failed) / 1000;
