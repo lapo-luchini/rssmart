@@ -265,6 +265,9 @@ export function openDb(path) {
   // writers, a supported scenario the enrichment lease already relies on
   // being safe). Set it explicitly so both drivers behave the same way.
   pragma(db, 'busy_timeout = 5000');
+  // Limit SQLite page cache to ~16MB (4000 pages × 4KB) — prevents unbounded
+  // memory growth under bun:sqlite which defaults to caching many pages.
+  pragma(db, 'cache_size = -16000');
 
   const version = pragma(db, 'user_version').user_version;
   for (let v = version; v < MIGRATIONS.length; v++) {
