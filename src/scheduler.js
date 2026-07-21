@@ -151,7 +151,8 @@ export function startScheduler(db, config, {
   const memLog = setInterval(() => {
     try {
       const u = process.memoryUsage();
-      log(`scheduler: mem rss=${(u.rss / 1024 / 1024).toFixed(0)}MB heap=${(u.heapUsed / 1024 / 1024).toFixed(0)}/${(u.heapTotal / 1024 / 1024).toFixed(0)}MB`);
+      const heapMB = (u.heapUsed / 1024 / 1024).toFixed(0);
+      log(`scheduler: mem rss=${(u.rss / 1024 / 1024).toFixed(0)}MB heap=${heapMB}/${(u.heapTotal / 1024 / 1024).toFixed(0)}MB`);
     } catch {}
   }, 300_000);
 

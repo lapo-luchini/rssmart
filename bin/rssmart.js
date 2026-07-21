@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync, existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
@@ -11,6 +12,19 @@ import { startScheduler } from '../src/scheduler.js';
 import { acquireLease, releaseLease } from '../src/lease.js';
 import { log, logError } from '../src/log.js';
 import { checkRuntime } from '../src/runtime-check.js';
+
+// Read the git commit hash at startup for version tracking.
+function readCommitHash() {
+  try {
+    const head = readFileSync('.git/HEAD', 'utf8').trim();
+    if (head.startsWith('ref: ')) {
+      const refPath = '.git/' + head.slice(5);
+      if (existsSync(refPath)) return readFileSync(refPath, 'utf8').trim().slice(0, 12);
+    }
+    return head.slice(0, 12);
+  } catch { return 'unknown'; }
+}
+const COMMIT_HASH = readCommitHash();
 
 checkRuntime();
 
@@ -67,6 +81,7 @@ if (mode === 'cron') {
   const verbose = values.verbose || values.debug;
   const info = (...args) => verbose && log(...args);
 
+  log(`rssmart commit ${COMMIT_HASH}`);
   syncFeeds(db, config.feeds);
   syncMastodonFeed(db, config);
   const space = syncEmbeddingSpace(db, config);
@@ -177,7 +192,8 @@ if (mode === 'cron') {
   if (space.changed) {
     log(`embedding space changed: ${space.cleared} column(s) cleared, the scheduler will re-embed`);
   }
-  const app = createApp(db, config);
+  log(`rssmart commit ${COMMIT_HASH}`);
+  const app = createApp(db, config, COMMIT_HASH);
   const port = Number(values.port) || config.server.port;
   // Hono's app.fetch is a standard Fetch API handler — Bun runs it
   // natively, Node needs @hono/node-server to adapt it to node:http (same

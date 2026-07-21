@@ -151,7 +151,7 @@ function fetchInRankOrder(db, ranked) {
   return ranked.map((r) => ({ ...rowToArticle(byId.get(r.id)), similarity: r.similarity }));
 }
 
-export function createApp(db, config) {
+export function createApp(db, config, commitHash) {
   const app = new Hono();
   app.use('/api/*', bodyLimit({
     maxSize: 2 * 1024 * 1024, // OPML imports ride in JSON
@@ -481,6 +481,10 @@ export function createApp(db, config) {
              COALESCE(SUM(duplicate_of IS NOT NULL), 0) AS duplicates
       FROM articles
     `).get());
+  });
+
+  app.get('/api/version', (c) => {
+    return c.json({ commit: commitHash || 'unknown' });
   });
 
   app.use('*', serveStatic({ root: PUBLIC_DIR }));

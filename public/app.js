@@ -119,6 +119,8 @@ createApp({
     window.addEventListener('keydown', this.handleGlobalKey);
     this.reload();
     this.loadSidebarData();
+    // Log commit hash for debugging
+    this.api('/api/version').then((v) => console.log('rssmart', v.commit)).catch(() => {});
   },
 
   methods: {
