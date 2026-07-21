@@ -107,6 +107,13 @@ export function startScheduler(db, config, {
         (r.failed ? `, ${r.failed} failed` : ''));
     }
     classifierWorkPending = -1; // invalidate after batch
+    // Safety: if the batch completed but enriching somehow stayed true (which
+    // the try/finally in enrichTick should prevent), clear it explicitly here
+    // so the next timer tick can start a new batch.
+    if (enriching) {
+      logError('scheduler enrich: batch completed but enriching was left true — correcting');
+      enriching = false;
+    }
   };
 
   let enriching = false;
@@ -141,16 +148,21 @@ export function startScheduler(db, config, {
   // Track per-article progress for the watchdog below.
   const markArticleStart = () => { lastArticleStartedAt = Date.now(); };
 
-  // Independent watchdog: fires every enrichEveryMs. Uses the most recent
-  // of (article start, article completion, batch start) to measure progress.
-  // A single article can take 3-4 minutes when LLM calls all timeout and
-  // retry — the threshold must exceed that worst case.
+  // Independent watchdog: fires every enrichEveryMs. Tracks the most recent
+  // progress (article start, completion, or batch start). After 10 minutes
+  // of complete inactivity it logs a warning; after 15 minutes it force-
+  // resets enriching so the next tick can start fresh — a last resort in
+  // case the finally block that normally clears enriching never runs.
   const enrichWatchdog = setInterval(() => {
     if (!enriching || !enrichStartedAt) return;
     const latestProgress = lastArticleDoneAt || lastArticleStartedAt || enrichStartedAt;
     const idleSince = Date.now() - latestProgress;
-    if (idleSince > 600_000) { // 10 minutes — safely past even 3× timeout articles
+    if (idleSince > 600_000) { // 10 min
       logError('scheduler enrich watchdog: no progress for ' + (idleSince / 1000).toFixed(0) + 's');
+    }
+    if (idleSince > 900_000) { // 15 min — force reset as last resort
+      logError('scheduler enrich watchdog: forcing reset after ' + (idleSince / 1000).toFixed(0) + 's idle');
+      enriching = false;
     }
   }, enrichEveryMs);
 
