@@ -183,6 +183,10 @@ export function startScheduler(db, config, {
       const u = process.memoryUsage();
       const heapMB = (u.heapUsed / 1024 / 1024).toFixed(0);
       log(`scheduler: mem rss=${(u.rss / 1024 / 1024).toFixed(0)}MB heap=${heapMB}/${(u.heapTotal / 1024 / 1024).toFixed(0)}MB`);
+      // Force GC if available (Bun.gc or node --expose-gc) to distinguish
+      // real leaks from uncollected-but-eligible objects.
+      try { Bun.gc(); } catch {}
+      try { global.gc?.(); } catch {}
     } catch {}
   }, 300_000);
 
