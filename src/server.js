@@ -386,9 +386,10 @@ export function createApp(db, config, commitHash) {
         COALESCE((SELECT SUM(active) FROM feeds), 0) AS activeSum,
         (SELECT COUNT(*) FROM articles) AS articleCount,
         COALESCE((SELECT SUM(vote != 0) FROM articles), 0) AS voteCount,
-        COALESCE((SELECT SUM(read_at IS NULL) FROM articles), 0) AS unreadCount
+        COALESCE((SELECT SUM(read_at IS NULL) FROM articles), 0) AS unreadCount,
+        COALESCE((SELECT SUM(ok_count + error_count) FROM feeds), 0) AS fetchTotal
     `).get();
-    const key = `${state.feedCount}:${state.activeSum}:${state.articleCount}:${state.voteCount}:${state.unreadCount}`;
+    const key = `${state.feedCount}:${state.activeSum}:${state.articleCount}:${state.voteCount}:${state.unreadCount}:${state.fetchTotal}`;
     if (feedListKey === key) return feedListCache;
     feedListKey = key;
     feedListCache = db.prepare(`
