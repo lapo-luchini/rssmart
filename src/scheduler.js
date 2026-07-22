@@ -87,36 +87,19 @@ export function startScheduler(db, config, {
     // (measured live), which used to make every concurrent request,
     // including a vote, hang until this batch's recompute finished.
     const classifiedIds = [];
-    const enrichTimeout = 600_000; // 10 minutes — only catches genuine hangs
-    let r;
-    let batchTimer;
-    let batchStopped = false;
-    const stopBatch = () => { batchStopped = true; };
-    try {
-      r = await Promise.race([
-        enrichPending(db, config, llm, {
-          deadline,
-          cancelled: () => batchStopped,
-          onArticleStart: markArticleStart,
-          onItem: (item) => {
-            heartbeat();
-            if (item.error) {
-              if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" failed: ${item.error}`);
-            } else {
-              if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" -> [${item.topics?.join(', ')}]${item.depth ? ` depth ${item.depth}/5` : ''}${item.duplicateOf ? ` (repeat of #${item.duplicateOf})` : ''}`);
-              classifiedIds.push(item.id);
-            }
-          },
-        }),
-        new Promise((_, reject) => { batchTimer = setTimeout(() => { stopBatch(); reject(new Error('enrichPending timed out')); }, enrichTimeout); }),
-      ]);
-    } catch (err) {
-      logError('scheduler enrich batch:', err.message);
-      r = { enriched: 0, failed: 0, errors: [], timedOut: true };
-    } finally {
-      clearTimeout(batchTimer);
-      stopBatch(); // ensure any still-running workers see the flag
-    }
+    const r = await enrichPending(db, config, llm, {
+      deadline,
+      onArticleStart: markArticleStart,
+      onItem: (item) => {
+        heartbeat();
+        if (item.error) {
+          if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" failed: ${item.error}`);
+        } else {
+          if (verbose) log(`scheduler: #${item.id} "${item.title?.slice(0, 60)}" -> [${item.topics?.join(', ')}]${item.depth ? ` depth ${item.depth}/5` : ''}${item.duplicateOf ? ` (repeat of #${item.duplicateOf})` : ''}`);
+          classifiedIds.push(item.id);
+        }
+      },
+    });
     for (const id of classifiedIds) recomputeOneScore(db, config, id);
     if (r.enriched || r.failed) {
       const avg = (Date.now() - started) / (r.enriched + r.failed) / 1000;
