@@ -87,7 +87,7 @@ export function startScheduler(db, config, {
     // (measured live), which used to make every concurrent request,
     // including a vote, hang until this batch's recompute finished.
     const classifiedIds = [];
-    const enrichTimeout = batchMs + 120_000; // batch deadline + 2 minutes margin
+    const enrichTimeout = 600_000; // 10 minutes — only catches genuine hangs
     let r;
     let batchTimer;
     let batchStopped = false;
