@@ -478,7 +478,7 @@ export async function enrichPending(
   db,
   config,
   llm,
-  { onItem, onArticleStart, deadline, waitForMore, pollMs = 1000 } = {},
+  { onItem, onArticleStart, deadline, waitForMore, pollMs = 1000, cancelled } = {},
 ) {
   const { maxAttempts, dupWindowDays } = config.enrich;
 
@@ -566,6 +566,7 @@ export async function enrichPending(
 
   const worker = async () => {
     while (true) {
+      if (cancelled?.()) return;
       if (deadline && Date.now() >= deadline) {
         // only a real cut-off counts as a timeout, not a drained queue
         if (remaining() > 0) result.timedOut = true;

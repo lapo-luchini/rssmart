@@ -90,10 +90,13 @@ export function startScheduler(db, config, {
     const enrichTimeout = batchMs + 120_000; // batch deadline + 2 minutes margin
     let r;
     let batchTimer;
+    let batchStopped = false;
+    const stopBatch = () => { batchStopped = true; };
     try {
       r = await Promise.race([
         enrichPending(db, config, llm, {
           deadline,
+          cancelled: () => batchStopped,
           onArticleStart: markArticleStart,
           onItem: (item) => {
             heartbeat();
@@ -105,13 +108,14 @@ export function startScheduler(db, config, {
             }
           },
         }),
-        new Promise((_, reject) => { batchTimer = setTimeout(() => reject(new Error('enrichPending timed out')), enrichTimeout); }),
+        new Promise((_, reject) => { batchTimer = setTimeout(() => { stopBatch(); reject(new Error('enrichPending timed out')); }, enrichTimeout); }),
       ]);
     } catch (err) {
       logError('scheduler enrich batch:', err.message);
       r = { enriched: 0, failed: 0, errors: [], timedOut: true };
     } finally {
       clearTimeout(batchTimer);
+      stopBatch(); // ensure any still-running workers see the flag
     }
     for (const id of classifiedIds) recomputeOneScore(db, config, id);
     if (r.enriched || r.failed) {
