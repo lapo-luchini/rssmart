@@ -60,14 +60,21 @@ function normalize(status, instanceUrl) {
   const post = status.reblog ?? status;
   const acct = post.account?.acct ?? 'unknown';
   const html = post.content ?? '';
-  const plain = html.replace(/<[^>]*>/g, '').trim();
+  let plain = html.replace(/<[^>]*>/g, '').trim();
+
+  // Media-only posts (images/video with no text): synthesize a minimal
+  // title and content so the LLM has something to classify.
+  if (!plain && post.media_attachments?.length) {
+    const media = post.media_attachments.map((m) => m.description || m.type || 'media');
+    plain = `[${media.join(', ')}]`;
+  }
 
   return {
     id: status.id,
     guid: `mastodon:${status.id}`,
-    url: post.url || `${instanceUrl}/@${acct}/${status.id}`,
+    url: post.url || post.uri || status.url || `${instanceUrl}/@${acct}/${status.id}`,
     title: plain.slice(0, 120) || '(no content)',
-    content: html,
+    content: html || plain,
     author: post.account?.display_name || acct,
     publishedAt: post.created_at,
   };
