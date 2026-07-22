@@ -90,6 +90,10 @@ scoring:
                              # last vote — raise it if you tend to vote in
                              # long sessions and don't need scores to settle
                              # between them
+  hotDecayPerDay: 0.05  # "hot" sort blends score with freshness: rank = score -
+                        # hotDecayPerDay × days_old. At 0.05, a day of age costs
+                        # 0.05 — fresh content bubbles up unless something is
+                        # genuinely exceptional. 0 = pure score sort.
 
 # Mastodon (or Friendica) personal API feed: fetches your home timeline
 # as articles with proper per-post authors. Two auth methods:

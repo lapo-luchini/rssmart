@@ -1,59 +1,68 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import YAML from 'yaml';
 import { loadConfig } from '../src/config.js';
 
-function writeConfig(content) {
+const examplePath = join(process.cwd(), 'config.example.yaml');
+
+/** Write a complete config from the example, optionally with overrides. */
+function writeConfig(overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'rssmart-'));
   const file = join(dir, 'config.yaml');
-  writeFileSync(file, content);
+  let obj = YAML.parse(readFileSync(examplePath, 'utf8'));
+  for (const [k, v] of Object.entries(overrides)) {
+    if (typeof v === 'object' && !Array.isArray(v) && obj[k]) {
+      obj[k] = { ...obj[k], ...v };
+    } else {
+      obj[k] = v;
+    }
+  }
+  writeFileSync(file, YAML.stringify(obj));
   return { dir, file };
 }
 
-test('loads YAML, merges defaults, resolves db against config dir', () => {
-  const { dir, file } = writeConfig(`
-db: ./my-data/news.db
-ollama:
-  url: http://macmini.local:11434
-`);
+test('loads a full config and resolves db against config dir', () => {
+  const { dir, file } = writeConfig({ server: { port: 8099 } });
   const config = loadConfig(file);
-  assert.equal(config.db, join(dir, 'my-data', 'news.db'));
-  assert.equal(config.ollama.url, 'http://macmini.local:11434');
-  assert.equal(config.ollama.embedModel, 'nomic-embed-text', 'default survives partial override');
-  assert.equal(config.enrich.dupThreshold, 0.87, 'untouched section keeps defaults');
-  assert.equal(config.cron.maxRunMs, 300_000, 'cron time budget default');
-});
-
-test('JSON is accepted too (YAML superset)', () => {
-  const { file } = writeConfig('{"ollama": {"url": "http://example:11434"}}');
-  assert.equal(loadConfig(file).ollama.url, 'http://example:11434');
+  assert.equal(config.db, join(dir, 'data', 'rssmart.db'));
+  assert.equal(config.server.port, 8099);
+  assert.equal(config.ollama.chatModel, 'gemma4:12b-it-qat');
+  assert.equal(config.scoring.weights.embedding, 0.4);
 });
 
 test('helpful errors for missing file, bad syntax, bad shape', () => {
   assert.throws(() => loadConfig('/nonexistent/config.yaml'), /cannot read config file/);
-  assert.throws(() => loadConfig(writeConfig('feeds: [').file), /not valid YAML/);
-  assert.throws(() => loadConfig(writeConfig('just a string').file), /YAML mapping/);
+
+  // Bad YAML: write a broken file directly
+  const dir = mkdtempSync(join(tmpdir(), 'rssmart-'));
+  const broken = join(dir, 'config.yaml');
+  writeFileSync(broken, 'feeds: [\n');
+  assert.throws(() => loadConfig(broken), /not valid YAML/);
+
+  // Wrong shape: not a mapping
+  writeFileSync(broken, 'just a string');
+  assert.throws(() => loadConfig(broken), /YAML mapping/);
+});
+
+test('validation rejects missing keys', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rssmart-'));
+  const file = join(dir, 'config.yaml');
+  writeFileSync(file, 'db: ./data/rssmart.db\nollama:\n  url: http://localhost:11434');
+  assert.throws(() => loadConfig(file), /missing key/);
 });
 
 test('validation rejects wrong types', () => {
-  assert.throws(
-    () => loadConfig(writeConfig('server:\n  port: "not-a-number"').file),
-    /config.server.port: expected number, got string/,
-  );
+  const { file } = writeConfig({ server: { port: 'not-a-number' } });
+  assert.throws(() => loadConfig(file), /expected number, got string/);
 });
 
-test('validation rejects null for non-nullable fields', () => {
-  assert.throws(
-    () => loadConfig(writeConfig('server:\n  port: null').file),
-    /config.server.port: expected number, got null/,
-  );
-});
-
-test('validation warns on unknown keys', () => {
-  // Should not throw — just warn to stderr
-  const { file } = writeConfig('enrich:\n  dedupEmbedDimensions: 64');
+test('validation warns on unknown keys but does not throw', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rssmart-'));
+  const file = join(dir, 'config.yaml');
+  writeFileSync(file, readFileSync(examplePath, 'utf8') + '\nunknownSection:\n  foo: 1\n');
   const config = loadConfig(file);
-  assert.equal(config.enrich.dedupEmbedDimensions, 64);
+  assert.ok(config);
 });

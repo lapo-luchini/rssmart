@@ -138,34 +138,38 @@ export async function startOllamaStub() {
 export function testConfig(overrides = {}) {
   return {
     db: ':memory:',
-    feeds: [],
     ollama: {
       url: 'http://127.0.0.1:1',
       chatModel: 'test-chat',
       embedModel: 'test-embed',
+      embedDimensions: null,
+      dedupEmbedDimensions: null,
+      embedPrefixes: { document: '', query: '' },
       timeoutMs: 5000,
+      topicMergeTimeoutMs: 60_000,
     },
     enrich: {
-      workers: 1, // deterministic ordering for tests; parallelism tested explicitly
+      workers: 1,
       maxAttempts: 5,
       dupThreshold: 0.87,
       dupWindowDays: 14,
       fetchMinChars: 500,
-      allowPrivateFetch: true, // test stubs listen on loopback
+      allowPrivateFetch: true,
       maxInputChars: 8000,
       maxArticleChars: 50_000,
-      maxSuggestedTopics: 150, // matches production default (src/config.js)
+      maxSuggestedTopics: 150,
+      linkExpandMaxChars: 0,
     },
     cron: { maxRunMs: 300_000 },
     scheduler: { enabled: true, minIntervalMin: 15, maxIntervalMin: 1440 },
-    // topics-only by default so scoring tests exercise one signal at a time;
-    // hotDecayPerDay: 0 makes "hot" sort collapse to exactly "score" sort so
-    // existing fixed-date fixtures aren't affected by real elapsed time —
-    // tests of the decay itself override this explicitly
     scoring: {
-      knn: 20, weights: { topics: 1, embedding: 0, depth: 0, feed: 0 },
-      recomputeDebounceSec: 120, hotDecayPerDay: 0,
+      knn: 20,
+      voteDecayHalflifeYears: null,
+      weights: { topics: 1, embedding: 0, depth: 0, feed: 0 },
+      recomputeDebounceSec: 120,
+      hotDecayPerDay: 0,
     },
+    mastodon: { url: '', token: '', username: '', password: '' },
     server: { host: '127.0.0.1', port: 0 },
     ...overrides,
   };
