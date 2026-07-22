@@ -144,7 +144,7 @@ export function loadConfig(path) {
     enrich: { ...DEFAULTS.enrich, ...user.enrich },
     cron: { ...DEFAULTS.cron, ...user.cron },
     scheduler: { ...DEFAULTS.scheduler, ...user.scheduler },
-    mastodon: { ...DEFAULTS.mastodon, ...user.mastodon, token: user.mastodon?.token ?? DEFAULTS.mastodon.token },
+    mastodon: { ...DEFAULTS.mastodon, ...user.mastodon },
     scoring: {
       ...DEFAULTS.scoring,
       ...user.scoring,
