@@ -481,6 +481,8 @@ export async function enrichPending(
   { onItem, onArticleStart, deadline, waitForMore, pollMs = 1000, cancelled } = {},
 ) {
   const { maxAttempts, dupWindowDays } = config.enrich;
+  // Merge dedupEmbedDimensions from ollama config into enrich config for enrichOne
+  const enrichCfg = { ...config.enrich, dedupEmbedDimensions: config.ollama.dedupEmbedDimensions ?? config.ollama.embedDimensions };
 
   if (!(await llm.available())) {
     return { skipped: true, reason: `ollama not reachable at ${llm.url}` };
@@ -552,7 +554,7 @@ export async function enrichPending(
     onArticleStart?.();
     try {
       const { topics, summary, depth, duplicateOf } =
-        await enrichOne(db, llm, article, recent, config.enrich);
+        await enrichOne(db, llm, article, recent, enrichCfg);
       result.enriched++;
       if (duplicateOf) result.duplicates++;
       onItem?.({ id: article.id, title: article.title, topics, summary, depth, duplicateOf, ...position() });
