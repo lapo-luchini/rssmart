@@ -4,7 +4,6 @@ import YAML from 'yaml';
 
 const DEFAULTS = {
   db: './data/rssmart.db',
-  feeds: [],
   ollama: {
     url: 'http://localhost:11434',
     chatModel: 'gemma4:12b-it-qat',
@@ -153,13 +152,6 @@ export function loadConfig(path) {
     },
     server: { ...DEFAULTS.server, ...user.server },
   };
-
-  config.feeds = (config.feeds ?? []).map((f) =>
-    typeof f === 'string' ? { url: f } : f,
-  );
-  for (const feed of config.feeds) {
-    if (!feed.url) throw new Error('every feed needs a "url"');
-  }
 
   config.db = resolve(dirname(resolve(file)), config.db);
   return config;

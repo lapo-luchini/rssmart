@@ -3,7 +3,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
-import { syncFeeds, syncMastodonFeed, ingestAll } from '../src/ingest.js';
+import { syncMastodonFeed, ingestAll } from '../src/ingest.js';
 import { Ollama } from '../src/llm.js';
 import { enrichPending, syncEmbeddingSpace, reembedMissing } from '../src/enrich.js';
 import { recomputeOneScore, recomputeIfDue } from '../src/scoring.js';
@@ -82,7 +82,6 @@ if (mode === 'cron') {
   const info = (...args) => verbose && log(...args);
 
   log(`rssmart commit ${COMMIT_HASH}`);
-  syncFeeds(db, config.feeds);
   syncMastodonFeed(db, config);
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {

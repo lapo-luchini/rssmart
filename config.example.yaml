@@ -110,5 +110,4 @@ server:
   port: 8098
 
 # Feeds are managed from the web UI (Feeds tab: add, enable/disable, OPML
-# import/export). An optional "feeds:" list of URLs here is seeded into the
-# database on each cron run, but is not required.
+# import/export). No config seed list — use OPML import for bulk setup.
