@@ -36,3 +36,24 @@ test('helpful errors for missing file, bad syntax, bad shape', () => {
   assert.throws(() => loadConfig(writeConfig('feeds: [').file), /not valid YAML/);
   assert.throws(() => loadConfig(writeConfig('just a string').file), /YAML mapping/);
 });
+
+test('validation rejects wrong types', () => {
+  assert.throws(
+    () => loadConfig(writeConfig('server:\n  port: "not-a-number"').file),
+    /config.server.port: expected number, got string/,
+  );
+});
+
+test('validation rejects null for non-nullable fields', () => {
+  assert.throws(
+    () => loadConfig(writeConfig('server:\n  port: null').file),
+    /config.server.port: expected number, got null/,
+  );
+});
+
+test('validation warns on unknown keys', () => {
+  // Should not throw — just warn to stderr
+  const { file } = writeConfig('enrich:\n  dedupEmbedDimensions: 64');
+  const config = loadConfig(file);
+  assert.equal(config.enrich.dedupEmbedDimensions, 64);
+});

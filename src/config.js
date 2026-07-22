@@ -9,20 +9,9 @@ const DEFAULTS = {
     chatModel: 'gemma4:12b-it-qat',
     embedModel: 'nomic-embed-text',
     embedPrefixes: { document: '', query: '' },
-    // Matryoshka-style dimension truncation (halves embedding storage on
-    // top of the float16 format): opt-in, since not every embedding model
-    // supports it. null/omitted asks for the model's native dimension.
     embedDimensions: null,
-    // Dedup embeddings (summary-based) use fewer dims — cosine duplicates
-    // are detectable at much lower resolution than taste/kNN needs.
-    // null/omitted falls back to embedDimensions.
     dedupEmbedDimensions: 64,
     timeoutMs: 60_000,
-    // Finding redundant topics (src/topicMerge.js) reasons over the whole
-    // topic vocabulary at once, not one short article — a fundamentally
-    // slower request than per-article classification, and a rare,
-    // reader-initiated one, so it gets a much longer budget than
-    // timeoutMs rather than sharing it and risking a spurious abort.
     topicMergeTimeoutMs: 300_000,
   },
   enrich: {
@@ -33,23 +22,8 @@ const DEFAULTS = {
     fetchMinChars: 500,
     allowPrivateFetch: false,
     maxInputChars: 32_000,
-    // Hard cap on fetched origin-page text/html, regardless of how well it
-    // extracted — a safety net against pages that aren't really one article
-    // (e.g. an anchor into a shared listing/archive page), not just a
-    // quality heuristic. See fetchArticleText in src/fetchpage.js.
     maxArticleChars: 50_000,
-    // The topic vocabulary only grows (nothing merges/retires topics on its
-    // own — see docs/scripts for topic-merge tooling), and the full list
-    // rides in every classification prompt. Capping what's *suggested* to
-    // the classifier bounds that cost regardless of how large the
-    // vocabulary gets; it doesn't touch already-tagged articles or stop a
-    // topic outside the cap from being reused if the model names it anyway
-    // (see existingTopicNames, src/enrich.js). 0 or null shows the full list.
     maxSuggestedTopics: 150,
-    // When an article's stripped text is shorter than this and the content
-    // contains an external link, rssmart fetches that link, extracts the
-    // readable text, and appends it below a `---` separator. Set to 0 to
-    // disable. Useful for links shared on the Fediverse or terse RSS items.
     linkExpandMaxChars: 400,
   },
   cron: {
@@ -62,10 +36,6 @@ const DEFAULTS = {
   },
   scoring: {
     knn: 30,
-    // Vote recency decay: older votes contribute less to all vote-derived
-    // signals (topic preference, embedding kNN, feed/author record). The
-    // halflife is in years; a vote aged one halflife counts half as much.
-    // 0 or null disables decay (all votes equal regardless of age).
     voteDecayHalflifeYears: 1.5,
     weights: {
       topics: 0.3,
@@ -73,19 +43,7 @@ const DEFAULTS = {
       depth: 0.1,
       feed: 0.2,
     },
-    // A vote updates its own article's score instantly (cheap: just that
-    // article's topic/feed prefs plus a scan of the — usually small —
-    // voted set). The full corpus-wide ripple (every other article's kNN
-    // term can shift too) is expensive at scale, so it's debounced: each
-    // vote pushes the due time back by this many seconds, and it only
-    // actually runs once voting has paused for that long.
     recomputeDebounceSec: 120,
-    // "hot" sort blends interest with freshness (à la Hacker News) so an
-    // old article can't bury a fresh one just by having a slightly higher
-    // score: rank = score - hotDecayPerDay * age_in_days. At the default,
-    // a day of age costs 0.05 — enough to cancel a solidly good score
-    // (~0.3) within a week, so freshness dominates unless something is
-    // genuinely exceptional.
     hotDecayPerDay: 0.05,
   },
   mastodon: {
@@ -95,15 +53,112 @@ const DEFAULTS = {
     password: '',
   },
   server: {
-    // Loopback-only by default: this is a personal-use reader with no
-    // authentication of its own (see the README's Notes section), so it
-    // shouldn't be reachable from outside this machine unless you
-    // deliberately choose that. Set to '0.0.0.0' (or a LAN address) only
-    // on a network you trust, ideally behind your own reverse proxy/auth.
     host: '127.0.0.1',
     port: 8098,
   },
 };
+
+/**
+ * Schema for validation: maps each config key to its expected type and,
+ * for objects, the expected sub-keys. Used both to detect unknown keys
+ * (typos in the wrong section) and to validate types.
+ */
+const SCHEMA = {
+  db: 'string',
+  ollama: {
+    url: 'string',
+    chatModel: 'string',
+    embedModel: 'string',
+    embedPrefixes: { document: 'string', query: 'string' },
+    embedDimensions: 'number?',
+    dedupEmbedDimensions: 'number?',
+    timeoutMs: 'number',
+    topicMergeTimeoutMs: 'number',
+  },
+  enrich: {
+    workers: 'number',
+    maxAttempts: 'number',
+    dupThreshold: 'number',
+    dupWindowDays: 'number',
+    fetchMinChars: 'number',
+    allowPrivateFetch: 'boolean',
+    maxInputChars: 'number',
+    maxArticleChars: 'number',
+    maxSuggestedTopics: 'number?',
+    linkExpandMaxChars: 'number',
+  },
+  cron: { maxRunMs: 'number' },
+  scheduler: {
+    enabled: 'boolean',
+    minIntervalMin: 'number',
+    maxIntervalMin: 'number',
+  },
+  scoring: {
+    knn: 'number',
+    voteDecayHalflifeYears: 'number?',
+    weights: { topics: 'number', embedding: 'number', depth: 'number', feed: 'number' },
+    recomputeDebounceSec: 'number',
+    hotDecayPerDay: 'number',
+  },
+  mastodon: {
+    url: 'string',
+    token: 'string',
+    username: 'string',
+    password: 'string',
+  },
+  server: {
+    host: 'string',
+    port: 'number',
+  },
+};
+
+/**
+ * Validate config against SCHEMA. Warns on unknown keys (likely typos),
+ * throws on wrong types for required fields. The '?' suffix marks a field
+ * as nullable (null is acceptable).
+ */
+function validateConfig(config, schema = SCHEMA, path = 'config') {
+  const errors = [];
+  const warnings = [];
+
+  for (const [key, spec] of Object.entries(schema)) {
+    const full = `${path}.${key}`;
+    const val = config[key];
+
+    if (val === undefined) continue; // optional, covered by defaults
+    if (spec === null) continue; // accept anything
+
+    if (typeof spec === 'object') {
+      // Nested object: recurse, and check for unknown keys
+      if (val === null || typeof val !== 'object' || Array.isArray(val)) {
+        errors.push(`${full}: expected an object, got ${Array.isArray(val) ? 'array' : typeof val}`);
+        continue;
+      }
+      const [errs, warns] = validateConfig(val, spec, full);
+      errors.push(...errs);
+      warnings.push(...warns);
+      for (const uk of Object.keys(val)) {
+        if (!(uk in spec)) warnings.push(`${full}.${uk}: unknown key (typo? not in schema)`);
+      }
+    } else {
+      // Leaf: check type
+      const nullable = spec.endsWith('?');
+      const expected = nullable ? spec.slice(0, -1) : spec;
+      if (val === null) {
+        if (!nullable) errors.push(`${full}: expected ${expected}, got null`);
+      } else if (typeof val !== expected) {
+        // Booleans are not numbers in this check
+        if (expected === 'number' && typeof val === 'boolean') {
+          errors.push(`${full}: expected ${expected}, got boolean`);
+        } else if (expected !== 'number' || typeof val !== 'number') {
+          errors.push(`${full}: expected ${expected}, got ${typeof val}`);
+        }
+      }
+    }
+  }
+
+  return [errors, warnings];
+}
 
 /**
  * Load configuration. Precedence: explicit path arg (--config) >
@@ -154,5 +209,13 @@ export function loadConfig(path) {
   };
 
   config.db = resolve(dirname(resolve(file)), config.db);
+
+  // Validate against schema: unknown keys warn, wrong types throw.
+  const [errors, warnings] = validateConfig(config);
+  for (const w of warnings) console.warn(`config: ${w}`);
+  if (errors.length) {
+    throw new Error(`config validation failed:\n  ${errors.join('\n  ')}`);
+  }
+
   return config;
 }
