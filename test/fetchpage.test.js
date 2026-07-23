@@ -32,6 +32,17 @@ const FOOTER_PAGE = `<!doctype html>
   <article><p>Copyright notices and legal information for this site. All rights reserved by their creators. Trademarks belong to their registered owners worldwide.</p></article>
 </body></html>`;
 
+const PAGE2 = `<!doctype html>
+<html><head><title>Second Story</title></head>
+<body>
+  <article>
+    <h1>Second Story</h1>
+    <p>QUUXCORP unveiled a second, unrelated story today. ${PARAGRAPH}</p>
+    <p>${PARAGRAPH}</p>
+    <p>${PARAGRAPH}</p>
+  </article>
+</body></html>`;
+
 const ACCENTED_PARAGRAPH =
   'Città e perché: la società è già pronta, però il caffè non arriva mai in ' +
   'tempo per la colazione, così tutti si chiedono cosa succederà domani. ';
@@ -63,6 +74,10 @@ function startPageServer() {
         // charset declared only via a <meta charset> tag, generic header
         res.writeHead(200, { 'content-type': 'text/html' })
           .end(Buffer.from(latin1Page({ metaCharset: 'iso-8859-1' }), 'latin1'));
+      } else if (req.url === '/article2') {
+        res.writeHead(200, { 'content-type': 'text/html' }).end(PAGE2);
+      } else if (req.url === '/redirect-to-article') {
+        res.writeHead(302, { location: '/article' }).end();
       } else {
         res.writeHead(404).end('gone');
       }
@@ -260,6 +275,41 @@ test('getReaderContent: a failed fetch (404) falls back to the feed content grac
     const article = seedArticle(db, { url: `${site.url}/missing`, content: 'Feed content survives.' });
     const result = await getReaderContent(db, article, testConfig());
     assert.deepEqual(result, { html: 'Feed content survives.', source: 'feed' });
+  } finally {
+    await site.close();
+  }
+});
+
+test('guardedFetch follows a redirect and drains the intermediate response body', async () => {
+  const site = await startPageServer();
+  try {
+    const page = await fetchArticleText(`${site.url}/redirect-to-article`, { allowPrivate: true });
+    assert.ok(page.text.includes('ZETAFRAME is a revolutionary new framework'), 'redirect target content extracted');
+  } finally {
+    await site.close();
+  }
+});
+
+test('fetchArticleText: concurrent calls share one happy-dom window but never cross-contaminate', async () => {
+  const site = await startPageServer();
+  try {
+    const calls = [
+      fetchArticleText(`${site.url}/article`, { allowPrivate: true }),
+      fetchArticleText(`${site.url}/article2`, { allowPrivate: true }),
+      fetchArticleText(`${site.url}/article`, { allowPrivate: true }),
+      fetchArticleText(`${site.url}/article2`, { allowPrivate: true }),
+      fetchArticleText(`${site.url}/footer-only`, { allowPrivate: true }),
+    ];
+    const [a1, b1, a2, b2, f1] = await Promise.all(calls);
+    for (const page of [a1, a2]) {
+      assert.equal(page.title, 'Big Announcement');
+      assert.ok(page.text.includes('ZETAFRAME is a revolutionary new framework'));
+    }
+    for (const page of [b1, b2]) {
+      assert.equal(page.title, 'Second Story');
+      assert.ok(page.text.includes('QUUXCORP unveiled a second, unrelated story'));
+    }
+    assert.equal(f1.title, 'Prepatch');
   } finally {
     await site.close();
   }
