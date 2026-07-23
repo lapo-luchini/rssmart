@@ -106,7 +106,7 @@ function normalizeTopics(topics) {
 function findDuplicate(vec, articleId, recent, threshold) {
   let duplicateOf = null;
   let best = threshold;
-  for (const other of recent) {
+  for (const other of recent.values()) {
     if (other.id === articleId) continue;
     const sim = cosine(vec, other.vec);
     if (sim >= best) {
@@ -115,6 +115,46 @@ function findDuplicate(vec, articleId, recent, threshold) {
     }
   }
   return duplicateOf;
+}
+
+/**
+ * Cache of recent (within dupWindowDays), already-embedded articles used for
+ * near-duplicate detection — keyed by db instance (not a single global) so
+ * unrelated test databases never share state, and a real long-running
+ * `serve` process gets the actual benefit. This used to be rebuilt from
+ * scratch — re-reading every blob in the window and re-decoding it into a
+ * fresh Float16Array — on every single enrich batch (as often as every
+ * enrichEveryMs), even though only a handful of articles get classified per
+ * batch. With a fast-growing feed set the window can hold thousands of
+ * vectors, making that reload the dominant source of Float16Array churn in
+ * the process. Now loaded once per db, then kept in sync incrementally:
+ * each call only fetches rows newer than the last sync and prunes entries
+ * that have aged out of the window.
+ */
+const _recentCaches = new WeakMap(); // db -> { cache: Map<id, {id, vec, createdAt}>, syncedAt }
+
+export function clearRecentCache(db) {
+  _recentCaches.delete(db);
+}
+
+function syncRecentCache(db, dupWindowDays) {
+  const cutoff = new Date(Date.now() - dupWindowDays * 24 * 60 * 60 * 1000).toISOString();
+  let state = _recentCaches.get(db);
+  if (!state) {
+    state = { cache: new Map(), syncedAt: null };
+    _recentCaches.set(db, state);
+  }
+  const rows = state.syncedAt
+    ? db.prepare('SELECT id, embedding, created_at FROM articles WHERE embedding IS NOT NULL AND created_at > ?').all(state.syncedAt)
+    : db.prepare('SELECT id, embedding, created_at FROM articles WHERE embedding IS NOT NULL AND created_at >= ?').all(cutoff);
+  for (const r of rows) {
+    state.cache.set(r.id, { id: r.id, vec: bufToVec(r.embedding), createdAt: r.created_at });
+    if (!state.syncedAt || r.created_at > state.syncedAt) state.syncedAt = r.created_at;
+  }
+  for (const [id, entry] of state.cache) {
+    if (entry.createdAt < cutoff) state.cache.delete(id);
+  }
+  return state.cache;
 }
 
 /**
@@ -250,6 +290,9 @@ export function syncEmbeddingSpace(db, config) {
   const dedupDims = config.ollama.dedupEmbedDimensions ?? config.ollama.embedDimensions;
   const dedupChanged = checkEmbeddingSpace(db, config, 'embedding', 'embed_model_dedup', dedupDims);
   const textChanged = checkEmbeddingSpace(db, config, 'text_embedding', 'embed_model_text', config.ollama.embedDimensions);
+  // The recent-articles dedup cache holds vectors from the 'embedding'
+  // column — stale the moment that column's space changes.
+  if (dedupChanged) clearRecentCache(db);
   if (!dedupChanged && !textChanged) return { changed: false };
   return { changed: true, cleared: (dedupChanged ? 1 : 0) + (textChanged ? 1 : 0), dedupChanged, textChanged };
 }
@@ -449,13 +492,9 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     );
   })();
 
-  // Keep recent within the rolling window — prune entries whose
-  // creation date has fallen outside dupWindowDays since enrichment.
-  const cutoff = new Date(Date.now() - enrichCfg.dupWindowDays * 24 * 60 * 60 * 1000).toISOString();
-  for (let i = recent.length - 1; i >= 0; i--) {
-    if (recent[i].createdAt < cutoff) recent.splice(i, 1);
-  }
-  recent.push({ id: article.id, vec, createdAt: article.created_at });
+  // Window pruning happens once per batch in syncRecentCache, not per
+  // article here — dupWindowDays is measured in days, a batch in seconds.
+  recent.set(article.id, { id: article.id, vec, createdAt: article.created_at });
   return { topics, summary, depth, duplicateOf, vec };
 }
 
@@ -502,13 +541,10 @@ export async function enrichPending(
     LIMIT 1
   `);
 
-  // Embeddings of recent, already-enriched articles for duplicate detection.
-  const recent = db.prepare(`
-    SELECT id, embedding, created_at FROM articles
-    WHERE embedding IS NOT NULL
-      AND created_at >= datetime('now', ?)
-  `).all(`-${dupWindowDays} days`)
-    .map((r) => ({ id: r.id, vec: bufToVec(r.embedding), createdAt: r.created_at }));
+  // Embeddings of recent, already-enriched articles for duplicate detection —
+  // cached across calls instead of rebuilt from scratch every batch (see
+  // syncRecentCache above findDuplicate).
+  const recent = syncRecentCache(db, dupWindowDays);
 
   // Queue position for progress display: n = attempted this run, m = n plus
   // what's still pending (m can grow while ingestion adds articles).
