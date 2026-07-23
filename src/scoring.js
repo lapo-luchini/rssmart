@@ -239,29 +239,40 @@ function makeVotedBatcher(voted, reuse) {
   return createDotBatcher(voted.map((v) => v.vec), voted[0].vec.length, reuse);
 }
 
-// Cache for recomputeOneScore: reuses the voted set and WASM batcher
-// across consecutive calls. Invalidated when a vote changes the set.
-// The old batcher's WASM allocations are recycled to avoid fragmenting
-// WASM linear memory over long-running serve sessions.
-let _singleScoreBatcher = null;
-let _singleScoreVoted = null;
-let _singleScoreHalflife = null;
+// Cache for recomputeOneScore: reuses the voted set and WASM batcher across
+// consecutive calls, keyed by db instance (not a single global) so unrelated
+// test databases never share state. Marked stale via `dirty` (not freed
+// outright) when a vote changes the set — the previous design (a hard
+// clearSingleScoreBatcher() called right before every rebuild) froze then
+// nulled the batcher first, so every single vote paid for a fresh WASM
+// alloc_f32 instead of recycling the still-live buffer. Keeping it alive
+// until the next rebuild lets createDotBatcher's `reuse` path recycle it as
+// intended, avoiding fragmenting WASM linear memory over long-running serve
+// sessions.
+const _singleScoreCaches = new WeakMap(); // db -> { batcher, voted, halflife, dirty }
 
 function getSingleScoreBatcher(db, halflifeYears) {
-  if (!_singleScoreBatcher || _singleScoreHalflife !== halflifeYears) {
-    const old = _singleScoreBatcher;
-    _singleScoreVoted = votedArticles(db, halflifeYears);
-    _singleScoreBatcher = makeVotedBatcher(_singleScoreVoted, old);
-    _singleScoreHalflife = halflifeYears;
+  let state = _singleScoreCaches.get(db);
+  if (!state) {
+    state = { batcher: null, voted: null, halflife: null, dirty: false };
+    _singleScoreCaches.set(db, state);
   }
-  return { voted: _singleScoreVoted, batcher: _singleScoreBatcher };
+  if (!state.batcher || state.halflife !== halflifeYears || state.dirty) {
+    const old = state.batcher;
+    state.voted = votedArticles(db, halflifeYears);
+    state.batcher = makeVotedBatcher(state.voted, old);
+    state.halflife = halflifeYears;
+    state.dirty = false;
+  }
+  return { voted: state.voted, batcher: state.batcher };
 }
 
-export function clearSingleScoreBatcher() {
-  _singleScoreBatcher?.free();
-  _singleScoreBatcher = null;
-  _singleScoreVoted = null;
-  _singleScoreHalflife = null;
+/** Mark the cached voted set stale after a vote — rebuilt lazily on the next
+ *  recomputeOneScore call, reusing the still-live WASM buffer instead of
+ *  freeing it up front. */
+export function invalidateSingleScoreBatcher(db) {
+  const state = _singleScoreCaches.get(db);
+  if (state) state.dirty = true;
 }
 
 function scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, scratches, batcher, topicMap, halflife) {

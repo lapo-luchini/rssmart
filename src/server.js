@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { recomputeOneScore, scheduleRecompute, topicPrefs, clearSingleScoreBatcher } from './scoring.js';
+import { recomputeOneScore, scheduleRecompute, topicPrefs, invalidateSingleScoreBatcher } from './scoring.js';
 import { getReaderContent } from './enrich.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
@@ -274,7 +274,7 @@ export function createApp(db, config, commitHash) {
     // Instant, cheap: this article's own score only. The full-corpus
     // ripple (this vote can shift any other article's kNN term) is
     // debounced — see DESIGN.md — rather than blocking this response.
-    clearSingleScoreBatcher(); // voted set changed
+    invalidateSingleScoreBatcher(db); // voted set changed — rebuilt lazily, reusing the WASM buffer
     recomputeOneScore(db, config, id);
     scheduleRecompute(db, config.scoring.recomputeDebounceSec);
     const row = db.prepare(`
