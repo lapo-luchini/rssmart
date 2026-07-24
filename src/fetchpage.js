@@ -19,6 +19,21 @@ async function discardBody(res) {
   }
 }
 
+/** Race a promise against a timeout — rejects if `promise` hasn't settled
+ *  within `ms`. Doesn't cancel `promise` itself (most of what this wraps,
+ *  like a DNS lookup, has no cancellation hook); it just stops this caller
+ *  from waiting on it forever. */
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    timer.unref?.();
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 // A single, reused happy-dom Window instead of one per fetch. Window/VM-
 // context creation is real per-call overhead, and reuse also removes a
 // concurrency-amplified teardown race confirmed via an isolated WeakRef
@@ -50,13 +65,46 @@ function getSharedWindow() {
   return _sharedWindow;
 }
 
-function withSharedWindow(fn) {
-  const result = _sharedWindowQueue.then(() => fn(getSharedWindow()));
-  _sharedWindowQueue = result.then(
+// Bounded to timeoutMs — a hang anywhere in `fn` (DOM parsing, a stuck
+// resource wait, Readability itself) must never wedge every future caller
+// behind it forever, since enrichment workers and the reader endpoint all
+// share this one queue. On timeout we stop trusting the shared window (it
+// may still be running in the background; we can't cancel it) and let the
+// next call build a fresh one, rather than risk two operations racing on
+// the same live document.
+function withSharedWindow(fn, timeoutMs) {
+  const started = _sharedWindowQueue.then(() => fn(getSharedWindow()));
+
+  let settled = false;
+  const guarded = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      _sharedWindow = null;
+      reject(new Error(`happy-dom operation timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timer.unref?.();
+    started.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+
+  _sharedWindowQueue = guarded.then(
     () => undefined,
     () => undefined,
   );
-  return result;
+  return guarded;
 }
 
 /** Loopback, link-local, private (RFC 1918/4193), CGNAT, unspecified. */
@@ -91,7 +139,7 @@ export function isPrivateAddress(addr) {
  * the connect — acceptable for a personal reader; a paranoid deployment
  * should firewall the process instead.)
  */
-async function isAllowedUrl(url, allowPrivate) {
+async function isAllowedUrl(url, allowPrivate, timeoutMs) {
   let u;
   try {
     u = new URL(url);
@@ -104,7 +152,10 @@ async function isAllowedUrl(url, allowPrivate) {
   const host = u.hostname.replace(/^\[|\]$/g, '');
   if (isIP(host)) return !isPrivateAddress(host);
   try {
-    const addrs = await lookup(host, { all: true });
+    // node:dns/promises has no built-in way to bound this — unlike the fetch
+    // itself (AbortSignal.timeout below), a stalled resolver would otherwise
+    // hang this check forever with no timeout at all.
+    const addrs = await withTimeout(lookup(host, { all: true }), timeoutMs);
     return addrs.length > 0 && addrs.every((a) => !isPrivateAddress(a.address));
   } catch {
     return false;
@@ -115,7 +166,7 @@ async function isAllowedUrl(url, allowPrivate) {
 async function guardedFetch(url, { timeoutMs, allowPrivate }) {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    if (!(await isAllowedUrl(current, allowPrivate))) return null;
+    if (!(await isAllowedUrl(current, allowPrivate, timeoutMs))) return null;
     let res;
     try {
       res = await fetch(current, {
@@ -191,7 +242,7 @@ export async function fetchArticleText(
         html: maxChars && html.length > maxChars ? html.slice(0, maxChars) : html,
         text: maxChars && text.length > maxChars ? text.slice(0, maxChars) : text,
       };
-    });
+    }, timeoutMs);
   } catch {
     return null;
   }
