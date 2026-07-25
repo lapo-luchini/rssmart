@@ -38,6 +38,29 @@ function dbSizeBytes(dbPath) {
   return total;
 }
 
+/** Per-table data/index sizes via SQLite's dbstat virtual table — a
+ *  compile-time SQLite option. better-sqlite3 always has it; bun:sqlite
+ *  (confirmed on both the official release and a NixOS-packaged build)
+ *  does not — probed live rather than assumed, same as scripts/dbstats.js's
+ *  own probe for its report. dbstat enumerates b-trees (one per table, one
+ *  per index) by name; joining sqlite_master maps each index back to the
+ *  table it belongs to, so index pages can be summed per owning table
+ *  instead of listed as their own unrelated series. */
+function dbTableBytes(db) {
+  try {
+    const rows = db.prepare(`
+      SELECT m.tbl_name AS table_name, m.type AS kind, SUM(d.pgsize) AS bytes
+      FROM dbstat d
+      JOIN sqlite_master m ON m.name = d.name
+      WHERE m.type IN ('table', 'index')
+      GROUP BY m.tbl_name, m.type
+    `).all();
+    return { available: true, rows };
+  } catch {
+    return { available: false, rows: [] };
+  }
+}
+
 /**
  * Render current app + process state as Prometheus text exposition format
  * for a scrape-based dashboard (article/vote/feed counts, db size, process
@@ -113,8 +136,28 @@ export function renderMetrics(db, config, commitHash) {
     [{}, dbSizeBytes(config.db)],
   ]);
 
-  metric(lines, 'rssmart_build_info', 'gauge', 'Always 1; the commit label identifies the running build.', [
-    [{ commit: commitHash || 'unknown' }, 1],
+  const dbTables = dbTableBytes(db);
+  metric(lines, 'rssmart_db_dbstat_available', 'gauge',
+    'Whether this SQLite build supports the dbstat virtual table backing rssmart_db_table_bytes (1) or not (0).', [
+      [{}, dbTables.available ? 1 : 0],
+    ]);
+  if (dbTables.available) {
+    metric(lines, 'rssmart_db_table_bytes', 'gauge',
+      "On-disk bytes per table, split into its own data pages (kind=\"data\") and all its indexes' pages combined (kind=\"index\").",
+      dbTables.rows.map((r) => [{ table: r.table_name, kind: r.kind === 'table' ? 'data' : 'index' }, r.bytes]));
+  }
+
+  const runtime = typeof Bun !== 'undefined'
+    ? { type: 'bun', version: Bun.version }
+    : { type: 'node', version: process.version.replace(/^v/, '') };
+  const { v: sqliteVersion } = db.prepare('SELECT sqlite_version() AS v').get();
+  metric(lines, 'rssmart_build_info', 'gauge', 'Always 1; labels identify the running build and runtime.', [
+    [{
+      commit: commitHash || 'unknown',
+      runtime: runtime.type,
+      runtime_version: runtime.version,
+      sqlite_version: sqliteVersion,
+    }, 1],
   ]);
 
   // Standard prom-client-style names (unprefixed) for the process/runtime
