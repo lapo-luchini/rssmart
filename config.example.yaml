@@ -28,6 +28,9 @@ ollama:
                                # slower than classifying one article — a
                                # rare, reader-initiated call, so it gets
                                # its own, more generous timeout
+  apiKey: ''  # API key for an Ollama instance that requires one (e.g. sitting
+              # behind a reverse proxy) — empty to disable (default), for a
+              # typical unauthenticated local/LAN instance
 
 enrich:
   workers: 2          # concurrent articles in the LLM pipeline; raising this

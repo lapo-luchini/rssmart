@@ -19,6 +19,7 @@ const SCHEMA = {
     embedPrefixes: { document: 'string', query: 'string' },
     timeoutMs: 'number',
     topicMergeTimeoutMs: 'number',
+    apiKey: 'string',
   },
   enrich: {
     workers: 'number',

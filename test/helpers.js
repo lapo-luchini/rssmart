@@ -147,6 +147,7 @@ export function testConfig(overrides = {}) {
       embedPrefixes: { document: '', query: '' },
       timeoutMs: 5000,
       topicMergeTimeoutMs: 60_000,
+      apiKey: '',
     },
     enrich: {
       workers: 1,

@@ -19,7 +19,7 @@ export function parseJsonReply(content) {
 
 /** Thin client for a (possibly remote) Ollama instance. */
 export class Ollama {
-  constructor({ url, chatModel, embedModel, embedPrefixes, embedDimensions, timeoutMs = 60_000 }) {
+  constructor({ url, chatModel, embedModel, embedPrefixes, embedDimensions, timeoutMs = 60_000, apiKey }) {
     this.url = url.replace(/\/+$/, '');
     this.chatModel = chatModel;
     this.embedModel = embedModel;
@@ -32,15 +32,25 @@ export class Ollama {
     // embedding model supports it.
     this.embedDimensions = embedDimensions || null;
     this.timeoutMs = timeoutMs;
+    // Bearer token for an Ollama instance sitting behind auth (e.g. a
+    // reverse proxy in front of it) — empty/omitted for a typical
+    // unauthenticated local/LAN instance, which is still the common case.
+    this.apiKey = apiKey || null;
     // Thinking models waste time and leak "thought" keys into the JSON;
     // ask Ollama to disable it. Cleared if the server rejects the param.
     this.disableThink = true;
+  }
+
+  /** Merge in an Authorization header when apiKey is configured. */
+  #headers(extra = {}) {
+    return this.apiKey ? { ...extra, authorization: `Bearer ${this.apiKey}` } : extra;
   }
 
   /** Quick reachability probe so a cron run can skip enrichment cleanly. */
   async available() {
     try {
       const res = await fetch(`${this.url}/api/tags`, {
+        headers: this.#headers(),
         signal: AbortSignal.timeout(5000),
       });
       return res.ok;
@@ -55,7 +65,7 @@ export class Ollama {
     try {
       const res = await fetch(`${this.url}${path}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: this.#headers({ 'content-type': 'application/json' }),
         body: JSON.stringify(body),
         signal: controller.signal,
       });
