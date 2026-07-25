@@ -75,6 +75,28 @@ function pushMatchFilters(where, params, { topic, feedId, q, skipTextFilter }) {
 // Newest first is the universal tiebreaker/secondary key for every sort.
 const BY_DATE = 'COALESCE(a.published_at, a.created_at) DESC';
 
+// Triage-only round-robin: interleave feeds by recency-within-feed instead
+// of draining one feed's whole backlog before moving to the next — an
+// adaptive per-feed check cadence means one feed can dump many articles at
+// once, otherwise producing long same-source runs in a plain date sort.
+// Bounded to feeds that have posted within the window: a feed that's gone
+// quiet for weeks doesn't need (and doesn't deserve) a guaranteed early
+// slot just because its one leftover article is technically "rank 1" for
+// itself — it sorts in on date like everything else, after every active
+// feed's ranked content, via the large ELSE sentinel below.
+const TRIAGE_ROUND_ROBIN_WINDOW_DAYS = 14;
+const DATE_ROUND_ROBIN = `
+  CASE
+    WHEN (
+      SELECT MAX(COALESCE(a2.published_at, a2.created_at))
+      FROM articles a2 WHERE a2.feed_id = a.feed_id
+    ) >= datetime('now', '-${TRIAGE_ROUND_ROBIN_WINDOW_DAYS} days')
+    THEN ROW_NUMBER() OVER (PARTITION BY a.feed_id ORDER BY COALESCE(a.published_at, a.created_at) DESC)
+    ELSE 1000000
+  END,
+  ${BY_DATE}
+`;
+
 /**
  * Translate list-endpoint query params into SQL; returns {error} on bad
  * input. skipTextFilter omits the title/summary LIKE clause — used for
@@ -105,7 +127,7 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
   pushMatchFilters(where, params, { topic, feedId, q, skipTextFilter });
 
   const sortKey = sort ?? (view === 'interesting' ? 'hot' : 'date');
-  if (!['hot', 'score', 'date'].includes(sortKey)) {
+  if (!['hot', 'score', 'date', 'date-rr'].includes(sortKey)) {
     return { error: `unknown sort "${sort}"` };
   }
 
@@ -116,7 +138,8 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
   // it's the only sort with a bound value of its own.
   const orderBy = { hot: 'a.score - ? * (julianday(\'now\') - julianday(COALESCE(a.published_at, a.created_at))) DESC, ' + BY_DATE,
     score: 'a.score DESC, ' + BY_DATE,
-    date: BY_DATE }[sortKey];
+    date: BY_DATE,
+    'date-rr': DATE_ROUND_ROBIN }[sortKey];
   const orderParams = sortKey === 'hot' ? [config.scoring.hotDecayPerDay] : [];
 
   return {

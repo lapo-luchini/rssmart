@@ -154,6 +154,9 @@ const MIGRATIONS = [
   "ALTER TABLE articles ADD COLUMN score_bonus REAL NOT NULL DEFAULT 0;",
   // v15 — distinguish RSS/Atom feeds from Mastodon API sources.
   "ALTER TABLE feeds ADD COLUMN type TEXT NOT NULL DEFAULT 'rss';",
+  // v16 — triage's round-robin sort (server.js's DATE_ROUND_ROBIN) ranks
+  // and looks up articles per feed_id; nothing indexed that column before.
+  "CREATE INDEX idx_articles_feed_id ON articles(feed_id);",
 ];
 
 /**

@@ -299,7 +299,10 @@ createApp({
       // list's filters: unread + classified, oldest-classified-first is
       // exactly wrong here — date order, newest first, is what makes a
       // freshly-classified article turn up promptly (see DESIGN.md).
-      return new URLSearchParams({ view: 'unread', sort: 'date', status: 'enriched', limit: TRIAGE_BATCH, offset });
+      // 'date-rr' round-robins across feeds instead of plain date order —
+      // an adaptive per-feed fetch cadence means one feed can dump many
+      // articles at once, otherwise producing long same-source runs.
+      return new URLSearchParams({ view: 'unread', sort: 'date-rr', status: 'enriched', limit: TRIAGE_BATCH, offset });
     },
 
     // Each vote/skip marks the article read. For the dedicated tab's own

@@ -227,6 +227,50 @@ test('hot sort blends score with freshness, reordering vs plain score sort', asy
   }
 });
 
+test('date-rr sort round-robins across active feeds, leaving stale feeds out of the round-robin', async () => {
+  const day = 24 * 60 * 60 * 1000;
+  const iso = (offsetDays) => new Date(Date.now() - offsetDays * day).toISOString();
+
+  db.prepare("INSERT INTO feeds (id, url, title) VALUES (10, 'http://rr-a', 'Feed Active A')").run();
+  db.prepare("INSERT INTO feeds (id, url, title) VALUES (11, 'http://rr-b', 'Feed Active B')").run();
+  db.prepare("INSERT INTO feeds (id, url, title) VALUES (12, 'http://rr-c', 'Feed Stale C')").run();
+
+  const insArt = db.prepare(`
+    INSERT INTO articles (feed_id, guid, title, content, status, published_at)
+    VALUES (?, ?, ?, ?, 'enriched', ?)
+  `);
+  const insert = (feedId, guid, title, daysAgo) =>
+    Number(insArt.run(feedId, guid, title, compressText('body'), iso(daysAgo)).lastInsertRowid);
+
+  // Feed A is active (posted today) and also has an older backlog article;
+  // being active pulls its WHOLE backlog into round-robin ranking.
+  const a1 = insert(10, 'rr-a1', 'A rank1 (today)', 0);
+  const a2 = insert(10, 'rr-a2', 'A rank2 (20d ago)', 20);
+  // Feed B is active (posted yesterday), one article.
+  const b1 = insert(11, 'rr-b1', 'B rank1 (yesterday)', 1);
+  // Feed C is stale: its only article is 18 days old, so the feed's own
+  // most recent publish is outside the round-robin window. Deliberately
+  // newer (18d) than A's rank2 (20d) — a plain date sort would place C
+  // BEFORE a2; round-robin with staleness suppression must not.
+  const c1 = insert(12, 'rr-c1', 'C stale (18d ago)', 18);
+
+  try {
+    const { body } = await get('/api/articles?view=all&status=enriched&sort=date-rr');
+    const tracked = new Set([a1, a2, b1, c1]);
+    const order = body.articles.filter((a) => tracked.has(a.id)).map((a) => a.id);
+
+    assert.deepEqual(
+      order, [a1, b1, a2, c1],
+      'round 1 (a1, b1 by date) precedes round 2 (a2); stale C sorts last despite being newer than a2',
+    );
+  } finally {
+    // Later tests in this shared-db file assert exact article/feed counts —
+    // clean up so this test's fixtures don't leak into them.
+    db.prepare(`DELETE FROM articles WHERE id IN (?, ?, ?, ?)`).run(a1, a2, b1, c1);
+    db.prepare('DELETE FROM feeds WHERE id IN (10, 11, 12)').run();
+  }
+});
+
 test('article detail includes content; unknown id -> 404', async () => {
   const ok = await get(`/api/articles/${ids.fresh}`);
   assert.equal(ok.body.content, 'body');

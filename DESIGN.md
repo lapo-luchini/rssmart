@@ -498,6 +498,25 @@ day-one spec was retired for exactly that reason; it's in git history).
   currently wrong about. Date order approximates unbiased sampling and
   keeps triage meaningfully different from just a faster way to browse
   the already-hot-sorted Interesting tab.
+- **The dedicated tab's date sort is actually `date-rr`, a per-feed
+  round-robin, not a plain `ORDER BY published_at`.** Reported live: an
+  adaptive per-feed fetch cadence (see above) means one feed can dump
+  several articles at once, and a plain date sort then surfaces a long
+  same-source run in triage — annoying when the whole point of this tab is
+  varied, unbiased sampling (previous bullet). `DATE_ROUND_ROBIN`
+  (`server.js`) ranks each feed's own unread articles by recency
+  (`ROW_NUMBER() OVER (PARTITION BY feed_id ...)`) and sorts primarily by
+  that rank, so round 1 is "the newest unread article from every feed",
+  round 2 the second-newest from every feed, and so on — interleaved
+  instead of drained one feed at a time. Bounded to feeds that have posted
+  within `TRIAGE_ROUND_ROBIN_WINDOW_DAYS` (14): a feed gone quiet for weeks
+  doesn't get a guaranteed early round-robin slot just because its one
+  leftover article is technically "rank 1" for itself — those fall back to
+  a large fixed rank (sorting after every active feed's round-robin'd
+  content) and settle into plain date order among themselves. "Triage
+  this view" (previous bullet) is untouched — it keeps whatever sort the
+  main list already had, since silently overriding an explicitly chosen
+  `hot`/`score` sort there would be surprising.
 - **"Triage this" reuses the triage UI over the main list's own filters,
   as a second scope alongside the dedicated tab's fixed one, not a
   replacement for it.** Requested explicitly: the dedicated ⚡Triage tab's
