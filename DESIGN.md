@@ -503,13 +503,13 @@ day-one spec was retired for exactly that reason; it's in git history).
   adaptive per-feed fetch cadence (see above) means one feed can dump
   several articles at once, and a plain date sort then surfaces a long
   same-source run in triage — annoying when the whole point of this tab is
-  varied, unbiased sampling (previous bullet). `DATE_ROUND_ROBIN`
+  varied, unbiased sampling (previous bullet). `dateRoundRobinSql`
   (`server.js`) ranks each feed's own unread articles by recency
   (`ROW_NUMBER() OVER (PARTITION BY feed_id ...)`) and sorts primarily by
   that rank, so round 1 is "the newest unread article from every feed",
   round 2 the second-newest from every feed, and so on — interleaved
   instead of drained one feed at a time. Bounded to feeds that have posted
-  within `TRIAGE_ROUND_ROBIN_WINDOW_DAYS` (14): a feed gone quiet for weeks
+  within `config.triage.roundRobinWindowDays` (7 by default): a feed gone quiet
   doesn't get a guaranteed early round-robin slot just because its one
   leftover article is technically "rank 1" for itself — those fall back to
   a large fixed rank (sorting after every active feed's round-robin'd

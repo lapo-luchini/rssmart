@@ -95,6 +95,16 @@ scoring:
                         # 0.05 — fresh content bubbles up unless something is
                         # genuinely exceptional. 0 = pure score sort.
 
+# The dedicated Triage tab's sort round-robins across feeds instead of
+# draining one feed's whole backlog before moving to the next (an adaptive
+# per-feed fetch cadence means one feed can dump several articles at once).
+triage:
+  roundRobinWindowDays: 7  # only feeds that posted within this many days get
+                           # round-robin priority; a feed gone quiet longer
+                           # than this doesn't jump the queue just because its
+                           # one leftover article is technically "newest" for
+                           # itself — it settles into plain date order instead
+
 # Mastodon (or Friendica) personal API feed: fetches your home timeline
 # as articles with proper per-post authors. Two auth methods:
 #   - token: Bearer token (Mastodon: Settings > Development > New App)

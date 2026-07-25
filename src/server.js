@@ -79,23 +79,24 @@ const BY_DATE = 'COALESCE(a.published_at, a.created_at) DESC';
 // of draining one feed's whole backlog before moving to the next — an
 // adaptive per-feed check cadence means one feed can dump many articles at
 // once, otherwise producing long same-source runs in a plain date sort.
-// Bounded to feeds that have posted within the window: a feed that's gone
-// quiet for weeks doesn't need (and doesn't deserve) a guaranteed early
-// slot just because its one leftover article is technically "rank 1" for
-// itself — it sorts in on date like everything else, after every active
+// Bounded to feeds that have posted within config.triage.roundRobinWindowDays:
+// a feed that's gone quiet doesn't need (and doesn't deserve) a guaranteed
+// early slot just because its one leftover article is technically "rank 1"
+// for itself — it sorts in on date like everything else, after every active
 // feed's ranked content, via the large ELSE sentinel below.
-const TRIAGE_ROUND_ROBIN_WINDOW_DAYS = 14;
-const DATE_ROUND_ROBIN = `
+function dateRoundRobinSql(windowDays) {
+  return `
   CASE
     WHEN (
       SELECT MAX(COALESCE(a2.published_at, a2.created_at))
       FROM articles a2 WHERE a2.feed_id = a.feed_id
-    ) >= datetime('now', '-${TRIAGE_ROUND_ROBIN_WINDOW_DAYS} days')
+    ) >= datetime('now', '-${windowDays} days')
     THEN ROW_NUMBER() OVER (PARTITION BY a.feed_id ORDER BY COALESCE(a.published_at, a.created_at) DESC)
     ELSE 1000000
   END,
   ${BY_DATE}
 `;
+}
 
 /**
  * Translate list-endpoint query params into SQL; returns {error} on bad
@@ -139,7 +140,7 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
   const orderBy = { hot: 'a.score - ? * (julianday(\'now\') - julianday(COALESCE(a.published_at, a.created_at))) DESC, ' + BY_DATE,
     score: 'a.score DESC, ' + BY_DATE,
     date: BY_DATE,
-    'date-rr': DATE_ROUND_ROBIN }[sortKey];
+    'date-rr': dateRoundRobinSql(config.triage.roundRobinWindowDays) }[sortKey];
   const orderParams = sortKey === 'hot' ? [config.scoring.hotDecayPerDay] : [];
 
   return {

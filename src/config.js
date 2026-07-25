@@ -45,6 +45,9 @@ const SCHEMA = {
     recomputeDebounceSec: 'number',
     hotDecayPerDay: 'number',
   },
+  triage: {
+    roundRobinWindowDays: 'number',
+  },
   mastodon: {
     url: 'string',
     token: 'string',

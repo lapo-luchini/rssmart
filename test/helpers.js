@@ -169,6 +169,7 @@ export function testConfig(overrides = {}) {
       recomputeDebounceSec: 120,
       hotDecayPerDay: 0,
     },
+    triage: { roundRobinWindowDays: 7 },
     mastodon: { url: '', token: '', username: '', password: '' },
     server: { host: '127.0.0.1', port: 0 },
     ...overrides,
