@@ -10,6 +10,7 @@ import { Ollama } from './llm.js';
 import { semanticSearch } from './search.js';
 import { decompressText } from './compress.js';
 import { proposeTopicMerges, applyTopicMerge } from './topicMerge.js';
+import { renderMetrics } from './metrics.js';
 
 // Bun ships its own static-file middleware (hono/bun); Node needs
 // @hono/node-server's, which resolves relative paths from the process cwd
@@ -510,6 +511,15 @@ export function createApp(db, config, commitHash) {
 
   app.get('/api/version', (c) => {
     return c.json({ commit: commitHash || 'unknown' });
+  });
+
+  // Not under /api — Prometheus's default scrape_config expects /metrics
+  // at the root, unauthenticated (matching this app's existing no-auth
+  // posture; see server.host's own doc comment in config.example.yaml).
+  app.get('/metrics', (c) => {
+    return c.body(renderMetrics(db, config, commitHash), 200, {
+      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+    });
   });
 
   app.use('*', serveStatic({ root: PUBLIC_DIR }));
