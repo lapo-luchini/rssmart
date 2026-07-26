@@ -59,6 +59,51 @@ export class Ollama {
     }
   }
 
+  /**
+   * Startup diagnostic: confirms the connection to Ollama works (auth
+   * included) and that both configured models are actually installed
+   * there, via the same /api/tags list available() only checks for a 200.
+   * Returns { ok: true } or { ok: false, reason } rather than throwing —
+   * this is a one-time report for the operator, not a per-request gate;
+   * every real call site already tolerates Ollama being transiently
+   * unreachable (available() is checked before enriching), so a failed
+   * check here should be logged loudly by the caller, not stop the app
+   * from doing everything else it can (ingestion, serving already-
+   * enriched content).
+   */
+  async checkModels() {
+    let data;
+    try {
+      const res = await fetch(`${this.url}/api/tags`, {
+        headers: this.#headers(),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return { ok: false, reason: `${this.url}/api/tags -> ${res.status} ${text.slice(0, 200)}` };
+      }
+      data = await res.json();
+    } catch (err) {
+      return { ok: false, reason: `cannot reach Ollama at ${this.url}: ${err.message}` };
+    }
+
+    // Ollama lists installed models under their tagged name (e.g.
+    // "gemma4:12b-it-qat"); a config entry with no tag implicitly means
+    // ":latest", same as `ollama run` / the API itself would resolve it.
+    const installed = new Set((data.models ?? []).map((m) => m.name ?? m.model).filter(Boolean));
+    const hasModel = (wanted) => installed.has(wanted) || installed.has(`${wanted}:latest`);
+    const missing = [...new Set([this.chatModel, this.embedModel])].filter((name) => !hasModel(name));
+
+    if (missing.length) {
+      return {
+        ok: false,
+        reason: `model(s) not installed on ${this.url}: ${missing.join(', ')} ` +
+          `(installed: ${[...installed].sort().join(', ') || 'none'})`,
+      };
+    }
+    return { ok: true };
+  }
+
   async #post(path, body, timeoutMs = this.timeoutMs) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);

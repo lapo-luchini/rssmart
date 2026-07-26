@@ -74,11 +74,28 @@ if (values.help || !['cron', 'serve'].includes(mode)) {
 
 const config = loadConfig(values.config);
 const db = openDb(config.db);
+// --verbose/--debug apply to both modes (cron's own "silent on success"
+// etiquette, and startScheduler's progress narration in serve mode).
+const verbose = values.verbose || values.debug;
+
+// One-time diagnostic, not a startup gate: confirms the Ollama connection
+// (auth included) works and both configured models are actually installed
+// there. Logged loudly on failure but never fatal — ingestion and serving
+// already-enriched content don't need Ollama at all, and every real call
+// site already tolerates it being transiently unreachable (see
+// llm.js's checkModels doc comment).
+{
+  const check = await new Ollama(config.ollama).checkModels();
+  if (check.ok) {
+    if (verbose) log(`ollama: connected, ${config.ollama.chatModel} + ${config.ollama.embedModel} available`);
+  } else {
+    logError(`ollama startup check failed: ${check.reason}`);
+  }
+}
 
 if (mode === 'cron') {
   // Cron etiquette: silent on success, errors on stderr. --verbose/--debug
   // narrate progress for manual runs.
-  const verbose = values.verbose || values.debug;
   const info = (...args) => verbose && log(...args);
 
   log(`rssmart commit ${COMMIT_HASH}`);

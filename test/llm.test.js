@@ -112,3 +112,77 @@ test('apiKey sends an auth header on every request; omitting it sends none', asy
     await new Promise((r) => server.close(r));
   }
 });
+
+function startTagsStub(models) {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/api/tags') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ models: models.map((name) => ({ name })) }));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({
+      url: `http://127.0.0.1:${server.address().port}`,
+      close: () => new Promise((r) => server.close(r)),
+    }));
+  });
+}
+
+test('checkModels: ok when both configured models are installed', async () => {
+  const stub = await startTagsStub(['gemma4:12b-it-qat', 'qwen3-embedding:0.6b', 'unrelated:latest']);
+  try {
+    const llm = new Ollama({ url: stub.url, chatModel: 'gemma4:12b-it-qat', embedModel: 'qwen3-embedding:0.6b' });
+    assert.deepEqual(await llm.checkModels(), { ok: true });
+  } finally {
+    await stub.close();
+  }
+});
+
+test('checkModels: a bare model name matches its ":latest" tag', async () => {
+  const stub = await startTagsStub(['mymodel:latest']);
+  try {
+    const llm = new Ollama({ url: stub.url, chatModel: 'mymodel', embedModel: 'mymodel' });
+    assert.deepEqual(await llm.checkModels(), { ok: true });
+  } finally {
+    await stub.close();
+  }
+});
+
+test('checkModels: reports every missing model by name', async () => {
+  const stub = await startTagsStub(['qwen3-embedding:0.6b']);
+  try {
+    const llm = new Ollama({ url: stub.url, chatModel: 'gemma4:12b-it-qat', embedModel: 'qwen3-embedding:0.6b' });
+    const result = await llm.checkModels();
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /gemma4:12b-it-qat/);
+    assert.match(result.reason, /qwen3-embedding:0\.6b/, 'installed models are listed too');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('checkModels: an unreachable server fails clearly instead of throwing', async () => {
+  const llm = new Ollama({ url: 'http://127.0.0.1:1', chatModel: 'm', embedModel: 'e' });
+  const result = await llm.checkModels();
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /cannot reach ollama/i);
+});
+
+test('checkModels: a non-2xx response (e.g. bad auth) fails clearly', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' }));
+  });
+  const url = await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`));
+  });
+  try {
+    const llm = new Ollama({ url, chatModel: 'm', embedModel: 'e' });
+    const result = await llm.checkModels();
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /401/);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
