@@ -12,6 +12,7 @@ import { startScheduler } from '../src/scheduler.js';
 import { acquireLease, releaseLease } from '../src/lease.js';
 import { log, logError } from '../src/log.js';
 import { checkRuntime } from '../src/runtime-check.js';
+import { getRuntimeInfo } from '../src/metrics.js';
 
 // Read the git commit hash at startup for version tracking.
 function readCommitHash() {
@@ -78,6 +79,9 @@ const db = openDb(config.db);
 // etiquette, and startScheduler's progress narration in serve mode).
 const verbose = values.verbose || values.debug;
 
+const { runtime, runtimeVersion, sqliteVersion } = getRuntimeInfo(db);
+log(`rssmart commit ${COMMIT_HASH} (${runtime} ${runtimeVersion}, sqlite ${sqliteVersion})`);
+
 // One-time diagnostic, not a startup gate: confirms the Ollama connection
 // (auth included) works and both configured models are actually installed
 // there. Logged loudly on failure but never fatal — ingestion and serving
@@ -98,7 +102,6 @@ if (mode === 'cron') {
   // narrate progress for manual runs.
   const info = (...args) => verbose && log(...args);
 
-  log(`rssmart commit ${COMMIT_HASH}`);
   syncMastodonFeed(db, config);
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {
@@ -208,7 +211,6 @@ if (mode === 'cron') {
   if (space.changed) {
     log(`embedding space changed: ${space.cleared} column(s) cleared, the scheduler will re-embed`);
   }
-  log(`rssmart commit ${COMMIT_HASH}`);
   const app = createApp(db, config, COMMIT_HASH);
   const port = Number(values.port) || config.server.port;
   // Hono's app.fetch is a standard Fetch API handler — Bun runs it

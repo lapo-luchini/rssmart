@@ -61,6 +61,18 @@ function dbTableBytes(db) {
   }
 }
 
+/** Runtime + SQLite identification — shared between rssmart_build_info
+ *  below and bin/rssmart.js's own startup banner, so both report exactly
+ *  the same values from exactly the same query instead of two independent
+ *  (and possibly drifting) implementations. */
+export function getRuntimeInfo(db) {
+  const runtime = typeof Bun !== 'undefined'
+    ? { type: 'bun', version: Bun.version }
+    : { type: 'node', version: process.version.replace(/^v/, '') };
+  const { v: sqliteVersion } = db.prepare('SELECT sqlite_version() AS v').get();
+  return { runtime: runtime.type, runtimeVersion: runtime.version, sqliteVersion };
+}
+
 /**
  * Render current app + process state as Prometheus text exposition format
  * for a scrape-based dashboard (article/vote/feed counts, db size, process
@@ -147,15 +159,12 @@ export function renderMetrics(db, config, commitHash) {
       dbTables.rows.map((r) => [{ table: r.table_name, kind: r.kind === 'table' ? 'data' : 'index' }, r.bytes]));
   }
 
-  const runtime = typeof Bun !== 'undefined'
-    ? { type: 'bun', version: Bun.version }
-    : { type: 'node', version: process.version.replace(/^v/, '') };
-  const { v: sqliteVersion } = db.prepare('SELECT sqlite_version() AS v').get();
+  const { runtime, runtimeVersion, sqliteVersion } = getRuntimeInfo(db);
   metric(lines, 'rssmart_build_info', 'gauge', 'Always 1; labels identify the running build and runtime.', [
     [{
       commit: commitHash || 'unknown',
-      runtime: runtime.type,
-      runtime_version: runtime.version,
+      runtime,
+      runtime_version: runtimeVersion,
       sqlite_version: sqliteVersion,
     }, 1],
   ]);
