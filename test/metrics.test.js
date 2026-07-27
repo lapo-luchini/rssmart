@@ -79,6 +79,8 @@ test('metrics endpoint reports article, vote, feed, topic and db counts', async 
     assert.ok(metricValue(text, 'process_resident_memory_bytes') > 0);
     assert.ok(metricValue(text, 'nodejs_heap_size_used_bytes') > 0);
     assert.ok(metricValue(text, 'nodejs_heap_size_total_bytes') > 0);
+    assert.ok(metricValue(text, 'nodejs_external_memory_bytes') > 0);
+    assert.ok(metricValue(text, 'nodejs_arraybuffers_bytes') >= 0);
 
     // Every metric line is preceded by its own HELP/TYPE — spot-check one.
     assert.match(text, /# HELP rssmart_votes Number of articles with a given \(non-zero\) vote value\.\n# TYPE rssmart_votes gauge/);

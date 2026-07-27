@@ -179,6 +179,12 @@ export function renderMetrics(db, config, commitHash) {
   metric(lines, 'process_resident_memory_bytes', 'gauge', 'Resident set size.', [[{}, mem.rss]]);
   metric(lines, 'nodejs_heap_size_used_bytes', 'gauge', 'V8 heap used.', [[{}, mem.heapUsed]]);
   metric(lines, 'nodejs_heap_size_total_bytes', 'gauge', 'V8 heap total.', [[{}, mem.heapTotal]]);
+  // Not logged on the CLI (scheduler.js's memLog only prints rss/heap), but
+  // one field away on the same process.memoryUsage() call, and arrayBuffers
+  // specifically is exactly the number the Float16Array/ArrayBuffer leak
+  // hunting earlier in this project's history would have wanted to graph.
+  metric(lines, 'nodejs_external_memory_bytes', 'gauge', 'Memory used by C++ objects bound to JS objects, outside the V8 heap.', [[{}, mem.external]]);
+  metric(lines, 'nodejs_arraybuffers_bytes', 'gauge', 'Memory used by ArrayBuffers and Buffers (a subset of external).', [[{}, mem.arrayBuffers]]);
 
   return lines.join('\n') + '\n';
 }
