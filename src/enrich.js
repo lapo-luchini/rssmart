@@ -178,7 +178,7 @@ function firstExternalLink(html, articleUrl) {
  * that link's readable content and append it after a separator. Persists the
  * combined content as full_content so the reader view gets the same result.
  */
-async function expandShortContent(text, html, article, db, enrichCfg) {
+async function expandShortContent(text, html, article, db, enrichCfg, pool) {
   const { linkExpandMaxChars, allowPrivateFetch, maxArticleChars } = enrichCfg;
   const textWithoutUrls = text.replace(/https?:\/\/[^\s]+/g, '').trim();
   if (!linkExpandMaxChars || textWithoutUrls.length >= linkExpandMaxChars) return { text, html };
@@ -186,7 +186,7 @@ async function expandShortContent(text, html, article, db, enrichCfg) {
   if (!url) return { text, html };
   let page;
   try {
-    page = await fetchArticleText(url, { allowPrivate: allowPrivateFetch, maxChars: maxArticleChars });
+    page = await fetchArticleText(url, { allowPrivate: allowPrivateFetch, maxChars: maxArticleChars, pool });
   } catch {
     return { text, html };
   }
@@ -207,11 +207,15 @@ async function articleText(db, article, enrichCfg) {
   const rssText = stripHtml(article.content);
   const { fetchMinChars, allowPrivateFetch, maxArticleChars } = enrichCfg;
   if (!article.url || !fetchMinChars || rssText.length >= fetchMinChars) {
-    return (await expandShortContent(rssText, article.content, article, db, enrichCfg)).text;
+    return (await expandShortContent(rssText, article.content, article, db, enrichCfg, 'enrich')).text;
   }
+  // pool: 'enrich' — this is the background classification pipeline; see
+  // fetchpage.js's pool-split doc comment for why it's kept separate from
+  // the reader endpoint's own fetches.
   const page = await fetchArticleText(article.url, {
     allowPrivate: allowPrivateFetch,
     maxChars: maxArticleChars,
+    pool: 'enrich',
   });
   // Keep the page only when extraction actually beat the feed's own text —
   // Readability sometimes grabs a footer or sidebar instead of the article.
@@ -219,7 +223,7 @@ async function articleText(db, article, enrichCfg) {
   // Persist immediately so a later classify failure doesn't refetch.
   db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
     .run(compressText(page.html), article.id);
-  return (await expandShortContent(page.text, page.html, article, db, enrichCfg)).text;
+  return (await expandShortContent(page.text, page.html, article, db, enrichCfg, 'enrich')).text;
 }
 
 /**
@@ -237,21 +241,25 @@ export async function getReaderContent(db, article, config) {
   if (cachedFullContent) return { html: cachedFullContent, source: 'cached' };
   const rssHtml = decompressText(article.content) ?? '';
   if (!article.url) {
-    const expanded = await expandShortContent(stripHtml(rssHtml), rssHtml, article, db, config.enrich);
+    const expanded = await expandShortContent(stripHtml(rssHtml), rssHtml, article, db, config.enrich, 'reader');
     return { html: expanded.html, source: 'feed' };
   }
 
+  // pool: 'reader' — this is the interactive reader endpoint; it must
+  // never queue behind background enrichment's own fetches (see
+  // fetchpage.js's pool-split doc comment).
   const page = await fetchArticleText(article.url, {
     allowPrivate: config.enrich.allowPrivateFetch,
     maxChars: config.enrich.maxArticleChars,
+    pool: 'reader',
   }).catch(() => null);
 
   if (!page || stripHtml(page.html).length <= stripHtml(rssHtml).length) {
-    const expanded = await expandShortContent(stripHtml(rssHtml), rssHtml, article, db, config.enrich);
+    const expanded = await expandShortContent(stripHtml(rssHtml), rssHtml, article, db, config.enrich, 'reader');
     return { html: expanded.html, source: 'feed' };
   }
   db.prepare('UPDATE articles SET full_content = ? WHERE id = ?').run(compressText(page.html), article.id);
-  const expanded = await expandShortContent(page.text, page.html, article, db, config.enrich);
+  const expanded = await expandShortContent(page.text, page.html, article, db, config.enrich, 'reader');
   return { html: expanded.html, source: 'fetched' };
 }
 

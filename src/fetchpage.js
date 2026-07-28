@@ -40,20 +40,42 @@ function withTimeout(promise, ms) {
 // reproduction: of many Windows created then close()'d + GC'd, ~0.1% stayed
 // reachable when created sequentially, ~1.25% when created concurrently in
 // batches of 5 (mirroring enrich.workers). A single reused Window has no
-// concurrent creation/teardown to race. Access is serialized through a
-// promise-chain queue — safe because a Window can only render one document
-// at a time — which costs nothing measurable here since page-fetch+parse
-// isn't the worker bottleneck (LLM classification dominates).
-let _sharedWindow = null;
-let _sharedWindowQueue = Promise.resolve();
+// concurrent creation/teardown to race.
+//
+// Kept as TWO independent pools ('reader' and 'enrich'), not one — each
+// pool's document.write()/Readability.parse() step is fully synchronous,
+// CPU-bound work (confirmed: no `await` anywhere in either), so it blocks
+// the whole event loop for however long that one page takes to parse. With
+// a single shared pool, the interactive reader endpoint's own parse queued
+// behind every in-flight background-enrichment fetch too — reported live
+// as a reader request stuck for many seconds, unblocking only once an
+// enrichment batch (both workers' fetches queued ahead of it) finished.
+// Two pools mean the reader only ever waits behind another reader call
+// (rare), never behind background classification's own fetches. This
+// doesn't remove the underlying cost of parsing a single large/complex
+// page (still a synchronous, event-loop-wide stall while it runs, up to
+// timeoutMs) —
+// only worker_threads-ing the parse itself would fix that residual case —
+// but it does remove queuing behind unrelated background work, which is
+// what was actually observed.
+const _windowPools = new Map(); // pool name -> { window, queue }
 
-function getSharedWindow() {
-  if (!_sharedWindow) {
+function getWindowPoolState(pool) {
+  let state = _windowPools.get(pool);
+  if (!state) {
+    state = { window: null, queue: Promise.resolve() };
+    _windowPools.set(pool, state);
+  }
+  return state;
+}
+
+function ensureWindow(state) {
+  if (!state.window) {
     // Unlike jsdom's plain `new JSDOM(html)`, happy-dom fetches external CSS
     // and iframe pages by default even with script evaluation off (verified
     // live) — article HTML comes from arbitrary third-party sites, so all
     // external loading must be off, matching jsdom's zero-resource default.
-    _sharedWindow = new Window({
+    state.window = new Window({
       settings: {
         disableJavaScriptEvaluation: true,
         disableJavaScriptFileLoading: true,
@@ -62,26 +84,27 @@ function getSharedWindow() {
       },
     });
   }
-  return _sharedWindow;
+  return state.window;
 }
 
-/** Test-only peek at the shared window, to verify it doesn't accumulate
+/** Test-only peek at a pool's window, to verify it doesn't accumulate
  *  state (e.g. the virtual console log) across calls — production code
  *  never needs direct access to it, only through withSharedWindow. */
-export function _sharedWindowForTests() {
-  return _sharedWindow;
+export function _sharedWindowForTests(pool = 'enrich') {
+  return _windowPools.get(pool)?.window ?? null;
 }
 
 // Bounded to timeoutMs — a hang anywhere in `fn` (DOM parsing, a stuck
 // resource wait, Readability itself) must never wedge every future caller
-// behind it forever, since enrichment workers and the reader endpoint all
-// share this one queue. On timeout we stop trusting the shared window (it
-// may still be running in the background; we can't cancel it) and let the
-// next call build a fresh one, rather than risk two operations racing on
-// the same live document.
-function withSharedWindow(fn, timeoutMs) {
-  const started = _sharedWindowQueue.then(async () => {
-    const window = getSharedWindow();
+// on the SAME pool behind it forever. On timeout we stop trusting that
+// pool's window (it may still be running in the background; we can't
+// cancel it) and let the next call on this pool build a fresh one, rather
+// than risk two operations racing on the same live document.
+function withSharedWindow(pool, fn, timeoutMs) {
+  const state = getWindowPoolState(pool);
+
+  const started = state.queue.then(async () => {
+    const window = ensureWindow(state);
     try {
       return await fn(window);
     } finally {
@@ -101,8 +124,8 @@ function withSharedWindow(fn, timeoutMs) {
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      _sharedWindow = null;
-      reject(new Error(`happy-dom operation timed out after ${timeoutMs}ms`));
+      state.window = null;
+      reject(new Error(`happy-dom operation ("${pool}" pool) timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     timer.unref?.();
     started.then(
@@ -121,7 +144,7 @@ function withSharedWindow(fn, timeoutMs) {
     );
   });
 
-  _sharedWindowQueue = guarded.then(
+  state.queue = guarded.then(
     () => undefined,
     () => undefined,
   );
@@ -224,11 +247,14 @@ async function guardedFetch(url, { timeoutMs, allowPrivate }) {
  * FreeBSD's newsflash page, where every #anchor for a distinct
  * announcement fetches the exact same full-history page since fragments
  * never reach the server. The cap is a blanket safety net for that whole
- * class of problem, not a fix specific to one site.
+ * class of problem, not a fix specific to one site. `pool` ('reader' or
+ * 'enrich', default 'enrich') picks which independent happy-dom window this
+ * call queues behind — callers on the interactive reader path should pass
+ * 'reader' so they never wait behind background enrichment's own fetches.
  */
 export async function fetchArticleText(
   url,
-  { timeoutMs = 20_000, allowPrivate = false, maxChars = 50_000 } = {},
+  { timeoutMs = 20_000, allowPrivate = false, maxChars = 50_000, pool = 'enrich' } = {},
 ) {
   const res = await guardedFetch(url, { timeoutMs, allowPrivate });
   if (!res) return null;
@@ -249,7 +275,7 @@ export async function fetchArticleText(
       charsetFromContentType(type) ??
       /<meta[^>]+charset=["']?\s*([\w-]+)/i.exec(head)?.[1] ??
       'utf-8';
-    return await withSharedWindow(async (window) => {
+    return await withSharedWindow(pool, async (window) => {
       window.happyDOM.setURL(url);
       window.document.open();
       window.document.write(decodeBytes(bytes, charset));

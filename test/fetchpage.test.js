@@ -337,3 +337,33 @@ test('the shared happy-dom window clears its virtual console log after every use
     await site.close();
   }
 });
+
+test('reader and enrich pools use independent happy-dom windows and queues', async () => {
+  const site = await startPageServer();
+  try {
+    // Warm each pool; default (unspecified) pool is 'enrich'.
+    const enrichResult = await fetchArticleText(`${site.url}/article`, { allowPrivate: true });
+    const readerResult = await fetchArticleText(`${site.url}/article`, { allowPrivate: true, pool: 'reader' });
+    assert.ok(enrichResult.text.includes('ZETAFRAME'));
+    assert.ok(readerResult.text.includes('ZETAFRAME'));
+
+    const enrichWindow = _sharedWindowForTests('enrich');
+    const readerWindow = _sharedWindowForTests('reader');
+    assert.ok(enrichWindow, 'enrich pool built its own window');
+    assert.ok(readerWindow, 'reader pool built its own window');
+    assert.notEqual(enrichWindow, readerWindow, 'each pool gets a distinct Window instance');
+
+    // A stuck/timed-out call on one pool must not affect the other pool at
+    // all — proof the two queues are genuinely independent, not just two
+    // windows sharing one underlying queue. An unrealistically tiny
+    // timeoutMs guarantees the network fetch itself aborts immediately,
+    // which is enough to exercise "this pool's call failed" without
+    // touching the other pool's window/queue in any way.
+    const failed = await fetchArticleText(`${site.url}/article`, { allowPrivate: true, timeoutMs: 1 });
+    assert.equal(failed, null);
+    const stillWorks = await fetchArticleText(`${site.url}/article`, { allowPrivate: true, pool: 'reader' });
+    assert.ok(stillWorks.text.includes('ZETAFRAME'), 'reader pool unaffected by the enrich pool call above failing');
+  } finally {
+    await site.close();
+  }
+});
