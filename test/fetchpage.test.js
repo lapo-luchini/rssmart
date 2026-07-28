@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { fetchArticleText, isPrivateAddress } from '../src/fetchpage.js';
+import { fetchArticleText, isPrivateAddress, _sharedWindowForTests } from '../src/fetchpage.js';
 import { enrichPending, getReaderContent } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
@@ -310,6 +310,29 @@ test('fetchArticleText: concurrent calls share one happy-dom window but never cr
       assert.ok(page.text.includes('QUUXCORP unveiled a second, unrelated story'));
     }
     assert.equal(f1.title, 'Prepatch');
+  } finally {
+    await site.close();
+  }
+});
+
+test('the shared happy-dom window clears its virtual console log after every use, not accumulating it forever', async () => {
+  const site = await startPageServer();
+  try {
+    // Warm the shared window (the first call creates it).
+    await fetchArticleText(`${site.url}/article`, { allowPrivate: true });
+
+    // Inject a fake log entry, simulating whatever happy-dom itself might
+    // buffer internally while parsing a page — this is exactly what used
+    // to accumulate forever (confirmed live: ~1.7GB / millions of entries
+    // after a few days of uptime) before withSharedWindow started clearing
+    // it after every call.
+    const window = _sharedWindowForTests();
+    window.happyDOM.virtualConsolePrinter.print({ type: 'log', level: 0, message: ['leak-check'], group: null });
+
+    // A subsequent real call must clear it, not let it pile up alongside
+    // whatever that call's own parsing might additionally buffer.
+    await fetchArticleText(`${site.url}/article2`, { allowPrivate: true });
+    assert.deepEqual(window.happyDOM.virtualConsolePrinter.read(), []);
   } finally {
     await site.close();
   }

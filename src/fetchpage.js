@@ -65,6 +65,13 @@ function getSharedWindow() {
   return _sharedWindow;
 }
 
+/** Test-only peek at the shared window, to verify it doesn't accumulate
+ *  state (e.g. the virtual console log) across calls — production code
+ *  never needs direct access to it, only through withSharedWindow. */
+export function _sharedWindowForTests() {
+  return _sharedWindow;
+}
+
 // Bounded to timeoutMs — a hang anywhere in `fn` (DOM parsing, a stuck
 // resource wait, Readability itself) must never wedge every future caller
 // behind it forever, since enrichment workers and the reader endpoint all
@@ -73,7 +80,21 @@ function getSharedWindow() {
 // next call build a fresh one, rather than risk two operations racing on
 // the same live document.
 function withSharedWindow(fn, timeoutMs) {
-  const started = _sharedWindowQueue.then(() => fn(getSharedWindow()));
+  const started = _sharedWindowQueue.then(async () => {
+    const window = getSharedWindow();
+    try {
+      return await fn(window);
+    } finally {
+      // happy-dom's virtual console buffers every warning/log it emits
+      // during parsing, unboundedly, for as long as the Window lives —
+      // harmless with the old one-window-per-fetch design (it died with
+      // the call) but not with this shared, process-lifetime Window:
+      // confirmed live, ~1.7GB / millions of retained log entries after a
+      // few days of uptime. We never read this output, so drop it after
+      // every use rather than let it accumulate forever.
+      window.happyDOM.virtualConsolePrinter.clear();
+    }
+  });
 
   let settled = false;
   const guarded = new Promise((resolve, reject) => {
