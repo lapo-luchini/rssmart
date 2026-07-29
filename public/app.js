@@ -64,6 +64,7 @@ createApp({
       articlesByTopic: {},
       searchTimer: null,
       darkMode: window.matchMedia('(prefers-color-scheme: dark)').matches,
+      touchStartY: null,
     };
   },
 
@@ -118,6 +119,9 @@ createApp({
     this.applyRoute(location.hash, { replace: true });
     window.addEventListener('hashchange', () => this.applyRoute(location.hash));
     window.addEventListener('keydown', this.handleGlobalKey);
+    window.addEventListener('wheel', this.handleGlobalWheel, { passive: false });
+    window.addEventListener('touchstart', this.handleTriageTouchStart, { passive: true });
+    window.addEventListener('touchend', this.handleTriageTouchEnd, { passive: true });
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => (this.darkMode = e.matches));
     this.reload();
     this.loadSidebarData();
@@ -504,6 +508,32 @@ createApp({
         e.preventDefault();
         actions[key]();
       }
+    },
+
+    // Mobile has no PageDown key, and a mouse-less touch device has no
+    // wheel either — a wheel-down tick and a short upward swipe are the
+    // natural equivalents (both read as "tried to scroll past the end").
+    // Same one-shot-then-normal-scroll behavior as PageDown: only fires
+    // while the preview is still collapsed.
+    handleGlobalWheel(e) {
+      if (this.panel !== 'triage' || this.triageExpanded) return;
+      if (e.deltaY > 0) {
+        e.preventDefault();
+        this.toggleTriageContent();
+      }
+    },
+
+    handleTriageTouchStart(e) {
+      this.touchStartY = e.touches[0]?.clientY ?? null;
+    },
+
+    handleTriageTouchEnd(e) {
+      const startY = this.touchStartY;
+      this.touchStartY = null;
+      if (this.panel !== 'triage' || this.triageExpanded || startY === null) return;
+      const endY = e.changedTouches[0]?.clientY;
+      if (endY === undefined) return;
+      if (startY - endY > 40) this.toggleTriageContent();
     },
 
     async saveGuidelines() {
