@@ -10,6 +10,7 @@ import { recomputeOneScore, recomputeIfDue } from '../src/scoring.js';
 import { createApp } from '../src/server.js';
 import { startScheduler } from '../src/scheduler.js';
 import { acquireLease, releaseLease } from '../src/lease.js';
+import { startLagWatchdog } from '../src/lagWatchdog.js';
 import { log, logError } from '../src/log.js';
 import { checkRuntime } from '../src/runtime-check.js';
 import { getRuntimeInfo } from '../src/metrics.js';
@@ -213,6 +214,12 @@ if (mode === 'cron') {
   const allFeedsFailed = ingest.feedsFailed > 0 && ingest.feedsOk === 0;
   process.exit(allFeedsFailed ? 1 : 0);
 } else {
+  // Diagnostic only: logs whenever this process's single event loop stalls
+  // past 200ms, whatever the cause (a synchronous SQLite call, a happy-dom
+  // parse, plain JS) — the actual mechanism behind "the web UI is
+  // unresponsive during enrichment", not SQLite's own locking (WAL mode
+  // already lets reads and writes coexist at the database level).
+  startLagWatchdog({ log });
   syncMastodonFeed(db, config);
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {

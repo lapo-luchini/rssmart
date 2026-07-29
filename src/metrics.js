@@ -1,5 +1,6 @@
 import { statSync } from 'node:fs';
 import { getEnrichTimings, getEnrichMaxTimings } from './enrich.js';
+import { getLagStats } from './lagWatchdog.js';
 
 // Prometheus text exposition format:
 // https://prometheus.io/docs/instrumenting/exposition_formats/
@@ -161,6 +162,21 @@ export function renderMetrics(db, config, commitHash) {
   metric(lines, 'rssmart_enrich_slowest_seconds', 'gauge',
     'Slowest single article observed per enrichment phase, since process start.',
     Object.entries(enrichMax).map(([phase, ms]) => [{ phase }, ms / 1000]));
+
+  // Node's single event loop stalling — the actual mechanism behind "the
+  // web UI is unresponsive during enrichment" (a synchronous SQLite call
+  // or JS computation blocks everything else in the process), as distinct
+  // from SQLite's own locking (WAL mode already lets reads and writes
+  // coexist at the database level — see db.js).
+  const lag = getLagStats();
+  metric(lines, 'rssmart_event_loop_stalls_total', 'counter',
+    'Count of event-loop stalls past the watchdog threshold (200ms), since process start.', [
+      [{}, lag.stallCount],
+    ]);
+  metric(lines, 'rssmart_event_loop_max_lag_seconds', 'gauge',
+    'Longest single event-loop stall observed, since process start.', [
+      [{}, lag.maxLagMs / 1000],
+    ]);
 
   metric(lines, 'rssmart_db_bytes', 'gauge', 'On-disk size of the SQLite database (main file + WAL + SHM).', [
     [{}, dbSizeBytes(config.db)],
