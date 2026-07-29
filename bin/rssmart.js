@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, existsSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
@@ -218,8 +219,10 @@ if (mode === 'cron') {
   // past 200ms, whatever the cause (a synchronous SQLite call, a happy-dom
   // parse, plain JS) — the actual mechanism behind "the web UI is
   // unresponsive during enrichment", not SQLite's own locking (WAL mode
-  // already lets reads and writes coexist at the database level).
-  startLagWatchdog({ log });
+  // already lets reads and writes coexist at the database level). Each
+  // stall gets a disk write+fsync probe against the DB's own directory
+  // (works on any OS) plus PSI pressure if the host is Linux.
+  startLagWatchdog({ log, probeDir: dirname(config.db) });
   syncMastodonFeed(db, config);
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {

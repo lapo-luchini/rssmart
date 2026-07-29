@@ -8,7 +8,8 @@
 // own drift from the expected period — any drift past `thresholdMs` is a
 // real stall, not ordinary timer jitter.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, openSync, writeSync, fsyncSync, closeSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 
 let maxLagMs = 0;
 let stallCount = 0;
@@ -43,7 +44,33 @@ function psiSummary() {
     ` cpu pressure some=${pct(cpu?.some)}% full=${pct(cpu?.full)}%)`;
 }
 
-export function startLagWatchdog({ log, intervalMs = 50, thresholdMs = 200 } = {}) {
+// Portable across every OS Node runs on (unlike PSI, Linux-only): times a
+// real write+fsync against the same filesystem the SQLite DB lives on, so
+// a stall on FreeBSD (no /proc/pressure at all) still gets direct evidence
+// of whether the disk itself was slow at that moment, not just a guess.
+// fsync matters — without it the write could land in page cache and
+// return instantly even while the underlying disk is genuinely stalled.
+function diskProbeMs(probeDir) {
+  if (!probeDir) return null;
+  const path = join(probeDir, `.lag-watchdog-probe-${process.pid}`);
+  const start = performance.now();
+  let fd;
+  try {
+    fd = openSync(path, 'w');
+    writeSync(fd, 'x');
+    fsyncSync(fd);
+    return performance.now() - start;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    try { unlinkSync(path); } catch { /* best effort cleanup */ }
+  }
+}
+
+export const _diskProbeMsForTests = diskProbeMs;
+
+export function startLagWatchdog({ log, intervalMs = 50, thresholdMs = 200, probeDir } = {}) {
   let last = performance.now();
   const timer = setInterval(() => {
     const now = performance.now();
@@ -52,7 +79,10 @@ export function startLagWatchdog({ log, intervalMs = 50, thresholdMs = 200 } = {
     if (lag > thresholdMs) {
       stallCount++;
       if (lag > maxLagMs) maxLagMs = lag;
-      log(`event loop stalled for ${lag.toFixed(0)}ms${psiSummary()}`);
+      const probe = diskProbeMs(probeDir);
+      last = performance.now(); // exclude the probe's own time from the next tick's lag
+      const probeInfo = probe === null ? '' : ` (disk probe: ${probe.toFixed(0)}ms write+fsync)`;
+      log(`event loop stalled for ${lag.toFixed(0)}ms${probeInfo}${psiSummary()}`);
     }
   }, intervalMs);
   timer.unref(); // diagnostic only — must never keep the process alive on its own
