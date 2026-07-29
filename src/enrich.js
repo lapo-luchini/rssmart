@@ -12,13 +12,30 @@ import { compressText, decompressText } from './compress.js';
 // the per-article write transaction.
 const _phaseMs = { fetch: 0, parse: 0, chat: 0, embed: 0, dedup: 0, db: 0 };
 
+// Slowest single article's contribution to each phase, since process
+// start (exposed as rssmart_enrich_slowest_seconds) — a cumulative average
+// hides a single pathological outlier (e.g. a huge page that takes seconds
+// to parse, same shape as the "8-article, ~47MB blowup" incident already
+// documented in DESIGN.md) among many fast ones; this surfaces it
+// directly. Per-article, not per fetchArticleText call: an article whose
+// expandShortContent triggers a second link-expansion fetch has its
+// fetch/parse phases summed across both calls first (see articleText) —
+// a reasonable proxy for "something was slow for this one article" even
+// on the rare article that fetches twice.
+const _phaseMaxMs = { fetch: 0, parse: 0, chat: 0, embed: 0, dedup: 0, db: 0 };
+
 export function getEnrichTimings() {
   return { ..._phaseMs };
+}
+
+export function getEnrichMaxTimings() {
+  return { ..._phaseMaxMs };
 }
 
 function addPhaseMs(local) {
   for (const [phase, ms] of Object.entries(local)) {
     _phaseMs[phase] = (_phaseMs[phase] ?? 0) + ms;
+    if (ms > (_phaseMaxMs[phase] ?? 0)) _phaseMaxMs[phase] = ms;
   }
 }
 

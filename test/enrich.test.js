@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
-import { enrichPending, cosine, bufToVec, sampleText, existingTopicNames, getEnrichTimings } from '../src/enrich.js';
+import { enrichPending, cosine, bufToVec, sampleText, existingTopicNames, getEnrichTimings, getEnrichMaxTimings } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
 import { compressText } from '../src/compress.js';
 
@@ -446,6 +446,13 @@ test('enrichPending reports a per-phase timing breakdown and folds it into the c
     for (const phase of Object.keys(result.timings)) {
       assert.equal(after[phase], before[phase] + result.timings[phase], `${phase} folded into cumulative totals`);
     }
+
+    // The slowest-observed watermark (rssmart_enrich_slowest_seconds) must
+    // be at least this run's own contribution — other tests in this file
+    // may have already pushed it higher, so >= rather than ===.
+    const maxAfter = getEnrichMaxTimings();
+    assert.ok(maxAfter.chat >= result.timings.chat, 'slowest-chat watermark reflects at least this run');
+    assert.ok(maxAfter.embed >= result.timings.embed, 'slowest-embed watermark reflects at least this run');
   } finally {
     await stub.close();
   }

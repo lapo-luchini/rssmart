@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { getEnrichTimings } from './enrich.js';
+import { getEnrichTimings, getEnrichMaxTimings } from './enrich.js';
 
 // Prometheus text exposition format:
 // https://prometheus.io/docs/instrumenting/exposition_formats/
@@ -153,6 +153,14 @@ export function renderMetrics(db, config, commitHash) {
   metric(lines, 'rssmart_enrich_seconds_total', 'counter',
     'Cumulative wall-clock time spent per enrichment phase (fetch, parse, chat, embed, dedup, db).',
     Object.entries(enrichTimings).map(([phase, ms]) => [{ phase }, ms / 1000]));
+
+  // Slowest single article's contribution to each phase — a cumulative
+  // average (above) hides a lone pathological outlier (e.g. a huge page
+  // taking seconds to parse) among many fast ones; this surfaces it.
+  const enrichMax = getEnrichMaxTimings();
+  metric(lines, 'rssmart_enrich_slowest_seconds', 'gauge',
+    'Slowest single article observed per enrichment phase, since process start.',
+    Object.entries(enrichMax).map(([phase, ms]) => [{ phase }, ms / 1000]));
 
   metric(lines, 'rssmart_db_bytes', 'gauge', 'On-disk size of the SQLite database (main file + WAL + SHM).', [
     [{}, dbSizeBytes(config.db)],
