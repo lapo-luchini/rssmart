@@ -63,6 +63,7 @@ createApp({
       prefByTopic: {},
       articlesByTopic: {},
       searchTimer: null,
+      darkMode: window.matchMedia('(prefers-color-scheme: dark)').matches,
     };
   },
 
@@ -117,6 +118,7 @@ createApp({
     this.applyRoute(location.hash, { replace: true });
     window.addEventListener('hashchange', () => this.applyRoute(location.hash));
     window.addEventListener('keydown', this.handleGlobalKey);
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => (this.darkMode = e.matches));
     this.reload();
     this.loadSidebarData();
     // Log commit hash for debugging
@@ -785,7 +787,8 @@ createApp({
       const hue = pref < 0 ? 12 : 145;
       const strength = Math.min(Math.abs(pref), 1);
       const sat = Math.round(strength * 55);
-      return `hsl(${hue} ${sat}% ${light}%)`;
+      const l = this.darkMode ? Math.round(15 + (100 - light) * 0.35) : light;
+      return `hsl(${hue} ${sat}% ${l}%)`;
     },
 
     chipStyle(topicName) {

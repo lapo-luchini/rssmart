@@ -3,14 +3,34 @@
    Machine voice (scores, times, sources, stats) is monospace. */
 
 :root {
+  color-scheme: light dark;
   --paper: #fbfaf7;
+  --surface: #fff;
   --ink: #20242b;
+  --ink-soft: #3d4450;
   --muted: #6e7681;
   --hairline: #e4e1d8;
+  --shadow: rgba(32, 36, 43, 0.1);
+  --flash: #fdf6dd;
   --up: #2f7d4e;
   --down: #b5432f;
   --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: ui-monospace, 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1b1d21;
+    --surface: #24272c;
+    --ink: #e8e6e2;
+    --ink-soft: #c7c4bd;
+    --muted: #8b8f97;
+    --hairline: #34373d;
+    --shadow: rgba(0, 0, 0, 0.45);
+    --flash: #4a4020;
+    --up: #3d9968;
+    --down: #c2503a;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -110,7 +130,7 @@ body {
 .filters input[type='search'] {
   font: inherit;
   color: var(--ink);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 3px;
   padding: 0.25rem 0.4rem;
@@ -192,7 +212,7 @@ body {
 .feed-add input[type='text'] {
   font: inherit;
   color: var(--ink);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 3px;
   padding: 0.25rem 0.4rem;
@@ -261,11 +281,11 @@ body {
   left: 0;
   z-index: 20;
   min-width: 13rem;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 4px;
   padding: 0.5rem 0.7rem;
-  box-shadow: 0 2px 10px rgba(32, 36, 43, 0.1);
+  box-shadow: 0 2px 10px var(--shadow);
   font-size: 0.72rem;
   line-height: 1.7;
   color: var(--muted);
@@ -330,7 +350,7 @@ body {
 .story.flash { animation: flash 1.6s ease-out; }
 
 @keyframes flash {
-  0%, 40% { background: #fdf6dd; }
+  0%, 40% { background: var(--flash); }
   100% { background: transparent; }
 }
 
@@ -355,7 +375,7 @@ body {
   margin: 0.35rem 0 0;
   font-family: var(--sans);
   font-size: 0.95rem;
-  color: #3d4450;
+  color: var(--ink-soft);
   max-width: 40rem;
 }
 
@@ -395,7 +415,7 @@ body {
   height: 1.7rem;
   border: 1px solid var(--hairline);
   border-radius: 3px;
-  background: #fff;
+  background: var(--surface);
   color: var(--muted);
   cursor: pointer;
   transition: transform 80ms ease;
@@ -422,7 +442,7 @@ body {
 .story-body {
   margin-top: 0.8rem;
   padding: 0.8rem 1rem;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 4px;
   font-family: var(--sans);
@@ -447,6 +467,7 @@ body {
   flex: 1;
   font: inherit;
   color: var(--ink);
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 3px;
   padding: 0.25rem 0.4rem;
@@ -467,7 +488,7 @@ body {
   font: inherit;
   font-size: 0.8rem;
   color: var(--ink);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 3px;
   padding: 0.4rem 0.5rem;
@@ -526,7 +547,7 @@ body {
   font: inherit;
   font-size: 0.8rem;
   color: var(--ink);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 3px;
   padding: 0.25rem 0.4rem;
@@ -599,7 +620,7 @@ body {
 .triage-summary {
   font-family: var(--sans);
   font-size: 1.05rem;
-  color: #3d4450;
+  color: var(--ink-soft);
   margin: 0 0 1rem;
 }
 
@@ -632,7 +653,7 @@ body {
   font-family: var(--mono);
   font-size: 0.85rem;
   white-space: nowrap;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 6px;
   padding: 0.4rem 0.3rem;
@@ -669,7 +690,7 @@ body {
   width: 100%;
   max-width: 44rem;
   padding: 0.9rem 1.1rem;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 4px;
   text-align: left;
