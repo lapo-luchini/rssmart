@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startLagWatchdog, getLagStats } from '../src/lagWatchdog.js';
+import { startLagWatchdog, getLagStats, _readPsiForTests } from '../src/lagWatchdog.js';
+
+test('_readPsiForTests degrades to null for a nonexistent resource instead of throwing', () => {
+  assert.equal(_readPsiForTests('not-a-real-psi-resource'), null);
+});
 
 function busyWaitMs(ms) {
   const end = performance.now() + ms;
