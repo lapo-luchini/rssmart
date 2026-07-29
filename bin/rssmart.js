@@ -185,6 +185,13 @@ if (mode === 'cron') {
       `enrich: ${enrich.enriched} enriched (${plural(enrich.duplicates, 'duplicate')}), ${enrich.failed} failed` +
         (enrich.timedOut ? ' — time budget reached, the rest next run' : ''),
     );
+    // Per-phase breakdown — see rssmart_enrich_seconds_total (metrics.js)
+    // for the same split as a cumulative, graphable trend across runs.
+    if (enrich.enriched || enrich.failed) {
+      const s = (ms) => (ms / 1000).toFixed(1);
+      const t = enrich.timings;
+      info(`enrich timing (s) fetch=${s(t.fetch)} parse=${s(t.parse)} chat=${s(t.chat)} embed=${s(t.embed)} dedup=${s(t.dedup)} db=${s(t.db)}`);
+    }
   }
 
   // Cheap, scoped scoring for whatever was just classified (see the same

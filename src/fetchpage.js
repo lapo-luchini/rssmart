@@ -254,13 +254,25 @@ async function guardedFetch(url, { timeoutMs, allowPrivate }) {
  */
 export async function fetchArticleText(
   url,
-  { timeoutMs = 20_000, allowPrivate = false, maxChars = 50_000, pool = 'enrich' } = {},
+  { timeoutMs = 20_000, allowPrivate = false, maxChars = 50_000, pool = 'enrich', timings } = {},
 ) {
+  const fetchStart = performance.now();
+  // Idempotent: called from every early-return below AND from the outer
+  // catch (in case res.arrayBuffer() itself throws) — a plain flag instead
+  // of relying on "only call it once" discipline across those call sites.
+  let fetchRecorded = false;
+  const recordFetch = () => {
+    if (fetchRecorded) return;
+    fetchRecorded = true;
+    if (timings) timings.fetch = (timings.fetch ?? 0) + (performance.now() - fetchStart);
+  };
+
   const res = await guardedFetch(url, { timeoutMs, allowPrivate });
-  if (!res) return null;
+  if (!res) { recordFetch(); return null; }
   const type = res.headers.get('content-type') ?? '';
   if (type && !type.includes('html')) {
     await discardBody(res);
+    recordFetch();
     return null;
   }
 
@@ -270,27 +282,34 @@ export async function fetchArticleText(
     // on older sites, which would otherwise turn every accented character
     // into a U+FFFD replacement in the stored full_content.
     const bytes = Buffer.from(await res.arrayBuffer());
+    recordFetch();
     const head = bytes.subarray(0, 1024).toString('latin1');
     const charset =
       charsetFromContentType(type) ??
       /<meta[^>]+charset=["']?\s*([\w-]+)/i.exec(head)?.[1] ??
       'utf-8';
-    return await withSharedWindow(pool, async (window) => {
-      window.happyDOM.setURL(url);
-      window.document.open();
-      window.document.write(decodeBytes(bytes, charset));
-      await window.happyDOM.waitUntilComplete();
-      const article = new Readability(window.document).parse();
-      if (!article?.textContent?.trim()) return null;
-      const html = sanitizeHtml(article.content);
-      const text = article.textContent.replace(/\s+/g, ' ').trim();
-      return {
-        title: article.title?.trim() || null,
-        html: maxChars && html.length > maxChars ? html.slice(0, maxChars) : html,
-        text: maxChars && text.length > maxChars ? text.slice(0, maxChars) : text,
-      };
-    }, timeoutMs);
+    const parseStart = performance.now();
+    try {
+      return await withSharedWindow(pool, async (window) => {
+        window.happyDOM.setURL(url);
+        window.document.open();
+        window.document.write(decodeBytes(bytes, charset));
+        await window.happyDOM.waitUntilComplete();
+        const article = new Readability(window.document).parse();
+        if (!article?.textContent?.trim()) return null;
+        const html = sanitizeHtml(article.content);
+        const text = article.textContent.replace(/\s+/g, ' ').trim();
+        return {
+          title: article.title?.trim() || null,
+          html: maxChars && html.length > maxChars ? html.slice(0, maxChars) : html,
+          text: maxChars && text.length > maxChars ? text.slice(0, maxChars) : text,
+        };
+      }, timeoutMs);
+    } finally {
+      if (timings) timings.parse = (timings.parse ?? 0) + (performance.now() - parseStart);
+    }
   } catch {
+    recordFetch();
     return null;
   }
 }

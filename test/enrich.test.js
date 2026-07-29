@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb, startOllamaStub, testConfig } from './helpers.js';
-import { enrichPending, cosine, bufToVec, sampleText, existingTopicNames } from '../src/enrich.js';
+import { enrichPending, cosine, bufToVec, sampleText, existingTopicNames, getEnrichTimings } from '../src/enrich.js';
 import { Ollama } from '../src/llm.js';
 import { compressText } from '../src/compress.js';
 
@@ -414,4 +414,39 @@ test('unreachable ollama skips enrichment and keeps articles pending', async () 
   assert.equal(result.skipped, true);
   const art = db.prepare('SELECT status, enrich_attempts FROM articles WHERE id = ?').get(id);
   assert.deepEqual(art, { status: 'pending', enrich_attempts: 0 });
+});
+
+test('enrichPending reports a per-phase timing breakdown and folds it into the cumulative totals', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  stub.chat = () => ({ topics: ['tech'], summary: 'A summary.', depth: 3 });
+  seedArticle(db, { title: 'Timed article' }); // no url -> no fetch/parse phase
+  try {
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+    const before = getEnrichTimings();
+    const result = await enrichPending(db, config, llm);
+
+    assert.equal(result.enriched, 1);
+    assert.deepEqual(
+      Object.keys(result.timings).sort(),
+      ['chat', 'db', 'dedup', 'embed', 'fetch', 'parse'],
+    );
+    // chat and embed are real HTTP round-trips to the stub, so they must
+    // take a measurable amount of time; this article has no url, so the
+    // fetch/parse (readability) phases never ran at all.
+    assert.ok(result.timings.chat > 0, 'chat time recorded');
+    assert.ok(result.timings.embed > 0, 'embed time recorded');
+    assert.equal(result.timings.fetch, 0, 'no url on this article -> no fetch phase');
+    assert.equal(result.timings.parse, 0, 'no url on this article -> no parse phase');
+
+    // The module-level cumulative totals (rssmart_enrich_seconds_total in
+    // metrics.js) must grow by exactly this run's own contribution.
+    const after = getEnrichTimings();
+    for (const phase of Object.keys(result.timings)) {
+      assert.equal(after[phase], before[phase] + result.timings[phase], `${phase} folded into cumulative totals`);
+    }
+  } finally {
+    await stub.close();
+  }
 });

@@ -63,6 +63,9 @@ test('metrics endpoint reports article, vote, feed, topic and db counts', async 
 
     assert.equal(metricValue(text, 'rssmart_topics'), 2);
     assert.ok(metricValue(text, 'rssmart_db_bytes') >= 0);
+    for (const phase of ['fetch', 'parse', 'chat', 'embed', 'dedup', 'db']) {
+      assert.ok(metricValue(text, 'rssmart_enrich_seconds_total', { phase }) >= 0, `${phase} timing present`);
+    }
 
     assert.equal(metricValue(text, 'rssmart_db_dbstat_available'), 1, 'better-sqlite3 (this test runtime) always has dbstat');
     assert.ok(metricValue(text, 'rssmart_db_table_bytes', { table: 'articles', kind: 'data' }) > 0);

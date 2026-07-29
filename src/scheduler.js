@@ -105,6 +105,13 @@ export function startScheduler(db, config, {
       const avg = (Date.now() - started) / (r.enriched + r.failed) / 1000;
       log(`scheduler: classified ${plural(r.enriched, 'article')} (avg ${avg.toFixed(1)}s each)` +
         (r.failed ? `, ${r.failed} failed` : ''));
+      // Per-phase breakdown for this batch — see rssmart_enrich_seconds_total
+      // (metrics.js) for the same split as a cumulative, graphable trend.
+      if (verbose) {
+        const s = (ms) => (ms / 1000).toFixed(1);
+        const t = r.timings;
+        log(`scheduler: enrich timing (s) fetch=${s(t.fetch)} parse=${s(t.parse)} chat=${s(t.chat)} embed=${s(t.embed)} dedup=${s(t.dedup)} db=${s(t.db)}`);
+      }
     }
     classifierWorkPending = -1; // invalidate after batch
     enriching = false;

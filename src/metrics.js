@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs';
+import { getEnrichTimings } from './enrich.js';
 
 // Prometheus text exposition format:
 // https://prometheus.io/docs/instrumenting/exposition_formats/
@@ -143,6 +144,15 @@ export function renderMetrics(db, config, commitHash) {
 
   const { topics } = db.prepare('SELECT COUNT(*) AS topics FROM topics').get();
   metric(lines, 'rssmart_topics', 'gauge', 'Number of distinct topics.', [[{}, topics]]);
+
+  // Cumulative time per enrichment phase — a counter (only ever grows,
+  // process lifetime), so rate()/irate() per phase in Prometheus directly
+  // answers "what fraction of enrichment time is LLM vs readability
+  // parsing vs DB writes" as an ongoing trend, not a one-off snapshot.
+  const enrichTimings = getEnrichTimings();
+  metric(lines, 'rssmart_enrich_seconds_total', 'counter',
+    'Cumulative wall-clock time spent per enrichment phase (fetch, parse, chat, embed, dedup, db).',
+    Object.entries(enrichTimings).map(([phase, ms]) => [{ phase }, ms / 1000]));
 
   metric(lines, 'rssmart_db_bytes', 'gauge', 'On-disk size of the SQLite database (main file + WAL + SHM).', [
     [{}, dbSizeBytes(config.db)],

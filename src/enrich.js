@@ -2,6 +2,26 @@ import { stripHtml } from './html.js';
 import { fetchArticleText } from './fetchpage.js';
 import { compressText, decompressText } from './compress.js';
 
+// Cumulative wall-clock time (ms) spent per enrichment phase, since process
+// start — exposed as rssmart_enrich_seconds_total (see metrics.js). This is
+// what answers "how much of enrichment is LLM vs readability parsing vs DB
+// writes" as an ongoing, graphable ratio (rate() per phase in Prometheus)
+// instead of a one-off guess: fetch/parse come from fetchArticleText
+// (network fetch, happy-dom+Readability parse respectively), chat/embed
+// from the Ollama calls, dedup from the recent-window cosine scan, db from
+// the per-article write transaction.
+const _phaseMs = { fetch: 0, parse: 0, chat: 0, embed: 0, dedup: 0, db: 0 };
+
+export function getEnrichTimings() {
+  return { ..._phaseMs };
+}
+
+function addPhaseMs(local) {
+  for (const [phase, ms] of Object.entries(local)) {
+    _phaseMs[phase] = (_phaseMs[phase] ?? 0) + ms;
+  }
+}
+
 // Both operands are always embeddings straight from Ollama (query or
 // document, full-dimension or Matryoshka-truncated) — the model returns
 // them L2-normalized, truncation included (see llm.js's embedDimensions
@@ -178,7 +198,7 @@ function firstExternalLink(html, articleUrl) {
  * that link's readable content and append it after a separator. Persists the
  * combined content as full_content so the reader view gets the same result.
  */
-async function expandShortContent(text, html, article, db, enrichCfg, pool) {
+async function expandShortContent(text, html, article, db, enrichCfg, pool, timings) {
   const { linkExpandMaxChars, allowPrivateFetch, maxArticleChars } = enrichCfg;
   const textWithoutUrls = text.replace(/https?:\/\/[^\s]+/g, '').trim();
   if (!linkExpandMaxChars || textWithoutUrls.length >= linkExpandMaxChars) return { text, html };
@@ -186,7 +206,7 @@ async function expandShortContent(text, html, article, db, enrichCfg, pool) {
   if (!url) return { text, html };
   let page;
   try {
-    page = await fetchArticleText(url, { allowPrivate: allowPrivateFetch, maxChars: maxArticleChars, pool });
+    page = await fetchArticleText(url, { allowPrivate: allowPrivateFetch, maxChars: maxArticleChars, pool, timings });
   } catch {
     return { text, html };
   }
@@ -202,12 +222,12 @@ async function expandShortContent(text, html, article, db, enrichCfg, pool) {
  * The text the LLM sees: the origin page's readable content when the RSS
  * entry is too thin (fetched once and stored), the RSS content otherwise.
  */
-async function articleText(db, article, enrichCfg) {
+async function articleText(db, article, enrichCfg, timings) {
   if (article.full_content) return stripHtml(article.full_content);
   const rssText = stripHtml(article.content);
   const { fetchMinChars, allowPrivateFetch, maxArticleChars } = enrichCfg;
   if (!article.url || !fetchMinChars || rssText.length >= fetchMinChars) {
-    return (await expandShortContent(rssText, article.content, article, db, enrichCfg, 'enrich')).text;
+    return (await expandShortContent(rssText, article.content, article, db, enrichCfg, 'enrich', timings)).text;
   }
   // pool: 'enrich' — this is the background classification pipeline; see
   // fetchpage.js's pool-split doc comment for why it's kept separate from
@@ -216,6 +236,7 @@ async function articleText(db, article, enrichCfg) {
     allowPrivate: allowPrivateFetch,
     maxChars: maxArticleChars,
     pool: 'enrich',
+    timings,
   });
   // Keep the page only when extraction actually beat the feed's own text —
   // Readability sometimes grabs a footer or sidebar instead of the article.
@@ -223,7 +244,7 @@ async function articleText(db, article, enrichCfg) {
   // Persist immediately so a later classify failure doesn't refetch.
   db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
     .run(compressText(page.html), article.id);
-  return (await expandShortContent(page.text, page.html, article, db, enrichCfg, 'enrich')).text;
+  return (await expandShortContent(page.text, page.html, article, db, enrichCfg, 'enrich', timings)).text;
 }
 
 /**
@@ -410,8 +431,16 @@ export function resolveTopicId(db, name) {
 
 /** Classify + summarize + embed one article and persist the outcome. */
 async function enrichOne(db, llm, article, recent, enrichCfg) {
+  // Per-article phase timings (ms), folded into the process-wide totals
+  // (addPhaseMs, below) once this article finishes, and returned so
+  // enrichPending can report a per-batch breakdown too. fetch/parse are
+  // filled in by fetchArticleText itself (via articleText, threaded
+  // through as `timings`) since it's the one that knows which of its two
+  // internal phases actually ran.
+  const timings = { fetch: 0, parse: 0, chat: 0, embed: 0, dedup: 0, db: 0 };
+
   const existing = existingTopicNames(db, enrichCfg.maxSuggestedTopics);
-  const text = await articleText(db, article, enrichCfg);
+  const text = await articleText(db, article, enrichCfg, timings);
 
   const guidelines = db
     .prepare("SELECT value FROM meta WHERE key = 'guidelines'")
@@ -440,9 +469,11 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
   // still count for real, since they grow slowly and must never truncate.
   const contentChars = Math.min(text.length, maxInputChars);
   const worstCaseChars = SYSTEM.length + prompt.length + (maxInputChars - contentChars);
+  let t = performance.now();
   const reply = await llm.chatJSON(SYSTEM, prompt, {
     numCtx: contextTokens(worstCaseChars),
   });
+  timings.chat += performance.now() - t;
   // Models occasionally drift on key names ("topic" for "topics").
   const topics = normalizeTopics(reply.topics ?? reply.topic);
   if (topics.length === 0) {
@@ -468,17 +499,23 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
   // The dedup embedding uses fewer dimensions — Matryoshka-trained models
   // retain near-perfect cosine accuracy at 64 dims for duplicate detection.
   const dedupDims = enrichCfg.dedupEmbedDimensions ?? null;
+  t = performance.now();
   const vec = await llm.embed(`${article.title}\n${summary}`, 'document', dedupDims);
   const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
+  timings.embed += performance.now() - t;
+
+  t = performance.now();
   const duplicateOf = resolveGroupRoot(
     db,
     findDuplicate(vec, article.id, recent, enrichCfg.dupThreshold),
     article.id,
   );
+  timings.dedup += performance.now() - t;
 
   const linkTopic = db.prepare(
     'INSERT OR IGNORE INTO article_topics (article_id, topic_id) VALUES (?, ?)',
   );
+  t = performance.now();
   db.transaction(() => {
     // replace, don't merge: re-enrichment must drop corrected-away topics
     db.prepare('DELETE FROM article_topics WHERE article_id = ?').run(article.id);
@@ -499,11 +536,13 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
       article.id,
     );
   })();
+  timings.db += performance.now() - t;
 
   // Window pruning happens once per batch in syncRecentCache, not per
   // article here — dupWindowDays is measured in days, a batch in seconds.
   recent.set(article.id, { id: article.id, vec, createdAt: article.created_at });
-  return { topics, summary, depth, duplicateOf, vec };
+  addPhaseMs(timings);
+  return { topics, summary, depth, duplicateOf, vec, timings };
 }
 
 /**
@@ -576,7 +615,10 @@ export async function enrichPending(
     WHERE id = ?
   `);
 
-  const result = { enriched: 0, failed: 0, duplicates: 0, errors: [], timedOut: false };
+  const result = {
+    enriched: 0, failed: 0, duplicates: 0, errors: [], timedOut: false,
+    timings: { fetch: 0, parse: 0, chat: 0, embed: 0, dedup: 0, db: 0 },
+  };
 
   // Claiming is synchronous (select + mark in one tick), so concurrent
   // workers can never grab the same article. Note the small concurrency
@@ -597,10 +639,11 @@ export async function enrichPending(
   const processOne = async (article) => {
     onArticleStart?.();
     try {
-      const { topics, summary, depth, duplicateOf } =
+      const { topics, summary, depth, duplicateOf, timings } =
         await enrichOne(db, llm, article, recent, enrichCfg);
       result.enriched++;
       if (duplicateOf) result.duplicates++;
+      for (const [phase, ms] of Object.entries(timings)) result.timings[phase] += ms;
       onItem?.({ id: article.id, title: article.title, topics, summary, depth, duplicateOf, ...position() });
     } catch (err) {
       saveFailure.run(maxAttempts, article.id);
