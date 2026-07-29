@@ -240,6 +240,41 @@ export function repairDuplicateGroups(db) {
   `);
 }
 
+// Cumulative time spent inside any SQLite query, across the whole app
+// (every db.prepare(...).run/get/all call site — API handlers, scoring,
+// enrichment, ingest — not just enrichment's own "db" phase timing in
+// enrich.js). Companion to the event-loop-lag watchdog (lagWatchdog.js):
+// lets a stall be attributed to "this process spent Xs in SQLite" vs
+// something else, without instrumenting every call site by hand.
+let _dbQueryMs = 0;
+export function getDbQueryMs() { return _dbQueryMs; }
+
+// Wraps db.prepare so every statement it returns times its own run/get/all
+// calls — one choke point covering the whole app automatically, including
+// statements prepared once and reused many times (the common pattern
+// here, e.g. scoring.js's `const save = db.prepare(...)`). db.exec()
+// (schema/migrations below) isn't wrapped: one-time startup work, not
+// part of what runs while the app is actually serving requests.
+function instrumentQueryTiming(db) {
+  const rawPrepare = db.prepare.bind(db);
+  db.prepare = (sql) => {
+    const stmt = rawPrepare(sql);
+    for (const method of ['run', 'get', 'all']) {
+      const raw = stmt[method]?.bind(stmt);
+      if (!raw) continue;
+      stmt[method] = (...args) => {
+        const start = performance.now();
+        try {
+          return raw(...args);
+        } finally {
+          _dbQueryMs += performance.now() - start;
+        }
+      };
+    }
+    return stmt;
+  };
+}
+
 // bun:sqlite has no .pragma() convenience method (better-sqlite3's is just
 // sugar over this same pattern, which is why it exists at all: whether a
 // given pragma form returns a row is inconsistent — journal_mode does even
@@ -261,6 +296,7 @@ function pragma(db, statement) {
 export function openDb(path) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
+  instrumentQueryTiming(db);
   pragma(db, 'journal_mode = WAL');
   pragma(db, 'foreign_keys = ON');
   // better-sqlite3 waits out lock contention by default; bun:sqlite does

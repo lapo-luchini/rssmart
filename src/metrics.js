@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import { getEnrichTimings, getEnrichMaxTimings } from './enrich.js';
 import { getLagStats } from './lagWatchdog.js';
+import { getDbQueryMs } from './db.js';
 
 // Prometheus text exposition format:
 // https://prometheus.io/docs/instrumenting/exposition_formats/
@@ -176,6 +177,16 @@ export function renderMetrics(db, config, commitHash) {
   metric(lines, 'rssmart_event_loop_max_lag_seconds', 'gauge',
     'Longest single event-loop stall observed, since process start.', [
       [{}, lag.maxLagMs / 1000],
+    ]);
+
+  // Cumulative wall-clock time spent inside any SQLite query, across the
+  // whole app (see db.js's instrumentQueryTiming) — not just enrichment's
+  // own "db" phase above. Compare against rate() of process uptime to see
+  // what fraction of total time this process spends in SQLite at all,
+  // corroborating (or ruling out) the disk-I/O-stall hypothesis directly.
+  metric(lines, 'rssmart_db_query_seconds_total', 'counter',
+    'Cumulative wall-clock time spent inside any SQLite query (any table, any call site), since process start.', [
+      [{}, getDbQueryMs() / 1000],
     ]);
 
   metric(lines, 'rssmart_db_bytes', 'gauge', 'On-disk size of the SQLite database (main file + WAL + SHM).', [
