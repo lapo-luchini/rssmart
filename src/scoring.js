@@ -83,9 +83,15 @@ export function topicPrefs(db, maxSuggested, halflifeYears) {
     ORDER BY t.name
   `).all();
 
+  // existingTopicNames computed once, not once per row (was a 552-topic
+  // N+1: each call re-runs its own topics/article_topics aggregation —
+  // ~42ms x 552 rows measured live, ~23s of pure duplicate work).
   const result = !maxSuggested
     ? rows
-    : rows.map((r) => ({ ...r, suggested: new Set(existingTopicNames(db, maxSuggested)).has(r.name) }));
+    : (() => {
+        const suggested = new Set(existingTopicNames(db, maxSuggested));
+        return rows.map((r) => ({ ...r, suggested: suggested.has(r.name) }));
+      })();
 
   _topicPrefsKey = key;
   _topicPrefsCache = result;

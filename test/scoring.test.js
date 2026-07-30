@@ -65,6 +65,31 @@ test('topicPrefs marks which topics are within the LLM-suggested cap, matching e
   assert.ok(uncapped.every((t) => !('suggested' in t)), 'no cap given -> no suggested field at all');
 });
 
+test('topicPrefs computes the suggested-topics lookup once, not once per topic row', () => {
+  // Regression: the "suggested" field used to call existingTopicNames()
+  // (its own topics/article_topics aggregation query) inside rows.map(),
+  // once per topic — a 552-topic real-world corpus measured this at
+  // ~42ms x 552 = ~23s of pure duplicate work, on top of any indexing.
+  // Counting matching prepare() calls, not timing, since timing is too
+  // flaky to assert on in a test.
+  const db = tempDb();
+  seed(db, Array.from({ length: 30 }, (_, i) => ({ title: `t${i}`, topics: [`topic${i}`] })));
+
+  const rawPrepare = db.prepare.bind(db);
+  let existingTopicNamesCalls = 0;
+  db.prepare = (sql) => {
+    // existingTopicNames selects only t.name (no articles join); the
+    // main aggregation query selects t.id, t.name and joins articles —
+    // this pattern is unique to existingTopicNames' own query.
+    if (/SELECT t\.name FROM topics/.test(sql)) existingTopicNamesCalls++;
+    return rawPrepare(sql);
+  };
+
+  const rows = topicPrefs(db, 10);
+  assert.equal(rows.length, 30);
+  assert.equal(existingTopicNamesCalls, 1, "existingTopicNames' query ran once total, not once per topic row");
+});
+
 test('upvotes raise topic preference with Laplace smoothing', async () => {
   const db = tempDb();
   const ids = seed(db, [
