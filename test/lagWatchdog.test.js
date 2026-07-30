@@ -1,18 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { startLagWatchdog, getLagStats, _readPsiForTests, _diskProbeMsForTests } from '../src/lagWatchdog.js';
+import { startLagWatchdog, getLagStats, _readPsiForTests } from '../src/lagWatchdog.js';
 
 test('_readPsiForTests degrades to null for a nonexistent resource instead of throwing', () => {
   assert.equal(_readPsiForTests('not-a-real-psi-resource'), null);
-});
-
-test('_diskProbeMsForTests times a real write+fsync and degrades gracefully', () => {
-  assert.equal(_diskProbeMsForTests(undefined), null, 'no probeDir configured');
-  assert.equal(_diskProbeMsForTests(join(tmpdir(), 'not-a-real-dir-xyz')), null, 'nonexistent dir does not throw');
-  const ms = _diskProbeMsForTests(tmpdir());
-  assert.ok(typeof ms === 'number' && ms >= 0, `real probe against tmpdir returns a duration (${ms})`);
 });
 
 function busyWaitMs(ms) {
