@@ -112,6 +112,40 @@ test('default view: unread, no dupes, sorted by score then date', async () => {
   assert.equal(body.articles[0].feed_title, 'Feed One');
 });
 
+test('grouped article listing ranks/limits via a narrow CTE before fetching wide columns', () => {
+  // Regression: the grouped (dupes-bundling) query used to select a.* —
+  // every BLOB column — inside the ROW_NUMBER() ranking subquery, for
+  // every row matching the filter, before LIMIT ever applied. Live
+  // measurement against ~11k unread articles: ~2.5s -> ~200-250ms once
+  // restructured to rank/limit on a handful of narrow columns first and
+  // only join back to the full row for the already-limited winners.
+  // Asserting the query plan (not just correctness, already covered by
+  // every other test in this file) is the actual regression to guard.
+  const orderBy = "a.score - ? * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))) DESC, COALESCE(a.published_at, a.created_at) DESC";
+  const sql = `
+    EXPLAIN QUERY PLAN
+    WITH winners AS (
+      WITH ranked AS (
+        SELECT a.id, a.score, a.published_at, a.created_at, a.feed_id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY COALESCE(a.duplicate_of, a.id)
+                 ORDER BY a.score DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC
+               ) AS rn
+        FROM articles a WHERE a.read_at IS NULL
+      )
+      SELECT id FROM ranked a WHERE a.rn = 1
+      ORDER BY ${orderBy} LIMIT ? OFFSET ?
+    )
+    SELECT a.id FROM winners JOIN articles a ON a.id = winners.id
+    ORDER BY ${orderBy}
+  `;
+  const plan = db.prepare(sql).all(0.05, 50, 0, 0.05);
+  assert.ok(
+    plan.some((row) => row.detail === 'CO-ROUTINE winners'),
+    `expected the winners CTE to materialize as its own co-routine, got: ${JSON.stringify(plan)}`,
+  );
+});
+
 test('view=all with dupes=1 returns everything, date sorted', async () => {
   const { body } = await get('/api/articles?view=all&dupes=1&sort=date');
   assert.equal(body.total, 6);

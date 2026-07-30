@@ -221,22 +221,37 @@ export function createApp(db, config, commitHash) {
       });
     }
 
-    // Grouped mode: one card per duplicate group — its best-scoring member
-    // among the articles matching the filters.
-    const source = grouped
-      ? `(SELECT a.*, ROW_NUMBER() OVER (
-            PARTITION BY COALESCE(a.duplicate_of, a.id)
-            ORDER BY a.score DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC
-          ) AS rn
-          FROM articles a ${whereSql}) a
-          JOIN feeds f ON f.id = a.feed_id
-          WHERE a.rn = 1`
-      : `articles a JOIN feeds f ON f.id = a.feed_id ${whereSql}`;
+    // Narrow-then-widen: pick the winning ids using only the columns
+    // ranking/grouping/ORDER BY actually need (score, published_at,
+    // created_at, feed_id), deferring ARTICLE_COLUMNS/VERSIONS_COL's wide
+    // fetch (BLOB-backed columns, 3 correlated subqueries) to just the
+    // already-LIMITed result instead of every row matching the filter.
+    // Measured live against ~11k matching rows: ~2.5s -> ~200-250ms.
+    // `orderBy` is reused verbatim for both the winners CTE and the final
+    // ORDER BY — safe because both `ranked`/`articles` provide the same
+    // columns it references (score, published_at, created_at, feed_id).
+    const winnersSql = grouped
+      ? `WITH ranked AS (
+           SELECT a.id, a.score, a.published_at, a.created_at, a.feed_id,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(a.duplicate_of, a.id)
+                    ORDER BY a.score DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC
+                  ) AS rn
+           FROM articles a ${whereSql}
+         )
+         SELECT id FROM ranked a WHERE a.rn = 1
+         ORDER BY ${orderBy} LIMIT ? OFFSET ?`
+      : `SELECT a.id FROM articles a ${whereSql}
+         ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
 
     const rows = db.prepare(`
+      WITH winners AS (${winnersSql})
       SELECT ${ARTICLE_COLUMNS}, ${VERSIONS_COL}
-      FROM ${source} ORDER BY ${orderBy} LIMIT ? OFFSET ?
-    `).all(...params, ...orderParams, lim, off);
+      FROM winners
+      JOIN articles a ON a.id = winners.id
+      JOIN feeds f ON f.id = a.feed_id
+      ORDER BY ${orderBy}
+    `).all(...params, ...orderParams, lim, off, ...orderParams);
 
     const { total } = db.prepare(grouped
       ? `SELECT COUNT(*) AS total FROM (
