@@ -116,3 +116,26 @@ test('compressExistingContent brotli-compresses plain-text content/full_content 
   assert.equal(r3.content, null);
   assert.equal(r3.full_content, null);
 });
+
+test("idx_articles_stats lets /api/stats' aggregate run as a covering-index scan", () => {
+  // The whole point of this index (v17): avoid touching articles' full
+  // row bytes (embedding/text_embedding BLOBs, compressed content) for a
+  // query that only needs status/read_at/duplicate_of — confirmed live
+  // against the real DB (a 26.8s wall-clock request collapsed once this
+  // landed). Asserting the query plan, not just that the query still
+  // returns correct results, is the actual regression to guard against.
+  const db = tempDb();
+  const plan = db.prepare(`
+    EXPLAIN QUERY PLAN
+    SELECT COUNT(*) AS total,
+           COALESCE(SUM(read_at IS NULL), 0) AS unread,
+           COALESCE(SUM(status = 'pending'), 0) AS pending,
+           COALESCE(SUM(status = 'error'), 0) AS errors,
+           COALESCE(SUM(duplicate_of IS NOT NULL), 0) AS duplicates
+    FROM articles
+  `).all();
+  assert.ok(
+    plan.some((row) => /USING COVERING INDEX idx_articles_stats/.test(row.detail)),
+    `expected a covering-index scan, got: ${JSON.stringify(plan)}`,
+  );
+});

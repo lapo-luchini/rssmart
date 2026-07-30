@@ -157,6 +157,17 @@ const MIGRATIONS = [
   // v16 — triage's round-robin sort (server.js's DATE_ROUND_ROBIN) ranks
   // and looks up articles per feed_id; nothing indexed that column before.
   "CREATE INDEX idx_articles_feed_id ON articles(feed_id);",
+  // v17 — /api/stats' COUNT/SUM over status/read_at/duplicate_of used to be
+  // a full table scan, which means reading every row's full on-disk bytes —
+  // dominated by the embedding/text_embedding BLOBs and compressed
+  // content/full_content, not the three small columns actually needed.
+  // Live evidence (rssmart_db_query_seconds_total tracking almost exactly
+  // one /api/stats request's 26.8s wall-clock time, while a plain disk
+  // write+fsync probe taken moments later stayed under 10ms) pointed at
+  // this scan's sheer page count, not a broadly stalled disk. A covering
+  // index over just these three columns lets SQLite answer the whole
+  // query from compact index pages, never touching the BLOB-heavy rows.
+  "CREATE INDEX idx_articles_stats ON articles(status, read_at, duplicate_of);",
 ];
 
 /**
