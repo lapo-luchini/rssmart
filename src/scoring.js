@@ -78,7 +78,7 @@ export function topicPrefs(db, maxSuggested, halflifeYears) {
            ${makePrefExpr(halflifeYears)} AS pref
     FROM topics t
     LEFT JOIN article_topics at ON at.topic_id = t.id
-    LEFT JOIN articles a ON a.id = at.article_id
+    LEFT JOIN articles a INDEXED BY idx_articles_id_vote ON a.id = at.article_id
     GROUP BY t.id
     ORDER BY t.name
   `).all();

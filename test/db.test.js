@@ -139,3 +139,27 @@ test("idx_articles_stats lets /api/stats' aggregate run as a covering-index scan
     `expected a covering-index scan, got: ${JSON.stringify(plan)}`,
   );
 });
+
+test('idx_articles_id_vote lets topicPrefs\' articles join run as a covering-index scan (with INDEXED BY)', () => {
+  // v18/v19: a rowid-keyed LEFT JOIN (article_topics -> articles by id)
+  // always reads the full row unless forced onto a covering secondary
+  // index — SQLite's planner won't pick this automatically (confirmed
+  // live: without INDEXED BY it stays "USING INTEGER PRIMARY KEY" even
+  // with the index present). scoring.js's topicPrefs forces it; this
+  // pins the schema-side half of that fix (the index must actually
+  // cover id, vote, voted_at, created_at — decayedVoteExpr needs all four).
+  const db = tempDb();
+  const plan = db.prepare(`
+    EXPLAIN QUERY PLAN
+    SELECT t.id,
+           COALESCE(SUM(MAX(a.vote * exp(-ln(2) * (julianday('now') - julianday(COALESCE(a.voted_at, a.created_at))) / (1.5 * 365.25)), 0)), 0) AS up
+    FROM topics t
+    LEFT JOIN article_topics at ON at.topic_id = t.id
+    LEFT JOIN articles a INDEXED BY idx_articles_id_vote ON a.id = at.article_id
+    GROUP BY t.id
+  `).all();
+  assert.ok(
+    plan.some((row) => /USING COVERING INDEX idx_articles_id_vote/.test(row.detail)),
+    `expected a covering-index scan, got: ${JSON.stringify(plan)}`,
+  );
+});

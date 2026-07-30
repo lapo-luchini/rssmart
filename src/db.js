@@ -168,6 +168,43 @@ const MIGRATIONS = [
   // index over just these three columns lets SQLite answer the whole
   // query from compact index pages, never touching the BLOB-heavy rows.
   "CREATE INDEX idx_articles_stats ON articles(status, read_at, duplicate_of);",
+  // v18 — topicPrefs (src/scoring.js, backs /api/topics) had the same
+  // full-scan problem twice over: its own change-detection cache-key
+  // query (SUM(vote != 0), SUM(status = 'enriched')) was a plain
+  // `SCAN articles`, fixed the same way as v17 with a covering index.
+  // The actual per-topic aggregation query is a different shape though:
+  // it LEFT JOINs article_topics -> articles by id (the rowid), once per
+  // article-topic link (thousands of rows), and a rowid lookup always
+  // reads the full row — there's no way to "cover" a rowid join with a
+  // normal index in the abstract. A redundant secondary index over
+  // (id, vote) makes it *possible* for SQLite to answer "vote WHERE
+  // id = ?" from that small index alone — confirmed via EXPLAIN QUERY
+  // PLAN that it changes "SEARCH a USING INTEGER PRIMARY KEY" to
+  // "SEARCH a USING COVERING INDEX idx_articles_id_vote" and returns
+  // identical rows. BUT SQLite's query planner doesn't pick this
+  // automatically (its cost model has no notion of "this row is
+  // expensive because of BLOB overflow pages") — topicPrefs' own query
+  // has to force it with `INDEXED BY idx_articles_id_vote` (see
+  // src/scoring.js). The index alone, without that hint, changes nothing.
+  (db) => {
+    db.exec('CREATE INDEX idx_articles_vote_status ON articles(vote, status);');
+    db.exec('CREATE INDEX idx_articles_id_vote ON articles(id, vote);');
+  },
+  // v19 — idx_articles_id_vote (v18) turned out too narrow: topicPrefs'
+  // real query needs voted_at/created_at too (decayedVoteExpr, used
+  // whenever scoring.voteDecayHalflifeYears is set — the documented
+  // default). Verified live: forcing v18's (id, vote) index via INDEXED
+  // BY still showed "SEARCH a USING INDEX" (no "COVERING") once the
+  // decay expression was included — it had to fall back to the main
+  // table for the extra columns, defeating the point. Widening to
+  // (id, vote, voted_at, created_at) gets the real "USING COVERING
+  // INDEX" plan; confirmed identical output too (row-for-row, aside from
+  // ~1e-8-scale float summation-order noise in the decayed-vote sums,
+  // inherent to any change in aggregation order and not a real diff).
+  (db) => {
+    db.exec('DROP INDEX idx_articles_id_vote;');
+    db.exec('CREATE INDEX idx_articles_id_vote ON articles(id, vote, voted_at, created_at);');
+  },
 ];
 
 /**
