@@ -90,16 +90,27 @@ const BY_DATE = 'COALESCE(a.published_at, a.created_at) DESC';
 function dateRoundRobinSql(windowDays) {
   return `
   CASE
-    WHEN (
-      SELECT MAX(COALESCE(a2.published_at, a2.created_at))
-      FROM articles a2 WHERE a2.feed_id = a.feed_id
-    ) >= datetime('now', '-${windowDays} days')
+    WHEN fl.latest >= datetime('now', '-${windowDays} days')
     THEN ROW_NUMBER() OVER (PARTITION BY a.feed_id ORDER BY COALESCE(a.published_at, a.created_at) DESC)
     ELSE 1000000
   END,
   ${BY_DATE}
 `;
 }
+
+// Feeds a.feed_id joins against — each feed's own latest post, computed
+// once (GROUP BY feed_id, ~hundreds of feeds) instead of the correlated
+// MAX subquery this replaced (once per candidate *article*, ~thousands —
+// measured live at ~7-8s against a ~13k-article corpus, each iteration a
+// real index seek, not a scan, but there were just too many of them).
+// Only joined in when sort=date-rr actually needs it (see articleQuery's
+// extraJoin) — every other sort ignores fl entirely.
+const FEED_LATEST_JOIN = `
+  LEFT JOIN (
+    SELECT feed_id, MAX(COALESCE(published_at, created_at)) AS latest
+    FROM articles GROUP BY feed_id
+  ) fl ON fl.feed_id = a.feed_id
+`;
 
 /**
  * Translate list-endpoint query params into SQL; returns {error} on bad
@@ -151,6 +162,7 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
     params,
     orderParams,
     grouped: dupes !== '1', // default: bundle repeats, show best of each group
+    extraJoin: sortKey === 'date-rr' ? FEED_LATEST_JOIN : '',
     orderBy,
     lim: Math.min(Math.max(Number(limit) || 50, 1), 200),
     off: Math.max(Number(offset) || 0, 0),
@@ -206,7 +218,7 @@ export function createApp(db, config, commitHash) {
 
     const parsed = articleQuery(query, config, { skipTextFilter: isSemantic });
     if (parsed.error) return c.json({ error: parsed.error }, 400);
-    const { whereSql, params, orderParams, grouped, orderBy, lim, off } = parsed;
+    const { whereSql, params, orderParams, grouped, extraJoin, orderBy, lim, off } = parsed;
 
     if (isSemantic) {
       let ranked;
@@ -239,9 +251,9 @@ export function createApp(db, config, commitHash) {
                   ) AS rn
            FROM articles a ${whereSql}
          )
-         SELECT id FROM ranked a WHERE a.rn = 1
+         SELECT id FROM ranked a ${extraJoin} WHERE a.rn = 1
          ORDER BY ${orderBy} LIMIT ? OFFSET ?`
-      : `SELECT a.id FROM articles a ${whereSql}
+      : `SELECT a.id FROM articles a ${extraJoin} ${whereSql}
          ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
 
     const rows = db.prepare(`
@@ -250,6 +262,7 @@ export function createApp(db, config, commitHash) {
       FROM winners
       JOIN articles a ON a.id = winners.id
       JOIN feeds f ON f.id = a.feed_id
+      ${extraJoin}
       ORDER BY ${orderBy}
     `).all(...params, ...orderParams, lim, off, ...orderParams);
 

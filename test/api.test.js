@@ -305,6 +305,46 @@ test('date-rr sort round-robins across active feeds, leaving stale feeds out of 
   }
 });
 
+test('date-rr sort computes each feed\'s latest post once, not once per article', () => {
+  // Regression: dateRoundRobinSql used to run a correlated MAX subquery
+  // once per candidate article (each its own index seek, but there were
+  // thousands of them — measured live at ~7-8s against a ~13k-article
+  // corpus). Replaced with a single per-feed aggregate (GROUP BY feed_id,
+  // far fewer feeds than articles), joined in. A materialized subquery
+  // (not a correlated one re-run per row) is the actual regression to
+  // guard — assert the plan shows it, not just that results are still
+  // correct (already covered by the test above).
+  const windowDays = 3;
+  const orderBy = `
+    CASE
+      WHEN fl.latest >= datetime('now', '-${windowDays} days')
+      THEN ROW_NUMBER() OVER (PARTITION BY a.feed_id ORDER BY COALESCE(a.published_at, a.created_at) DESC)
+      ELSE 1000000
+    END,
+    COALESCE(a.published_at, a.created_at) DESC
+  `;
+  const feedLatestJoin = `
+    LEFT JOIN (
+      SELECT feed_id, MAX(COALESCE(published_at, created_at)) AS latest
+      FROM articles GROUP BY feed_id
+    ) fl ON fl.feed_id = a.feed_id
+  `;
+  const sql = `
+    EXPLAIN QUERY PLAN
+    SELECT a.id FROM articles a ${feedLatestJoin} WHERE a.status = 'enriched'
+    ORDER BY ${orderBy} LIMIT ? OFFSET ?
+  `;
+  const plan = db.prepare(sql).all(50, 0);
+  assert.ok(
+    plan.some((row) => row.detail === 'MATERIALIZE fl'),
+    `expected the per-feed aggregate to materialize once, got: ${JSON.stringify(plan)}`,
+  );
+  assert.ok(
+    !plan.some((row) => /CORRELATED SCALAR SUBQUERY/.test(row.detail)),
+    `expected no per-row correlated subquery left over, got: ${JSON.stringify(plan)}`,
+  );
+});
+
 test('article detail includes content; unknown id -> 404', async () => {
   const ok = await get(`/api/articles/${ids.fresh}`);
   assert.equal(ok.body.content, 'body');
