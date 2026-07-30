@@ -11,6 +11,8 @@ import { semanticSearch } from './search.js';
 import { decompressText } from './compress.js';
 import { proposeTopicMerges, applyTopicMerge } from './topicMerge.js';
 import { renderMetrics } from './metrics.js';
+import { getDbQueryMs } from './db.js';
+import { log } from './log.js';
 
 // Bun ships its own static-file middleware (hono/bun); Node needs
 // @hono/node-server's, which resolves relative paths from the process cwd
@@ -178,6 +180,19 @@ function fetchInRankOrder(db, ranked) {
 
 export function createApp(db, config, commitHash) {
   const app = new Hono();
+  // Per-request timing: wall-clock vs cumulative SQLite query time (see
+  // db.js's getDbQueryMs) for every API call — the same evidence that
+  // pinned /api/stats' full-table-scan cost down to the exact query,
+  // now on tap for whichever endpoint gets slow next. Registered first
+  // so it wraps bodyLimit too (a 413 still gets logged).
+  app.use('/api/*', async (c, next) => {
+    const wallStart = performance.now();
+    const dbStart = getDbQueryMs();
+    await next();
+    const wallMs = performance.now() - wallStart;
+    const dbMs = getDbQueryMs() - dbStart;
+    log(`${c.req.method} ${c.req.path} ${c.res.status} wall=${wallMs.toFixed(0)}ms db=${dbMs.toFixed(0)}ms`);
+  });
   app.use('/api/*', bodyLimit({
     maxSize: 2 * 1024 * 1024, // OPML imports ride in JSON
     onError: (c) => c.json({ error: 'request body too large' }, 413),
