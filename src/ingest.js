@@ -79,9 +79,24 @@ export async function fetchFeedXml(url, timeoutMs = 30_000) {
   return decodeBytes(bytes, charset);
 }
 
+/**
+ * Some feeds glue a headline and a separate dek/subtitle into one <title>
+ * via two back-to-back CDATA sections -- syntactically valid XML, but
+ * xml2js (which rss-parser uses under the hood) concatenates their text
+ * with nothing in between, so "Headline" + "Dek text" comes out as
+ * "HeadlineDek text" with the join invisible until you notice a sentence
+ * running into the next with no space. Inserting a single space at the
+ * CDATA boundary itself, before parsing, fixes exactly that join without
+ * risking any of the legitimate camelCase brand names (iPhone, DeepMind,
+ * GitHub...) that live inside a single CDATA block untouched.
+ */
+export function fixAdjacentCdata(xml) {
+  return xml.replace(/\]\]>\s*<!\[CDATA\[/g, ']]> <![CDATA[');
+}
+
 /** Fetch one feed and insert its new items. Returns the new-article count. */
 export async function ingestFeed(db, feed, parser) {
-  const parsed = await parser.parseString(await fetchFeedXml(feed.url));
+  const parsed = await parser.parseString(fixAdjacentCdata(await fetchFeedXml(feed.url)));
 
   const insert = db.prepare(`
     INSERT OR IGNORE INTO articles

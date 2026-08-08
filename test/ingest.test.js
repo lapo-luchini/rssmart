@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb, rssXml, startRssServer, testConfig } from './helpers.js';
-import { syncFeeds, ingestAll } from '../src/ingest.js';
+import { syncFeeds, ingestAll, fixAdjacentCdata } from '../src/ingest.js';
 import { decompressText } from '../src/compress.js';
 
 test('ingestAll inserts items once and is idempotent', async () => {
@@ -102,6 +102,50 @@ test('a failing feed is recorded and does not abort other feeds', async () => {
 
     const bad = db.prepare('SELECT last_status FROM feeds WHERE url LIKE ?').get('%missing%');
     assert.match(bad.last_status, /^error:/);
+  } finally {
+    await rss.close();
+  }
+});
+
+test('fixAdjacentCdata inserts a space at a back-to-back CDATA seam', () => {
+  assert.equal(
+    fixAdjacentCdata('<title><![CDATA[Headline]]><![CDATA[Dek text]]></title>'),
+    '<title><![CDATA[Headline]]> <![CDATA[Dek text]]></title>',
+  );
+  // a lone CDATA (the overwhelmingly common case) is untouched
+  assert.equal(
+    fixAdjacentCdata('<title><![CDATA[iPhone gets a new camera]]></title>'),
+    '<title><![CDATA[iPhone gets a new camera]]></title>',
+  );
+});
+
+test('a title split across two adjacent CDATA sections keeps its word boundary (real Ars Technica case)', async () => {
+  const db = tempDb();
+  const rss = await startRssServer();
+  rss.routes.set('/feed.xml', `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test Feed</title>
+    <link>https://example.com</link>
+    <description>test</description>
+    <item>
+      <title><![CDATA[DeepMind’s hurricane model bought forecasters an extra day]]><![CDATA[Open source WeatherNext model can make accurate predictions with lower-resolution data]]></title>
+      <link>https://example.com/a</link>
+      <guid>guid-a</guid>
+    </item>
+  </channel>
+</rss>`);
+
+  try {
+    syncFeeds(db, [{ url: `${rss.url}/feed.xml` }]);
+    await ingestAll(db, testConfig());
+    const art = db.prepare('SELECT title FROM articles').get();
+    // the CDATA seam ("day" | "Open") gets a space; "WeatherNext" -- a real
+    // product name, not a seam -- must stay exactly as it was in its CDATA.
+    assert.equal(
+      art.title,
+      'DeepMind’s hurricane model bought forecasters an extra day Open source WeatherNext model can make accurate predictions with lower-resolution data',
+    );
   } finally {
     await rss.close();
   }
