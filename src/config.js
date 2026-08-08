@@ -59,6 +59,9 @@ const SCHEMA = {
     host: 'string',
     port: 'number',
   },
+  auth: {
+    password: 'string',
+  },
 };
 
 /**

@@ -13,6 +13,8 @@ import { proposeTopicMerges, applyTopicMerge } from './topicMerge.js';
 import { renderMetrics } from './metrics.js';
 import { getDbQueryMs } from './db.js';
 import { log } from './log.js';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySession, passwordMatches } from './auth.js';
 
 // Bun ships its own static-file middleware (hono/bun); Node needs
 // @hono/node-server's, which resolves relative paths from the process cwd
@@ -192,6 +194,41 @@ function fetchInRankOrder(db, ranked) {
 
 export function createApp(db, config, commitHash) {
   const app = new Hono();
+
+  // Single-password login (config.example.yaml's auth.password),
+  // independent of anything a reverse proxy does: a login page + signed
+  // cookie, not the browser's native HTTP Basic Auth dialog, which an
+  // installed PWA's standalone window often can't show or retain
+  // properly. Disabled entirely (previous, always-open behavior) when
+  // auth.password is empty. Registered first so nothing downstream --
+  // timing, DB work, static files -- runs for a request that fails it.
+  app.use('*', async (c, next) => {
+    if (!config.auth.password) return next();
+    if (c.req.path === '/login' || c.req.path === '/login.html') return next();
+    if (verifySession(config.auth.password, getCookie(c, SESSION_COOKIE))) return next();
+    if (c.req.path.startsWith('/api/')) return c.json({ error: 'authentication required' }, 401);
+    return c.redirect('/login.html');
+  });
+
+  app.post('/login', async (c) => {
+    const body = await c.req.parseBody();
+    if (!passwordMatches(config.auth.password, body.password)) {
+      return c.redirect('/login.html?error=1');
+    }
+    setCookie(c, SESSION_COOKIE, signSession(config.auth.password), {
+      httpOnly: true,
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: SESSION_TTL_MS / 1000,
+    });
+    return c.redirect('/');
+  });
+
+  app.post('/logout', (c) => {
+    deleteCookie(c, SESSION_COOKIE, { path: '/' });
+    return c.redirect('/login.html');
+  });
+
   // Per-request timing: wall-clock vs cumulative SQLite query time (see
   // db.js's getDbQueryMs) for every API call — the same evidence that
   // pinned /api/stats' full-table-scan cost down to the exact query,

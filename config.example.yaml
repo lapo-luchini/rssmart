@@ -119,11 +119,20 @@ mastodon:
   username: ''                    # HTTP Basic Auth (Friendica)
   password: ''
 
+# Native login, independent of anything a reverse proxy does. Empty string
+# disables it entirely (the previous, always-unauthenticated behavior) --
+# set a password to require a login page before anything else loads.
+# Useful on mobile: an installed PWA's standalone window often can't show
+# (or keep) a browser's native HTTP Basic Auth dialog properly, but a
+# plain login page + cookie works the same as it does in any browser tab.
+auth:
+  password: ''
+
 server:
-  host: 127.0.0.1  # loopback only, since this has no auth of its own;
-                   # use 0.0.0.0 (or a LAN address) with care, only on a
-                   # network you trust, ideally behind your own reverse
-                   # proxy/auth
+  host: 127.0.0.1  # loopback only by default; use 0.0.0.0 (or a LAN
+                   # address) with care, only on a network you trust. auth
+                   # above covers the app itself, but a reverse proxy is
+                   # still worth keeping in front for TLS/external access.
   port: 8098
 
 # Feeds are managed from the web UI (Feeds tab: add, enable/disable, OPML
