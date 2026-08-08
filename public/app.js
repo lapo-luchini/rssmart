@@ -1,5 +1,9 @@
 import { createApp } from './vendor/vue.esm-browser.prod.js';
 
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js'));
+}
+
 const LIMIT = 50;
 const TRIAGE_BATCH = 30;
 
