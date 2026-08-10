@@ -6,6 +6,8 @@
  * Friendica's Mastodon-compatible API is also supported via Basic Auth.
  */
 
+import { stripHtml } from './html.js';
+
 const TIMEOUT_MS = 30_000;
 const PAGE_LIMIT = 40;
 
@@ -55,12 +57,17 @@ export class Mastodon {
   }
 }
 
-function normalize(status, instanceUrl) {
+export function normalize(status, instanceUrl) {
   // Boosts (reblogs) have content='' in the wrapper; the real post is nested.
   const post = status.reblog ?? status;
   const acct = post.account?.acct ?? 'unknown';
   const html = post.content ?? '';
-  let plain = html.replace(/<[^>]*>/g, '').trim();
+  // Mastodon wraps each paragraph of a toot in its own <p> -- stripping tags
+  // to nothing (rather than to a space, like stripHtml does) glues adjacent
+  // paragraphs together with no separator at all, e.g. "...or sad</p><p>fMRI
+  // scans..." -> "...or sadfMRI scans...". Confirmed live on a synced
+  // production DB: a Fediverse post's title came out exactly this way.
+  let plain = stripHtml(html);
 
   // Media-only posts (images/video with no text): synthesize a minimal
   // title and content so the LLM has something to classify.
