@@ -181,6 +181,40 @@ test('blended score combines topics, embedding kNN, depth and feed', async () =>
   near(c2.score_embedding, 0.3);
 });
 
+test('score_novelty: 1 - highest similarity to any voted article, null when there\'s no basis', async () => {
+  const db = tempDb();
+  const ids = seed(db, [
+    { title: 'liked', vote: 1 },
+    { title: 'same-as-liked' },
+    { title: 'orthogonal-to-liked' },
+    { title: 'no-embedding-yet' },
+  ]);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vecBuf(1, 0), ids.liked);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vecBuf(1, 0), ids['same-as-liked']);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vecBuf(0, 1), ids['orthogonal-to-liked']);
+
+  await recomputeScores(db, testConfig());
+  const novelty = (id) => db.prepare('SELECT score_novelty FROM articles WHERE id = ?').get(id).score_novelty;
+  const near = (x, y) => assert.ok(Math.abs(x - y) < 1e-9, `${x} != ${y}`);
+
+  near(novelty(ids['same-as-liked']), 0, 'identical to a voted article -> not novel at all');
+  near(novelty(ids['orthogonal-to-liked']), 1, 'nothing in common with anything voted -> maximally novel');
+  assert.equal(novelty(ids['no-embedding-yet']), null, 'no embedding yet -> no basis to judge novelty');
+  near(novelty(ids.liked), 0, "a voted article's nearest voted neighbor is itself (sim=1) -- trivially not novel, unlike score_embedding which excludes self");
+});
+
+test('score_novelty stays null for everyone when nothing has been voted on yet', async () => {
+  const db = tempDb();
+  const ids = seed(db, [{ title: 'a' }, { title: 'b' }]);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vecBuf(1, 0), ids.a);
+  db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vecBuf(0, 1), ids.b);
+
+  await recomputeScores(db, testConfig());
+  const novelty = (id) => db.prepare('SELECT score_novelty FROM articles WHERE id = ?').get(id).score_novelty;
+  assert.equal(novelty(ids.a), null);
+  assert.equal(novelty(ids.b), null);
+});
+
 test('embedding anti-kNN: separate up/down passes, each limited to k', async () => {
   const db = tempDb();
   const ids = seed(db, [

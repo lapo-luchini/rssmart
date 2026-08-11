@@ -345,6 +345,90 @@ test('date-rr sort computes each feed\'s latest post once, not once per article'
   );
 });
 
+// Both novelty tests below call recomputeScores, which would clobber the
+// shared file-level db's score/score_bonus columns for every other test
+// still to run (they rely on the ONE recompute seed() does, before
+// embeddings even exist — see its own comment) -- so, like "hot sort"
+// and the semantic-error test above, these get their own isolated
+// db/app instead of touching the shared one.
+test('novelty sort ranks by distance from voted embeddings, unembedded articles last', async () => {
+  const nDb = tempDb();
+  nDb.prepare("INSERT INTO feeds (id, url, title) VALUES (1, 'http://nv', 'Novelty Feed')").run();
+  const insArt = nDb.prepare(`
+    INSERT INTO articles (feed_id, guid, title, content, status)
+    VALUES (1, ?, ?, ?, 'enriched')
+  `);
+  const insert = (guid, title) =>
+    Number(insArt.run(guid, title, compressText('body')).lastInsertRowid);
+
+  const votedAnchor = insert('nv-voted', 'Voted anchor');
+  const same = insert('nv-same', 'Same embedding as the voted anchor');
+  const far = insert('nv-far', 'Orthogonal to the voted anchor');
+  const unembedded = insert('nv-none', 'Not embedded yet');
+  nDb.prepare('UPDATE articles SET vote = 1 WHERE id = ?').run(votedAnchor);
+  nDb.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec(1, 0, 0, 0), votedAnchor);
+  nDb.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec(1, 0, 0, 0), same);
+  nDb.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec(0, 1, 0, 0), far);
+  await recomputeScores(nDb, testConfig());
+
+  const nServer = await startApp(createApp(nDb, testConfig()));
+  try {
+    const res = await fetch(`${nServer.url}/api/articles?view=all&status=enriched&dupes=1&sort=novelty`);
+    const body = await res.json();
+    const tracked = new Set([same, far, unembedded]);
+    const order = body.articles.filter((a) => tracked.has(a.id)).map((a) => a.id);
+    assert.deepEqual(
+      order, [far, same, unembedded],
+      'furthest from the voted anchor first, an unembedded article last regardless of the rest',
+    );
+  } finally {
+    await nServer.close();
+  }
+});
+
+test('novelty sort composes with grouped (duplicate-bundling) mode', async () => {
+  // Regression: the narrow "winners" CTE only ever selected the columns
+  // orderBy's SQL text references (score, published_at, created_at,
+  // feed_id) -- adding a sort that references a.score_novelty without
+  // also adding it to that CTE's SELECT list would throw "no such
+  // column" as soon as grouping (the default, dupes != '1') was active.
+  const nDb = tempDb();
+  nDb.prepare("INSERT INTO feeds (id, url, title) VALUES (1, 'http://nvg', 'Novelty Grouped Feed')").run();
+  const insArt = nDb.prepare(`
+    INSERT INTO articles (feed_id, guid, title, content, status, duplicate_of)
+    VALUES (1, ?, ?, ?, 'enriched', ?)
+  `);
+  const insert = (guid, title, duplicateOf) =>
+    Number(insArt.run(guid, title, compressText('body'), duplicateOf ?? null).lastInsertRowid);
+
+  const votedAnchor = insert('nvg-voted', 'Voted anchor', null);
+  const root = insert('nvg-root', 'Group root (less novel)', null);
+  const repeat = insert('nvg-repeat', 'Group repeat', root);
+  const other = insert('nvg-other', 'Different group (more novel)', null);
+  nDb.prepare('UPDATE articles SET vote = 1 WHERE id = ?').run(votedAnchor);
+  nDb.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec(1, 0, 0, 0), votedAnchor);
+  nDb.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec(1, 0, 0, 0), root);
+  nDb.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec(1, 0, 0, 0), repeat);
+  nDb.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?').run(vec(0, 1, 0, 0), other);
+  await recomputeScores(nDb, testConfig());
+
+  const nServer = await startApp(createApp(nDb, testConfig()));
+  try {
+    const res = await fetch(`${nServer.url}/api/articles?view=all&status=enriched&sort=novelty`);
+    const body = await res.json();
+    // root and repeat tie on novelty (identical embeddings) -- which one
+    // wins the group (ROW_NUMBER's own score/date/id tiebreak) isn't what
+    // this test is about, only that grouping and novelty compose at all.
+    const tracked = new Set([root, repeat, other]);
+    const order = body.articles.filter((a) => tracked.has(a.id)).map((a) => a.id);
+    assert.equal(order.length, 2, 'one representative per duplicate group, not two');
+    assert.equal(order[0], other, 'the more novel group ranks first');
+    assert.ok(order[1] === root || order[1] === repeat, 'the less novel group is represented by one of its members');
+  } finally {
+    await nServer.close();
+  }
+});
+
 test('article detail includes content; unknown id -> 404', async () => {
   const ok = await get(`/api/articles/${ids.fresh}`);
   assert.equal(ok.body.content, 'body');

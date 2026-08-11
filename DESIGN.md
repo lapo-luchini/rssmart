@@ -574,6 +574,26 @@ day-one spec was retired for exactly that reason; it's in git history).
   `--sans` (`system-ui` etc.) now. No separate "reading" font stack was
   introduced: system-ui renders well at both UI-chrome and article-body
   sizes, so reusing one stack was simpler than maintaining two.
+- **"Explore" sort surfaces distance from your voting history as a first-
+  class ranking, not just a passive nudge.** The blended `score` already
+  carried a small +0.05 "exploratory bonus" (see below) for articles far
+  from everything voted on — enough to keep novel content off the noise
+  floor, not enough to deliberately go looking for it. `score_novelty`
+  (`1 - highest similarity to any voted article`, persisted per article
+  during `recomputeScores`, same `pairSims` the bonus already computes) is
+  a real sort key (`sort=novelty` / the "explore" option) for when the goal
+  is specifically "show me directions unlike what I already like," not
+  "rank what's already relevant." NULL (not 0) until there's a real basis
+  — no embedding yet, or nothing voted on at all — so it degrades to a
+  no-op before you've cast a handful of votes rather than lying that
+  everything is equally novel. No new UI mode was needed: it's just
+  another entry in the existing sort dropdown, so both "⚡ triage this"
+  (fast one-at-a-time) and normal browsing work on it for free.
+- **The exploratory bonus lives in `score_bonus`, a flat +0.05 lift when an
+  article's embedding is far (max cosine similarity < 0.3) from every
+  voted article.** Keeps serendipitous content from being buried by the
+  kNN/topic terms in ordinary "hot"/"score" browsing, independent of the
+  explore sort above.
 
 ## How the cosine math actually runs
 

@@ -52,6 +52,7 @@
         <option value="hot" title="interest, but a fresh article doesn't need as high a score to compete with an old one">hot</option>
         <option value="score">by interest</option>
         <option value="date">by date</option>
+        <option value="novelty" title="furthest from anything you've voted on so far — for finding new directions, not just more of the same">explore</option>
       </select>
       <em v-else class="feed-notice">sorted by relevance</em>
       <input type="search" v-model="q" placeholder="search…" aria-label="Search articles">

@@ -223,17 +223,21 @@ function makeKnnScratches(k) {
   };
 }
 
+function maxSimilarity(pairSims) {
+  let maxSim = 0;
+  for (let j = 0; j < pairSims.length; j++) {
+    if (pairSims[j] > maxSim) maxSim = pairSims[j];
+  }
+  return maxSim;
+}
+
 /**
  * Exploratory bonus: articles whose embedding is far from all voted
  * articles get a small positive lift (0.05). This prevents the system
  * from only ever surfacing content similar to what you already know,
  * helping serendipitous discovery on unvoted topics or styles.
  */
-function exploratoryBonus(pairSims) {
-  let maxSim = 0;
-  for (let j = 0; j < pairSims.length; j++) {
-    if (pairSims[j] > maxSim) maxSim = pairSims[j];
-  }
+function exploratoryBonus(maxSim) {
   return maxSim < 0.3 ? 0.05 : 0;
 }
 
@@ -287,13 +291,21 @@ function scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, s
   let embedding = 0;
   let topicNeighbor = null;
   let bonus = 0;
+  // How different this article is from everything voted on so far (1 -
+  // highest similarity to any voted article) -- null, not 0, when there's
+  // no basis for a real answer (no embedding yet, or nothing voted at all
+  // to compare against), so an "explore" sort can tell "actually novel"
+  // apart from "unknown" instead of treating both the same.
+  let novelty = null;
 
   if (row.text_embedding && voted.length > 0) {
     const vec = bufToVec(row.text_embedding);
     const pairSims = batcher.query(vec);
     embedding = weights.embedding * knnScore(row, voted, knn, scratches, batcher, pairSims);
     topicNeighbor = topicNeighborScore(pairSims, voted, row.id, topicMap, halflife);
-    bonus = exploratoryBonus(pairSims);
+    const maxSim = maxSimilarity(pairSims);
+    bonus = exploratoryBonus(maxSim);
+    novelty = 1 - maxSim;
   }
 
   // Topic signal: blend aggregate preference (from the article's topic
@@ -318,12 +330,12 @@ function scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, s
   // Exploratory bonus lifts unfamiliar content above the noise floor.
   const total = topics + embedding + depth + feed + bonus;
 
-  return { topics, embedding, depth, feed, bonus, total };
+  return { topics, embedding, depth, feed, bonus, novelty, total };
 }
 
 const SAVE_SCORE = `
   UPDATE articles
-  SET score_topics = ?, score_embedding = ?, score_depth = ?, score_feed = ?, score_bonus = ?, score = ?
+  SET score_topics = ?, score_embedding = ?, score_depth = ?, score_feed = ?, score_bonus = ?, score_novelty = ?, score = ?
   WHERE id = ?
 `;
 
@@ -409,7 +421,7 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
           const row = rows[i++];
           const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
             authorPref.get(row.author), voted, weights, knn, scratches, batcher, topicMap, halflife);
-          save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.total, row.id);
+          save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, row.id);
         } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
       })();
       if (i < rows.length) await sleep(0);
@@ -477,7 +489,7 @@ export function recomputeOneScore(db, config, articleId) {
     }
   }
   const s = scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, makeKnnScratches(knn), batcher, topicMap, halflife);
-  db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.total, articleId);
+  db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, articleId);
 }
 
 const RECOMPUTE_DUE_KEY = 'score_recompute_due_at';

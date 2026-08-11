@@ -144,7 +144,7 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
   pushMatchFilters(where, params, { topic, feedId, q, skipTextFilter });
 
   const sortKey = sort ?? (view === 'interesting' ? 'hot' : 'date');
-  if (!['hot', 'score', 'date', 'date-rr'].includes(sortKey)) {
+  if (!['hot', 'score', 'date', 'date-rr', 'novelty'].includes(sortKey)) {
     return { error: `unknown sort "${sort}"` };
   }
 
@@ -156,7 +156,12 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
   const orderBy = { hot: 'a.score - ? * (julianday(\'now\') - julianday(COALESCE(a.published_at, a.created_at))) DESC, ' + BY_DATE,
     score: 'a.score DESC, ' + BY_DATE,
     date: BY_DATE,
-    'date-rr': dateRoundRobinSql(config.triage.roundRobinWindowDays) }[sortKey];
+    'date-rr': dateRoundRobinSql(config.triage.roundRobinWindowDays),
+    // How different from everything voted on so far (see score_novelty's
+    // migration comment, src/db.js). NULLs (no embedding yet, or nothing
+    // voted on at all) sort last under SQLite's default DESC ordering —
+    // exactly where "no basis to judge novelty" belongs.
+    novelty: 'a.score_novelty DESC, ' + BY_DATE }[sortKey];
   const orderParams = sortKey === 'hot' ? [config.scoring.hotDecayPerDay] : [];
 
   return {
@@ -271,17 +276,18 @@ export function createApp(db, config, commitHash) {
     }
 
     // Narrow-then-widen: pick the winning ids using only the columns
-    // ranking/grouping/ORDER BY actually need (score, published_at,
-    // created_at, feed_id), deferring ARTICLE_COLUMNS/VERSIONS_COL's wide
-    // fetch (BLOB-backed columns, 3 correlated subqueries) to just the
-    // already-LIMITed result instead of every row matching the filter.
-    // Measured live against ~11k matching rows: ~2.5s -> ~200-250ms.
-    // `orderBy` is reused verbatim for both the winners CTE and the final
-    // ORDER BY — safe because both `ranked`/`articles` provide the same
-    // columns it references (score, published_at, created_at, feed_id).
+    // ranking/grouping/ORDER BY actually need (score, score_novelty,
+    // published_at, created_at, feed_id), deferring ARTICLE_COLUMNS/
+    // VERSIONS_COL's wide fetch (BLOB-backed columns, 3 correlated
+    // subqueries) to just the already-LIMITed result instead of every row
+    // matching the filter. Measured live against ~11k matching rows:
+    // ~2.5s -> ~200-250ms. `orderBy` is reused verbatim for both the
+    // winners CTE and the final ORDER BY — safe because both
+    // `ranked`/`articles` provide the same columns it references (score,
+    // score_novelty, published_at, created_at, feed_id).
     const winnersSql = grouped
       ? `WITH ranked AS (
-           SELECT a.id, a.score, a.published_at, a.created_at, a.feed_id,
+           SELECT a.id, a.score, a.score_novelty, a.published_at, a.created_at, a.feed_id,
                   ROW_NUMBER() OVER (
                     PARTITION BY COALESCE(a.duplicate_of, a.id)
                     ORDER BY a.score DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC

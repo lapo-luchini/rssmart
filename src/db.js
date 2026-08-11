@@ -205,6 +205,14 @@ const MIGRATIONS = [
     db.exec('DROP INDEX idx_articles_id_vote;');
     db.exec('CREATE INDEX idx_articles_id_vote ON articles(id, vote, voted_at, created_at);');
   },
+  // v20 — "explore" sort (src/server.js, src/scoring.js): persists how
+  // different an article is from everything voted on so far (1 - highest
+  // similarity to any voted article), computed once per recompute sweep
+  // from the same pairSims already used for the exploratory-bonus lift, so
+  // sorting by it is a plain ORDER BY, not a per-request redo of that
+  // embedding comparison. NULL (not 0) until there's a real
+  // basis to compute it — no embedding yet, or nothing voted on at all.
+  "ALTER TABLE articles ADD COLUMN score_novelty REAL;",
 ];
 
 /**
