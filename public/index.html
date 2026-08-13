@@ -340,9 +340,18 @@
           <em v-if="readerSource === 'feed'" class="feed-notice"
               title="the full article couldn't be fetched or extracted; showing the feed's own summary">feed excerpt only</em>
         </div>
+        <div class="chips" v-if="readerArticle.topics && readerArticle.topics.length">
+          <span class="chip" v-for="t in readerArticle.topics" :key="t" :style="chipStyle(t)">{{ t }}</span>
+        </div>
         <p v-if="readerLoading" class="notice">Loading…</p>
         <p v-else-if="!readerHtml" class="notice">No content available.</p>
         <div v-else v-html="readerHtml" class="reader-body"></div>
+        <form class="reclassify" @submit.prevent="reclassify(readerArticle)">
+          <input type="text" v-model="readerArticle.enrich_note"
+                 placeholder="optional note to the classifier, e.g. “this is about hardware, not software”">
+          <button class="mark" type="submit"
+                  :disabled="readerArticle.status === 'pending'">{{ readerArticle.status === 'pending' ? 'queued…' : 'reclassify' }}</button>
+        </form>
       </article>
     </div>
   </div>
