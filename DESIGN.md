@@ -594,6 +594,19 @@ day-one spec was retired for exactly that reason; it's in git history).
   voted article.** Keeps serendipitous content from being buried by the
   kNN/topic terms in ordinary "hot"/"score" browsing, independent of the
   explore sort above.
+- **"All" got demoted from a tab to a checkbox.** It was the odd one out
+  among the three view tabs — "Interesting" and "Unread" send the exact
+  same backend `view` filter (`read_at IS NULL`) and differ only in
+  default sort, but "All" actually changed the filter (unlocking
+  already-read articles) while looking like a peer of two tabs that
+  don't. Nothing in the filter bar reflected that distinction. Recast as
+  an `includeRead` checkbox alongside `dupes`/`enrichedOnly` (both
+  already exactly this kind of always-visible toggle), it's now explicit
+  in the filter bar instead of hidden in which tab happens to be
+  highlighted, and it composes with whichever tab/sort is active instead
+  of requiring its own tab. A new `apiView` computed property translates
+  `view` (which tab is highlighted) plus `includeRead` into the literal
+  `interesting`/`unread`/`all` the backend understands.
 
 ## How the cosine math actually runs
 

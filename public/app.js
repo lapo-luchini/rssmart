@@ -13,7 +13,6 @@ createApp({
       views: [
         { id: 'interesting', label: 'Interesting' },
         { id: 'unread', label: 'Unread' },
-        { id: 'all', label: 'All' },
       ],
       view: 'interesting',
       topic: '',
@@ -23,6 +22,7 @@ createApp({
       sort: 'hot',
       dupes: false,
       enrichedOnly: false,
+      includeRead: false,
       articles: [],
       total: 0,
       topics: [],
@@ -94,15 +94,22 @@ createApp({
       return this.sortRows(this.feedsDetailed, this.feedSort, value);
     },
 
+    // The actual view param the API sees: includeRead widens whichever
+    // tab is active to also show already-read articles ("all", in API
+    // terms) without changing which tab looks active.
+    apiView() {
+      return this.includeRead ? 'all' : this.view;
+    },
+
     emptyMessage() {
       if (this.semantic && this.q) return 'No semantically similar articles found — try different wording, or note that only classified articles are searchable.';
       if (this.q || this.topic || this.feedId) return 'Nothing matches these filters.';
-      if (this.view === 'all') return 'No articles yet. Add feeds in the Feeds tab and run: rssmart cron';
+      if (this.apiView === 'all') return 'No articles yet. Add feeds in the Feeds tab and run: rssmart cron';
       return 'All caught up. New articles arrive on the next cron run.';
     },
 
     filtersActive() {
-      return !!(this.topic || this.feedId || this.q || this.dupes || this.enrichedOnly);
+      return !!(this.topic || this.feedId || this.q || this.dupes || this.enrichedOnly || this.includeRead);
     },
 
     triageCurrent() {
@@ -136,7 +143,7 @@ createApp({
   methods: {
     params(offset) {
       const p = new URLSearchParams({
-        view: this.view,
+        view: this.apiView,
         sort: this.sort,
         limit: LIMIT,
         offset,
@@ -157,6 +164,7 @@ createApp({
       this.semantic = false;
       this.dupes = false;
       this.enrichedOnly = false;
+      this.includeRead = false;
       this.reload();
     },
 
@@ -245,14 +253,14 @@ createApp({
 
     applyRoute(hash, { replace = false } = {}) {
       const route = hash.replace(/^#\//, '');
-      const routes = ['interesting', 'unread', 'all', 'triage', 'topics', 'feeds'];
+      const routes = ['interesting', 'unread', 'triage', 'topics', 'feeds'];
       if (replace && !routes.includes(route)) {
         history.replaceState(null, '', `#/${this.currentRoute()}`);
         return;
       }
       if (route === this.currentRoute()) return;
       if (['triage', 'topics', 'feeds'].includes(route)) this.openPanel(route);
-      else if (['interesting', 'unread', 'all'].includes(route)) this.setView(route);
+      else if (['interesting', 'unread'].includes(route)) this.setView(route);
     },
 
     setView(v) {
@@ -801,7 +809,7 @@ createApp({
     // it's in the current list, otherwise search for it across everything.
     async goToOriginal(article) {
       if (!this.articles.some((a) => a.id === article.duplicate_of)) {
-        this.view = 'all';
+        this.includeRead = true;
         this.topic = '';
         this.feedId = '';
         this.q = article.duplicate_title || '';
