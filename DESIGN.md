@@ -607,6 +607,13 @@ day-one spec was retired for exactly that reason; it's in git history).
   of requiring its own tab. A new `apiView` computed property translates
   `view` (which tab is highlighted) plus `includeRead` into the literal
   `interesting`/`unread`/`all` the backend understands.
+- **"Explore" got promoted from a sort option to a full tab.** Since
+  "Interesting"/"Unread" turned out to already be (filter, sort)
+  *presets* rather than raw filter names (see above), "Explore" — same
+  unread filter, default `sort=novelty` instead of `hot`/`date` — fits
+  the exact same slot for free: `apiView` maps it to `unread` (or `all`,
+  same as any other tab, when `includeRead` is checked) since the
+  backend has no "explore" concept of its own, only the sort differs.
 
 ## How the cosine math actually runs
 

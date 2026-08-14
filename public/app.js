@@ -13,6 +13,7 @@ createApp({
       views: [
         { id: 'interesting', label: 'Interesting' },
         { id: 'unread', label: 'Unread' },
+        { id: 'explore', label: 'Explore' },
       ],
       view: 'interesting',
       topic: '',
@@ -94,11 +95,13 @@ createApp({
       return this.sortRows(this.feedsDetailed, this.feedSort, value);
     },
 
-    // The actual view param the API sees: includeRead widens whichever
+    // The actual view param the API sees: "explore" is really "unread",
+    // just with a different default sort, and includeRead widens whichever
     // tab is active to also show already-read articles ("all", in API
     // terms) without changing which tab looks active.
     apiView() {
-      return this.includeRead ? 'all' : this.view;
+      if (this.includeRead) return 'all';
+      return this.view === 'explore' ? 'unread' : this.view;
     },
 
     emptyMessage() {
@@ -253,20 +256,20 @@ createApp({
 
     applyRoute(hash, { replace = false } = {}) {
       const route = hash.replace(/^#\//, '');
-      const routes = ['interesting', 'unread', 'triage', 'topics', 'feeds'];
+      const routes = ['interesting', 'unread', 'explore', 'triage', 'topics', 'feeds'];
       if (replace && !routes.includes(route)) {
         history.replaceState(null, '', `#/${this.currentRoute()}`);
         return;
       }
       if (route === this.currentRoute()) return;
       if (['triage', 'topics', 'feeds'].includes(route)) this.openPanel(route);
-      else if (['interesting', 'unread'].includes(route)) this.setView(route);
+      else if (['interesting', 'unread', 'explore'].includes(route)) this.setView(route);
     },
 
     setView(v) {
       this.panel = null;
       this.view = v;
-      this.sort = v === 'interesting' ? 'hot' : 'date';
+      this.sort = v === 'interesting' ? 'hot' : v === 'explore' ? 'novelty' : 'date';
       this.syncHash();
       this.reload();
     },
