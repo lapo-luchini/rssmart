@@ -11,7 +11,8 @@
     "postinstall": "if command -v bun >/dev/null 2>&1; then exec bun scripts/vendor.js; else exec node scripts/vendor.js; fi",
     "cron": "if command -v bun >/dev/null 2>&1; then exec bun bin/rssmart.js cron; else exec node bin/rssmart.js cron; fi",
     "serve": "if command -v bun >/dev/null 2>&1; then exec bun bin/rssmart.js serve; else exec node bin/rssmart.js serve; fi",
-    "dbstats": "if command -v bun >/dev/null 2>&1; then exec bun scripts/dbstats.js; else exec node scripts/dbstats.js; fi"
+    "dbstats": "if command -v bun >/dev/null 2>&1; then exec bun scripts/dbstats.js; else exec node scripts/dbstats.js; fi",
+    "bench-model": "if command -v bun >/dev/null 2>&1; then exec bun scripts/bench-model.js; else exec node scripts/bench-model.js; fi"
   },
   "keywords": [],
   "author": "Lapo Luchini <lapo@lapo.it>",

@@ -272,6 +272,15 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   doesn't reclaim freed pages from the file on its own after a large
   backfill or config change — the script reports reclaimable space if a
   `VACUUM` is worth running.
+- `pnpm run bench-model <model> [model2 ...]` (or `node scripts/bench-model.js
+  ...` directly) benchmarks one or more Ollama chat models for speed and
+  output quality against a fixed spread of real, already-classified
+  articles from your own DB, using the exact production classification
+  prompt — read-only, safe to run anytime. Writes
+  `data/bench-model-<timestamp>.txt`: average wall time per model first,
+  then every model's full generated output per article underneath, to
+  read through and judge for yourself. A handy way to re-check whether a
+  new model release is worth switching to as they come out.
 - Origin-page fetching refuses article links that resolve to private, loopback
   or link-local addresses (feed content is third-party input; this prevents a
   malicious feed from probing your LAN). `enrich.allowPrivateFetch: true`
