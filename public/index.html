@@ -194,7 +194,11 @@
       All caught up — nothing left to triage.
     </p>
     <div v-else class="triage-card">
-      <p class="triage-progress">{{ triageProcessed }} processed this session</p>
+      <p class="triage-progress">
+        {{ triageProcessed }} processed this session
+        <span v-if="outboxCount" class="feed-notice"
+              :title="outboxCount + ' vote(s)/skip(s) saved locally, will sync once the connection is back'">· {{ outboxCount }} pending sync</span>
+      </p>
       <div class="story-meta">
         <span class="source">{{ triageCurrent.feed_title || 'feed' }}</span>
         <span v-if="triageCurrent.author" class="author" :title="triageCurrent.author">{{ triageCurrent.author }}</span>

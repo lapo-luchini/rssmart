@@ -614,6 +614,30 @@ day-one spec was retired for exactly that reason; it's in git history).
   the exact same slot for free: `apiView` maps it to `unread` (or `all`,
   same as any other tab, when `includeRead` is checked) since the
   backend has no "explore" concept of its own, only the sort differs.
+- **Triage votes/skips survive a flaky mobile connection via a small
+  persisted retry queue (`public/outbox.js`), not a blocking retry.** A
+  failed vote used to leave the card in place until you noticed the error
+  and manually retried — fine on a desk, bad mid-triage on a phone in a
+  tunnel or elevator. Now: on a network failure or 5xx (not a real 4xx
+  rejection — that still surfaces as an error immediately, retrying won't
+  fix a bad request), the vote is applied to the local article object
+  right away, triage advances immediately, and the request is queued to
+  `localStorage` for replay. Safe to replay blindly, no dedup/conflict
+  logic needed: `/vote` and `/read` are both plain idempotent `SET`s
+  server-side, not toggles — the client already resolves "toggle" to an
+  explicit target value before sending, so resending the identical
+  request is a no-op either way. Retried on load (a previous session's
+  queue), on the browser's `online` event, on a 20s fallback poll (the
+  `online` event reflects network-interface state, not actual
+  reachability, so it can misfire either direction), and piggybacked on
+  any other successful API call. A small "N pending sync" badge in the
+  triage panel is the only new UI. Deliberately scoped to triage's
+  vote/skip only, not every write action in the app (feed edits,
+  guidelines, reclassify) — those are rarer, less time-pressured actions
+  where today's "show an error, let them retry" is an acceptable
+  experience — and does not extend to `loadTriageBatch` fetching the next
+  *batch* of articles (a read, not a queued write); that still fails
+  visibly on a dead connection.
 
 ## How the cosine math actually runs
 

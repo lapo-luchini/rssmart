@@ -1,4 +1,5 @@
 import { createApp } from './vendor/vue.esm-browser.prod.js';
+import { createOutbox } from './outbox.js';
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js'));
@@ -6,6 +7,11 @@ if ('serviceWorker' in navigator) {
 
 const LIMIT = 50;
 const TRIAGE_BATCH = 30;
+// One shared outbox for the whole app (module-level, not Vue reactive data
+// -- its own count is mirrored into outboxCount whenever it changes so the
+// UI badge reacts, see syncOutboxCount).
+const outbox = createOutbox();
+const OUTBOX_POLL_MS = 20_000;
 
 createApp({
   data() {
@@ -37,6 +43,7 @@ createApp({
       triageQueue: [],
       triagePos: 0,
       triageProcessed: 0,
+      outboxCount: outbox.count, // votes/skips queued locally, not yet synced
       triageLoading: false,
       triageBusy: false,
       triageExpanded: false,
@@ -141,6 +148,17 @@ createApp({
     this.loadSidebarData();
     // Log commit hash for debugging
     this.api('/api/version').then((v) => console.log('rssmart', v.commit)).catch(() => {});
+
+    // Retry queued triage votes/skips (see outbox.js) whenever there's a
+    // reasonable signal connectivity might be back: on load (in case they
+    // were queued in a previous session), on the browser's own online
+    // event (best-effort -- it reflects network-interface state, not
+    // actual reachability, so it can both under- and over-fire), and a
+    // periodic fallback poll so a missed/wrong online event doesn't leave
+    // votes stuck until the next unrelated trigger.
+    this.flushOutbox();
+    window.addEventListener('online', () => this.flushOutbox());
+    setInterval(() => this.flushOutbox(), OUTBOX_POLL_MS);
   },
 
   methods: {
@@ -173,11 +191,44 @@ createApp({
 
     async api(path, options) {
       const res = await fetch(path, options);
+      this.flushOutbox(); // fire-and-forget: a response at all proves connectivity right now
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `${res.status} ${res.statusText}`);
       }
       return res.json();
+    },
+
+    async flushOutbox() {
+      await outbox.flush();
+      this.outboxCount = outbox.count;
+    },
+
+    /**
+     * Attempt a write; on success, hand the parsed response to onSuccess.
+     * On a real rejection (4xx) throw, same as api() -- that's not a
+     * connectivity problem. On a network failure or 5xx, apply onQueued's
+     * optimistic local update and queue the request in the outbox (see
+     * outbox.js) to replay later instead of blocking/erroring the caller.
+     */
+    async attemptOrQueue(path, options, { onSuccess, onQueued }) {
+      let res;
+      try {
+        res = await fetch(path, options);
+      } catch {
+        res = null;
+      }
+      if (res && res.ok) {
+        onSuccess(await res.json());
+        this.flushOutbox();
+      } else if (res && res.status < 500) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `${res.status} ${res.statusText}`);
+      } else {
+        onQueued();
+        outbox.enqueue(path, options);
+        this.outboxCount = outbox.count;
+      }
     },
 
     async reload() {
@@ -369,12 +420,21 @@ createApp({
       try {
         // Clear on match: clicking the same button again resets to neutral
         const actual = article.vote === value ? 0 : value;
-        const updated = await this.api(`/api/articles/${article.id}/vote`, {
+        await this.attemptOrQueue(`/api/articles/${article.id}/vote`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ vote: actual }),
+        }, {
+          onSuccess: (updated) => Object.assign(article, updated),
+          // Offline/unreachable: apply the vote locally so triage keeps
+          // moving (see outbox.js) -- score_* stays stale until the queued
+          // request actually lands, matching /vote's own read_at rule
+          // (only backfilled on a real vote, never cleared by a retraction).
+          onQueued: () => {
+            article.vote = actual;
+            if (actual !== 0) article.read_at ??= new Date().toISOString();
+          },
         });
-        Object.assign(article, updated);
         await this.triageAdvance();
       } catch (err) {
         this.error = `Vote failed: ${err.message}`;
@@ -388,12 +448,14 @@ createApp({
       if (!article || this.triageBusy) return;
       this.triageBusy = true;
       try {
-        const updated = await this.api(`/api/articles/${article.id}/read`, {
+        await this.attemptOrQueue(`/api/articles/${article.id}/read`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ read: true }),
+        }, {
+          onSuccess: (updated) => { article.read_at = updated.read_at; },
+          onQueued: () => { article.read_at ??= new Date().toISOString(); },
         });
-        article.read_at = updated.read_at;
         await this.triageAdvance();
       } catch (err) {
         this.error = `Update failed: ${err.message}`;
