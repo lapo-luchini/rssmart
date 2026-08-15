@@ -54,6 +54,8 @@ createApp({
       feedSort: { key: null, dir: -1 }, // null = server order (active first)
       feedForm: { url: '', title: '' },
       feedNotice: '',
+      renamingFeedId: null,
+      renameFeedTitle: '',
       guidelines: '',
       guidelinesNotice: '',
       topicMergeProposals: [],
@@ -813,6 +815,29 @@ createApp({
         this.loadSidebarData();
       } catch (err) {
         this.feedNotice = `Cannot update feed: ${err.message}`;
+      }
+    },
+
+    startRenameFeed(feed) {
+      this.renamingFeedId = feed.id;
+      this.renameFeedTitle = feed.title || '';
+    },
+
+    cancelRenameFeed() {
+      this.renamingFeedId = null;
+    },
+
+    async saveFeedTitle(feed) {
+      try {
+        await this.api(`/api/feeds/${feed.id}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title: this.renameFeedTitle }),
+        });
+        this.renamingFeedId = null;
+        this.loadSidebarData();
+      } catch (err) {
+        this.feedNotice = `Cannot rename feed: ${err.message}`;
       }
     },
 

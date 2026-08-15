@@ -185,6 +185,18 @@ body {
 .feed-name { display: flex; flex-direction: column; min-width: 0; }
 .feed-name strong { font-weight: 600; }
 
+.feed-rename { display: flex; gap: 0.35rem; }
+.feed-rename input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  padding: 0.2rem 0.4rem;
+}
+
 .feed-site { color: var(--ink); text-decoration: none; }
 .feed-site:hover { text-decoration: underline; }
 

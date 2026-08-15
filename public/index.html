@@ -157,12 +157,19 @@
     </div>
     <div class="feed-row" v-for="f in feedsRanked" :key="f.id" :class="{ inactive: !f.active }">
       <span class="feed-name">
-        <a v-if="f.html_url" class="feed-site" :href="f.html_url" target="_blank"
-           rel="noopener"><strong>{{ f.title || f.url }}</strong></a>
-        <strong v-else>{{ f.title || f.url }}</strong>
-        <a class="feed-url" :href="f.url" target="_blank" rel="noopener">{{ f.url }}</a>
-        <em v-if="f.last_status && f.last_status !== 'ok'" class="feed-error">{{ f.last_status }}</em>
-        <em v-else-if="f.active && f.next_fetch_at" class="feed-next">next check {{ until(f.next_fetch_at) }}</em>
+        <form v-if="renamingFeedId === f.id" class="feed-rename" @submit.prevent="saveFeedTitle(f)">
+          <input type="text" v-model="renameFeedTitle" placeholder="feed name (blank = auto-detected)" autofocus>
+          <button class="mark" type="submit">save</button>
+          <button class="mark" type="button" @click="cancelRenameFeed">cancel</button>
+        </form>
+        <template v-else>
+          <a v-if="f.html_url" class="feed-site" :href="f.html_url" target="_blank"
+             rel="noopener"><strong>{{ f.title || f.url }}</strong></a>
+          <strong v-else>{{ f.title || f.url }}</strong>
+          <a class="feed-url" :href="f.url" target="_blank" rel="noopener">{{ f.url }}</a>
+          <em v-if="f.last_status && f.last_status !== 'ok'" class="feed-error">{{ f.last_status }}</em>
+          <em v-else-if="f.active && f.next_fetch_at" class="feed-next">next check {{ until(f.next_fetch_at) }}</em>
+        </template>
       </span>
       <span :style="{ color: tint((f.avg_vote ?? 0) / 2, 55) }">
         {{ f.votes ? (f.avg_vote >= 0 ? '+' : '−') + Math.abs(f.avg_vote).toFixed(1) : '—' }}
@@ -172,6 +179,7 @@
       <span>{{ f.unread }}/{{ f.articles }}</span>
       <span>
         <button class="mark" @click="filterFeed(f.id)">show</button>
+        <button class="mark" v-if="renamingFeedId !== f.id" @click="startRenameFeed(f)">rename</button>
         <button class="mark" @click="setFeedActive(f, !f.active)">{{ f.active ? 'disable' : 'enable' }}</button>
       </span>
     </div>

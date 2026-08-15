@@ -638,6 +638,21 @@ day-one spec was retired for exactly that reason; it's in git history).
   experience — and does not extend to `loadTriageBatch` fetching the next
   *batch* of articles (a read, not a queued write); that still fails
   visibly on a dead connection.
+- **Feed titles are user-editable** (`PATCH /api/feeds/:id` now also
+  accepts `title`, alongside its existing `active`). A blank title clears
+  the override back to `NULL` rather than rejecting the request — `NULL`
+  is exactly what makes `ingestFeed`'s `title = COALESCE(title, ?)`
+  backfill from the feed's own `<title>` again on the *next* fetch, so
+  clearing is "revert to auto-detected," not an error state, even though
+  the display falls back to the raw URL in the meantime rather than
+  immediately showing the old auto-detected name. Exposed (and fixed) a
+  real cache bug while wiring this up: `feedList()`'s cache key is
+  derived from row counts (feed count, vote count, active sum, etc.), so
+  it happened to invalidate correctly on an `active` toggle (shifts
+  `activeSum`) but never would have on a title-only edit — nothing
+  counted changes. Fixed by explicitly resetting the cache key inside the
+  PATCH handler after any successful write, rather than trying to make
+  the count-based key aware of every mutable column.
 
 ## How the cosine math actually runs
 

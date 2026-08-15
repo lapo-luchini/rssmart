@@ -543,14 +543,41 @@ export function createApp(db, config, commitHash) {
 
   app.patch('/api/feeds/:id', async (c) => {
     const id = c.req.param('id');
-    const active = (await jsonBody(c))?.active;
-    if (typeof active !== 'boolean') {
-      return c.json({ error: 'active must be a boolean' }, 400);
+    const body = (await jsonBody(c)) ?? {};
+    const updates = [];
+    const params = [];
+    if ('active' in body) {
+      if (typeof body.active !== 'boolean') {
+        return c.json({ error: 'active must be a boolean' }, 400);
+      }
+      updates.push('active = ?');
+      params.push(body.active ? 1 : 0);
+    }
+    if ('title' in body) {
+      if (typeof body.title !== 'string') {
+        return c.json({ error: 'title must be a string' }, 400);
+      }
+      // Empty (after trim) clears the override: the feed's title reverts
+      // to NULL, so the next fetch backfills it from the feed's own
+      // <title> again (ingestFeed's title = COALESCE(title, ?) only fills
+      // a null title, never overwrites an explicit one -- clearing it is
+      // what makes that auto-detect kick back in).
+      updates.push('title = ?');
+      params.push(body.title.trim() || null);
+    }
+    if (!updates.length) {
+      return c.json({ error: 'nothing to update' }, 400);
     }
     const { changes } = db
-      .prepare('UPDATE feeds SET active = ? WHERE id = ?')
-      .run(active ? 1 : 0, id);
+      .prepare(`UPDATE feeds SET ${updates.join(', ')} WHERE id = ?`)
+      .run(...params, id);
     if (!changes) return c.json({ error: 'not found' }, 404);
+    // feedList()'s cache key is derived from row counts (feed/vote/unread
+    // totals etc.) so it happens to invalidate on an active toggle (it
+    // shifts activeSum) but never would on a title-only edit -- nothing
+    // counted changes. Force a fresh read rather than teach the key about
+    // every mutable column.
+    feedListKey = null;
     return c.json(feedList().find((f) => f.id === Number(id)));
   });
 

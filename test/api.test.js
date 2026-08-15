@@ -99,6 +99,14 @@ const post = async (path, payload) => {
   });
   return { status: res.status, body: await res.json() };
 };
+const patch = async (path, payload) => {
+  const res = await fetch(base + path, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return { status: res.status, body: await res.json() };
+};
 
 test('default view: unread, no dupes, sorted by score then date', async () => {
   const { status, body } = await get('/api/articles');
@@ -478,12 +486,24 @@ test('feed management: add, disable, stats, OPML round-trip', async () => {
   const rejected = await post('/api/feeds', { url: 'ftp://nope' });
   assert.equal(rejected.status, 400);
 
-  const disabled = await fetch(`${base}/api/feeds/${added.body.id}`, {
-    method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ active: false }),
-  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+  const disabled = await patch(`/api/feeds/${added.body.id}`, { active: false });
   assert.equal(disabled.body.active, 0);
+
+  const renamed = await patch(`/api/feeds/${added.body.id}`, { title: '  My Custom Name  ' });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.body.title, 'My Custom Name', 'trimmed');
+
+  const clearedTitle = await patch(`/api/feeds/${added.body.id}`, { title: '   ' });
+  assert.equal(clearedTitle.body.title, null, 'blank clears the override back to auto-detected');
+
+  const badTitle = await patch(`/api/feeds/${added.body.id}`, { title: 42 });
+  assert.equal(badTitle.status, 400);
+
+  const nothingToUpdate = await patch(`/api/feeds/${added.body.id}`, {});
+  assert.equal(nothingToUpdate.status, 400);
+
+  const notFound = await patch('/api/feeds/999999', { title: 'x' });
+  assert.equal(notFound.status, 404);
 
   const feeds = await get('/api/feeds');
   const feedOne = feeds.body.find((f) => f.title === 'Feed One');
@@ -511,6 +531,19 @@ test('feed management: add, disable, stats, OPML round-trip', async () => {
   assert.match(opml, /htmlUrl="http:\/\/imported\.example\/"/);
   assert.match(opml, /Imported &amp; Co/);
   assert.ok(!opml.includes('new.example'), 'disabled feeds stay out of the export');
+});
+
+test('renaming a feed is visible on the very next GET /api/feeds', async () => {
+  // Regression: feedList()'s cache key is derived from row counts (feed
+  // count, vote count, active sum, etc.) -- a title-only edit changes
+  // none of those, so a stale cached list would keep serving the old
+  // title forever after a rename, only refreshing once some unrelated
+  // count-changing action happened to bust the cache.
+  const added = await post('/api/feeds', { url: 'http://rename-me.example/rss', title: 'Original Name' });
+  await patch(`/api/feeds/${added.body.id}`, { title: 'Renamed' });
+  const feeds = (await get('/api/feeds')).body;
+  const feed = feeds.find((f) => f.id === added.body.id);
+  assert.equal(feed.title, 'Renamed', 'GET reflects the rename immediately, not a stale cached list');
 });
 
 test('read toggling', async () => {
