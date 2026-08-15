@@ -653,6 +653,13 @@ day-one spec was retired for exactly that reason; it's in git history).
   counted changes. Fixed by explicitly resetting the cache key inside the
   PATCH handler after any successful write, rather than trying to make
   the count-based key aware of every mutable column.
+- **Classification model switched from `gemma4:12b-it-qat` to
+  `gemma4:26b-mlx`.** Benchmarked head-to-head against 5 real articles
+  (short/long, English/Italian) using the exact production prompt from
+  `classifyPrompt` — `26b-mlx` came out faster on every article and
+  matched or beat `12b`'s judgment on the ones that actually stressed
+  it (e.g. a correct Italian-language summary, a more defensible depth
+  rating on a substantive long-form piece).
 
 ## How the cosine math actually runs
 

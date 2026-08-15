@@ -29,7 +29,7 @@ test('loads a full config and resolves db against config dir', () => {
   const config = loadConfig(file);
   assert.equal(config.db, join(dir, 'data', 'rssmart.db'));
   assert.equal(config.server.port, 8099);
-  assert.equal(config.ollama.chatModel, 'gemma4:12b-it-qat');
+  assert.equal(config.ollama.chatModel, 'gemma4:26b-mlx');
   assert.equal(config.scoring.weights.embedding, 0.4);
 });
 
