@@ -660,6 +660,12 @@ day-one spec was retired for exactly that reason; it's in git history).
   matched or beat `12b`'s judgment on the ones that actually stressed
   it (e.g. a correct Italian-language summary, a more defensible depth
   rating on a substantive long-form piece).
+- **Summaries are always written in English now**, not "same language as
+  the article" — a preview in a language the reader doesn't know is
+  useless, and it's a plainer input for the dedup embedding (built from
+  `title + summary`) than a different language per source. Existing
+  articles' summaries are left as they are; this only applies going
+  forward.
 
 ## How the cosine math actually runs
 
