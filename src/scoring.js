@@ -253,50 +253,101 @@ function makeVotedBatcher(voted, reuse) {
   return createDotBatcher(voted.map((v) => v.vec), voted[0].vec.length, reuse);
 }
 
-// Per-db cache of the sweep's WASM dot-product batcher. Every sweep rebuilds
-// the voted snapshot (it may have changed since the last one), but the
+// Shared per-db cache of the voted snapshot + its WASM dot-product batcher,
+// used by both the full recomputeScores sweep and recomputeOneScore. The
 // candidate buffer behind the batcher is large (voted x dims floats of WASM
-// linear memory) - freeing and reallocating it on every sweep churns and
-// fragments WASM memory over a long-running serve session. Passing the
-// previous batcher as `reuse` recycles those allocations whenever they are
-// still large enough; the buffer lives until the next rebuild recycles it or
-// the db (and this WeakMap entry) goes away.
-const _sweepBatchers = new WeakMap(); // db -> createDotBatcher | null
+// linear memory) and decoding every voted article's embedding blob isn't
+// free either, so the snapshot is kept alive across uses and its freshness
+// is validated against a cheap aggregate over the exact rows votedArticles
+// selects: membership (COUNT), raw vote values (SUM(vote)), latest vote time
+// (MAX over COALESCE(voted_at, created_at)), and total embedding bytes
+// (SUM(LENGTH(text_embedding)), which changes when vectors are written or
+// cleared — including by another process, e.g. cron re-embedding against a
+// live serve's db). Any change triggers a rebuild that hands the old batcher
+// to createDotBatcher as `reuse`, recycling the still-live buffer instead of
+// freeing and reallocating it.
+//
+// Known blind spots, both self-correcting on any later change and no worse
+// than the status quo this replaces (the single-score cache's dirty flag was
+// only set by same-process votes): two articles swapping exact vote values
+// between checks (COUNT, SUM and MAX all unchanged), and a voted article
+// whose embedding is re-written to different values of the same byte length
+// (the reclassify + re-enrich path). Vote decay is computed once per
+// rebuild — drift while the key stays equal is bounded by the debounce
+// window against multi-year halflives, i.e. negligible.
+//
+// `sweepActive` leases the cache to a full sweep: a sweep spans awaits, so a
+// vote (and its recomputeOneScore) can land mid-sweep and must not read the
+// now-stale leased snapshot — it builds its own ephemeral copy instead (and
+// frees it after use; the leased one stays cached). A second concurrent
+// sweep takes the same private path.
+const _votedCaches = new WeakMap(); // db -> { voted, batcher, halflife, key, sweepActive }
 
-// Cache for recomputeOneScore: reuses the voted set and WASM batcher across
-// consecutive calls, keyed by db instance (not a single global) so unrelated
-// test databases never share state. Marked stale via `dirty` (not freed
-// outright) when a vote changes the set — the previous design (a hard
-// clearSingleScoreBatcher() called right before every rebuild) froze then
-// nulled the batcher first, so every single vote paid for a fresh WASM
-// alloc_f32 instead of recycling the still-live buffer. Keeping it alive
-// until the next rebuild lets createDotBatcher's `reuse` path recycle it as
-// intended, avoiding fragmenting WASM linear memory over long-running serve
-// sessions.
-const _singleScoreCaches = new WeakMap(); // db -> { batcher, voted, halflife, dirty }
-
-function getSingleScoreBatcher(db, halflifeYears) {
-  let state = _singleScoreCaches.get(db);
-  if (!state) {
-    state = { batcher: null, voted: null, halflife: null, dirty: false };
-    _singleScoreCaches.set(db, state);
-  }
-  if (!state.batcher || state.halflife !== halflifeYears || state.dirty) {
-    const old = state.batcher;
-    state.voted = votedArticles(db, halflifeYears);
-    state.batcher = makeVotedBatcher(state.voted, old);
-    state.halflife = halflifeYears;
-    state.dirty = false;
-  }
-  return { voted: state.voted, batcher: state.batcher };
+function votedSetKey(db) {
+  const k = db.prepare(`
+    SELECT COUNT(*) AS c,
+           COALESCE(SUM(vote), 0) AS sv,
+           COALESCE(MAX(COALESCE(voted_at, created_at)), '') AS mt,
+           COALESCE(SUM(LENGTH(text_embedding)), 0) AS sl
+    FROM articles
+    WHERE vote != 0 AND text_embedding IS NOT NULL
+  `).get();
+  return `${k.c}:${k.sv}:${k.mt}:${k.sl}`;
 }
 
-/** Mark the cached voted set stale after a vote — rebuilt lazily on the next
- *  recomputeOneScore call, reusing the still-live WASM buffer instead of
- *  freeing it up front. */
-export function invalidateSingleScoreBatcher(db) {
-  const state = _singleScoreCaches.get(db);
-  if (state) state.dirty = true;
+function rebuildVotedState(state, db, halflifeYears, key) {
+  // Build fully before assigning: a throw mid-rebuild (e.g. closed db, or a
+  // dims mismatch in createDotBatcher) must leave the old state intact.
+  const voted = votedArticles(db, halflifeYears);
+  const batcher = makeVotedBatcher(voted, state.batcher);
+  state.voted = voted;
+  state.batcher = batcher;
+  state.halflife = halflifeYears;
+  state.key = key;
+}
+
+/** Lease the shared voted state for a full sweep (or null when another
+ *  sweep holds the lease — the caller then builds a private snapshot).
+ *  Always paired with releaseSweepVoted in a finally. */
+function acquireSweepVoted(db, halflifeYears) {
+  let state = _votedCaches.get(db);
+  if (!state) {
+    state = { voted: null, batcher: null, halflife: null, key: null, sweepActive: false };
+    _votedCaches.set(db, state);
+  }
+  if (state.sweepActive) return null;
+  const key = votedSetKey(db);
+  if (state.voted === null || state.halflife !== halflifeYears || state.key !== key) {
+    rebuildVotedState(state, db, halflifeYears, key);
+  }
+  state.sweepActive = true;
+  return state;
+}
+
+function releaseSweepVoted(state) {
+  state.sweepActive = false;
+}
+
+/** Shared voted snapshot for single-article scoring. An `ephemeral` result
+ *  (an active sweep owns the shared one) holds a freshly built batcher the
+ *  caller must free after use; a shared one must be left alive. */
+function getSharedVoted(db, halflifeYears) {
+  let state = _votedCaches.get(db);
+  if (state && state.sweepActive) {
+    const voted = votedArticles(db, halflifeYears);
+    return { voted, batcher: makeVotedBatcher(voted), ephemeral: true };
+  }
+  if (!state) {
+    // First scoring activity on this db happens to be a single-article
+    // recompute (e.g. a vote before any sweep ran) — create the entry.
+    state = { voted: null, batcher: null, halflife: null, key: null, sweepActive: false };
+    _votedCaches.set(db, state);
+  }
+  const key = votedSetKey(db);
+  if (state.voted === null || state.halflife !== halflifeYears || state.key !== key) {
+    rebuildVotedState(state, db, halflifeYears, key);
+  }
+  return { voted: state.voted, batcher: state.batcher, ephemeral: false };
 }
 
 function scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, scratches, batcher, topicMap) {
@@ -369,11 +420,13 @@ const SAVE_SCORE = `
  * `setTimeout(0)` between bursts so the event loop (and any concurrent
  * request, e.g. a vote) gets a turn — see DESIGN.md for the ~48s measurement
  * that made this necessary. `topicPref`/`feedPref`/`voted` are snapshotted
- * once up front, same as before chunking; a vote that lands mid-run won't
- * be reflected until the *next* recompute (its own instant recomputeOneScore
- * still applies immediately, and may be transiently overwritten by a
- * still-in-flight sweep's stale value until then — accepted, self-correcting
- * tradeoff, documented in DESIGN.md).
+ * once up front, same as before chunking (the voted snapshot and its WASM
+ * batcher come from the shared per-db cache, rebuilt only when votes or
+ * embeddings actually changed — see _votedCaches); a vote that lands mid-run
+ * won't be reflected until the *next* recompute (its own instant
+ * recomputeOneScore still applies immediately, and may be transiently
+ * overwritten by a still-in-flight sweep's stale value until then —
+ * accepted, self-correcting tradeoff, documented in DESIGN.md).
  */
 export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD_MS } = {}) {
   const start = performance.now();
@@ -415,7 +468,6 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
     const rows = db.prepare(
       'SELECT id, feed_id, vote, depth, text_embedding, author FROM articles',
     ).all();
-    const voted = votedArticles(db, halflife);
     const scratches = makeKnnScratches(knn);
 
     // Load article-to-topics mapping for topic-neighbor scoring.
@@ -429,26 +481,43 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
       s.add(r.name);
     }
 
-    const batcher = makeVotedBatcher(voted, _sweepBatchers.get(db));
-    _sweepBatchers.set(db, batcher);
+    // Voted snapshot + batcher come from the shared per-db cache, rebuilt
+    // only when its freshness key changed since the last sweep or
+    // single-article score (see _votedCaches).
+    const lease = acquireSweepVoted(db, halflife);
+    let voted, batcher, privateBatcher = null;
+    if (lease) {
+      voted = lease.voted;
+      batcher = lease.batcher;
+    } else {
+      // Another sweep holds the lease: a private snapshot keeps both sweeps
+      // self-consistent, freed when this one ends.
+      voted = votedArticles(db, halflife);
+      batcher = privateBatcher = makeVotedBatcher(voted);
+    }
 
-    const save = db.prepare(SAVE_SCORE);
-    let i = 0;
-    while (i < rows.length) {
-      const chunkStart = performance.now();
-      db.transaction(() => {
-        // do/while: always process at least one row per chunk before
-        // checking the time budget, so yieldEveryMs=0 (or any value too
-        // small to survive a single row) can't spin forever without i ever
-        // advancing.
-        do {
-          const row = rows[i++];
-          const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
-            authorPref.get(row.author), voted, weights, knn, scratches, batcher, topicMap);
-          save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, row.id);
-        } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
-      })();
-      if (i < rows.length) await sleep(0);
+    try {
+      const save = db.prepare(SAVE_SCORE);
+      let i = 0;
+      while (i < rows.length) {
+        const chunkStart = performance.now();
+        db.transaction(() => {
+          // do/while: always process at least one row per chunk before
+          // checking the time budget, so yieldEveryMs=0 (or any value too
+          // small to survive a single row) can't spin forever without i ever
+          // advancing.
+          do {
+            const row = rows[i++];
+            const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
+              authorPref.get(row.author), voted, weights, knn, scratches, batcher, topicMap);
+            save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, row.id);
+          } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
+        })();
+        if (i < rows.length) await sleep(0);
+      }
+    } finally {
+      privateBatcher?.free();
+      if (lease) releaseSweepVoted(lease);
     }
     return { count: rows.length, ms: performance.now() - start };
   } finally {
@@ -492,28 +561,34 @@ export function recomputeOneScore(db, config, articleId) {
     if (r) authorPref = r.pref;
   }
 
-  const { voted, batcher } = getSingleScoreBatcher(db, halflife);
+  const { voted, batcher, ephemeral } = getSharedVoted(db, halflife);
 
-  // Build topic map for topic-neighbor scoring — batch load voted article topics.
-  const topicMap = new Map();
-  const rowTopics = db.prepare(`
-    SELECT t.name FROM article_topics at JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ?
-  `).all(articleId).map((r) => r.name);
-  topicMap.set(articleId, new Set(rowTopics));
-  const votedIds = voted.filter((v) => v.id !== articleId).map((v) => v.id);
-  if (votedIds.length) {
-    for (const r of db.prepare(`
-      SELECT at.article_id, t.name FROM article_topics at
-      JOIN topics t ON t.id = at.topic_id
-      WHERE at.article_id IN (${votedIds.map(() => '?').join(',')})
-    `).all(...votedIds)) {
-      let s = topicMap.get(r.article_id);
-      if (!s) { s = new Set(); topicMap.set(r.article_id, s); }
-      s.add(r.name);
+  try {
+    // Build topic map for topic-neighbor scoring — batch load voted article topics.
+    const topicMap = new Map();
+    const rowTopics = db.prepare(`
+      SELECT t.name FROM article_topics at JOIN topics t ON t.id = at.topic_id WHERE at.article_id = ?
+    `).all(articleId).map((r) => r.name);
+    topicMap.set(articleId, new Set(rowTopics));
+    const votedIds = voted.filter((v) => v.id !== articleId).map((v) => v.id);
+    if (votedIds.length) {
+      for (const r of db.prepare(`
+        SELECT at.article_id, t.name FROM article_topics at
+        JOIN topics t ON t.id = at.topic_id
+        WHERE at.article_id IN (${votedIds.map(() => '?').join(',')})
+      `).all(...votedIds)) {
+        let s = topicMap.get(r.article_id);
+        if (!s) { s = new Set(); topicMap.set(r.article_id, s); }
+        s.add(r.name);
+      }
     }
+    const s = scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, makeKnnScratches(knn), batcher, topicMap);
+    db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, articleId);
+  } finally {
+    // An ephemeral batcher was built fresh because a sweep holds the shared
+    // one — free it; a shared one stays cached for the next call.
+    if (ephemeral) batcher?.free();
   }
-  const s = scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, makeKnnScratches(knn), batcher, topicMap);
-  db.prepare(SAVE_SCORE).run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, articleId);
 }
 
 const RECOMPUTE_DUE_KEY = 'score_recompute_due_at';
