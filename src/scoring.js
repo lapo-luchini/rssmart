@@ -241,10 +241,27 @@ function exploratoryBonus(maxSim) {
 // A null batcher when there's no voted set to compare against - knnScore's
 // own `voted.length === 0` guard means it's never actually dereferenced,
 // but avoids creating (and needing to free) an empty WASM batcher.
+// `reuse`, when given, recycles the previous batcher's WASM allocations
+// instead of freeing and reallocating them (see createDotBatcher).
 function makeVotedBatcher(voted, reuse) {
-  if (voted.length === 0) return null;
+  if (voted.length === 0) {
+    // The old batcher is being dropped either way - free it instead of
+    // letting the voted set shrinking to zero strand its WASM buffer.
+    reuse?.free();
+    return null;
+  }
   return createDotBatcher(voted.map((v) => v.vec), voted[0].vec.length, reuse);
 }
+
+// Per-db cache of the sweep's WASM dot-product batcher. Every sweep rebuilds
+// the voted snapshot (it may have changed since the last one), but the
+// candidate buffer behind the batcher is large (voted x dims floats of WASM
+// linear memory) - freeing and reallocating it on every sweep churns and
+// fragments WASM memory over a long-running serve session. Passing the
+// previous batcher as `reuse` recycles those allocations whenever they are
+// still large enough; the buffer lives until the next rebuild recycles it or
+// the db (and this WeakMap entry) goes away.
+const _sweepBatchers = new WeakMap(); // db -> createDotBatcher | null
 
 // Cache for recomputeOneScore: reuses the voted set and WASM batcher across
 // consecutive calls, keyed by db instance (not a single global) so unrelated
@@ -412,29 +429,26 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
       s.add(r.name);
     }
 
-    const batcher = makeVotedBatcher(voted);
+    const batcher = makeVotedBatcher(voted, _sweepBatchers.get(db));
+    _sweepBatchers.set(db, batcher);
 
-    try {
-      const save = db.prepare(SAVE_SCORE);
-      let i = 0;
-      while (i < rows.length) {
-        const chunkStart = performance.now();
-        db.transaction(() => {
-          // do/while: always process at least one row per chunk before
-          // checking the time budget, so yieldEveryMs=0 (or any value too
-          // small to survive a single row) can't spin forever without i ever
-          // advancing.
-          do {
-            const row = rows[i++];
-            const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
-              authorPref.get(row.author), voted, weights, knn, scratches, batcher, topicMap);
-            save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, row.id);
-          } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
-        })();
-        if (i < rows.length) await sleep(0);
-      }
-    } finally {
-      batcher?.free();
+    const save = db.prepare(SAVE_SCORE);
+    let i = 0;
+    while (i < rows.length) {
+      const chunkStart = performance.now();
+      db.transaction(() => {
+        // do/while: always process at least one row per chunk before
+        // checking the time budget, so yieldEveryMs=0 (or any value too
+        // small to survive a single row) can't spin forever without i ever
+        // advancing.
+        do {
+          const row = rows[i++];
+          const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
+            authorPref.get(row.author), voted, weights, knn, scratches, batcher, topicMap);
+          save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, row.id);
+        } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
+      })();
+      if (i < rows.length) await sleep(0);
     }
     return { count: rows.length, ms: performance.now() - start };
   } finally {

@@ -31,8 +31,10 @@ const { memory, alloc_f32, free_f32, dot_batch } = instance.exports;
  * caller (knnScore) consumes it immediately, so this avoids a copy on the
  * hot path.
  *
- * `.free()` releases the WASM-side buffers; call it exactly once when done
- * (recomputeScores/recomputeOneScore do this in a finally block).
+ * `.free()` releases the WASM-side buffers; call it exactly once when a
+ * batcher is truly done. Callers that expect to build another batcher for
+ * the same shape instead hand the old one back as `reuse`, recycling its
+ * allocations; `free` then only applies when no reuse candidate fits.
  *
  * When `reuse` is a previous batcher, its WASM allocations are recycled
  * if they're large enough for the new candidate set — avoiding repeated
