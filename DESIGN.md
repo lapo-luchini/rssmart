@@ -690,7 +690,7 @@ Two paths, with very different scaling:
    scoped `recomputeOneScore` instead. This is the path with a real
    ceiling: ~48s measured against a real ~6200-article archive.
 
-## Known limits (as of ~5k articles, 2026-07)
+## Known limits (baseline measurements below: ~6200 articles, 2026-07 — see the current-scale note at the end of this section)
 
 - **Vote scoring is decoupled from full-corpus rescoring, to keep votes
   fast regardless of archive size.** A vote updates *only its own
@@ -965,6 +965,19 @@ Two paths, with very different scaling:
   cost constantly. Any future change to the prompt must keep this
   invariant: base the size estimate on worst-case bounds, not on what
   happens to be in front of you this call.
+- **Current scale, 2026-08: ~40,600 articles**, roughly 6.5x the ~6200-
+  article baseline most of the WASM/Bun-vs-Node investigation above was
+  measured against. A real production full recompute at this size took
+  **27.9s** — noticeably past the "single-digit seconds" figure quoted
+  above, and roughly in line with linear-in-article-count scaling
+  (`recomputeScores` is O(articles × votes) — see "How the cosine math
+  actually runs" above) rather than a regression. Still comfortably
+  inside `yieldEveryMs` chunking's own bound: a real watchdog stall
+  burst during this exact sweep topped out at 1.8s, the rest 200-600ms,
+  matching the "worst case well under a second" design intent. Not
+  urgent, but worth re-measuring again if the archive keeps growing at
+  this rate — the WASM-optimized absolute time will keep climbing even
+  though it isn't a problem yet.
 
 ## Deferred ideas
 
