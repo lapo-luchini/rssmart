@@ -12,6 +12,29 @@ import { readFileSync } from 'node:fs';
 
 let maxLagMs = 0;
 let stallCount = 0;
+let expectedReason = null;
+
+/**
+ * Mark the event loop as expected to stall for a known reason (e.g. a
+ * full recompute sweep) — annotates any stall log line that fires while
+ * set, rather than silencing it, so an unrelated new stall during the
+ * same window still reads as unexplained instead of getting attributed
+ * to the wrong cause. Not stacked: only one reason is tracked at a time,
+ * matching the one long-running synchronous job this project actually
+ * runs (callers already prevent overlapping sweeps — see scheduler.js's
+ * own guard — so this doesn't need to defend against that itself).
+ */
+export function markExpectedStall(reason) {
+  expectedReason = reason;
+}
+
+export function clearExpectedStall() {
+  expectedReason = null;
+}
+
+export function _expectedReasonForTests() {
+  return expectedReason;
+}
 
 function parsePsiLine(line) {
   const m = line?.match(/avg10=([\d.]+)/);
@@ -52,7 +75,8 @@ export function startLagWatchdog({ log, intervalMs = 50, thresholdMs = 200 } = {
     if (lag > thresholdMs) {
       stallCount++;
       if (lag > maxLagMs) maxLagMs = lag;
-      log(`event loop stalled for ${lag.toFixed(0)}ms${psiSummary()}`);
+      const reasonSuffix = expectedReason ? ` (expected: ${expectedReason})` : '';
+      log(`event loop stalled for ${lag.toFixed(0)}ms${reasonSuffix}${psiSummary()}`);
     }
   }, intervalMs);
   timer.unref(); // diagnostic only — must never keep the process alive on its own

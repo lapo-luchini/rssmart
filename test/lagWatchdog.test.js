@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startLagWatchdog, getLagStats, _readPsiForTests } from '../src/lagWatchdog.js';
+import {
+  startLagWatchdog, getLagStats, _readPsiForTests, markExpectedStall, clearExpectedStall,
+} from '../src/lagWatchdog.js';
 
 test('_readPsiForTests degrades to null for a nonexistent resource instead of throwing', () => {
   assert.equal(_readPsiForTests('not-a-real-psi-resource'), null);
@@ -39,6 +41,32 @@ test('detects a real synchronous stall past the threshold and logs it', async ()
     assert.ok(maxLagMs >= 80, `max lag (${maxLagMs}) reflects the stall, not just the threshold`);
     assert.ok(logs.some((m) => /event loop stalled/.test(m)), 'stall was logged');
   } finally {
+    stop();
+  }
+});
+
+test('a stall while markExpectedStall is set is annotated, not silenced', async () => {
+  const logs = [];
+  const stop = startLagWatchdog({ log: (msg) => logs.push(msg), intervalMs: 20, thresholdMs: 80 });
+  try {
+    markExpectedStall('recomputing scores');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    busyWaitMs(200);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.ok(
+      logs.some((m) => /event loop stalled/.test(m) && m.includes('(expected: recomputing scores)')),
+      `expected an annotated stall line, got: ${JSON.stringify(logs)}`,
+    );
+
+    // once cleared, a later stall is unannotated again -- the mark isn't sticky
+    clearExpectedStall();
+    logs.length = 0;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    busyWaitMs(200);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.ok(logs.some((m) => /event loop stalled/.test(m) && !m.includes('(expected:')));
+  } finally {
+    clearExpectedStall();
     stop();
   }
 });

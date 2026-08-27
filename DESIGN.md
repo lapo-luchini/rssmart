@@ -666,6 +666,17 @@ day-one spec was retired for exactly that reason; it's in git history).
   `title + summary`) than a different language per source. Existing
   articles' summaries are left as they are; this only applies going
   forward.
+- **The lag watchdog annotates known-expected stalls instead of staying
+  silent about them or having callers mute it.** `markExpectedStall`/
+  `clearExpectedStall` (`src/lagWatchdog.js`) let `recomputeScores` flag
+  its own sweep (including the unchunked setup before the chunking loop
+  even starts) so a stall log line during it reads `(expected:
+  recomputing scores)`. Deliberately not a mute: the threshold's whole
+  value is catching *unexpected* stalls (it's what found the `/api/stats`/
+  `/api/topics`/`/api/articles` bugs earlier), and a real stall from some
+  unrelated cause firing in the same window should still read as
+  unexplained, not get silently attributed to the recompute just because
+  one happens to be running.
 
 ## How the cosine math actually runs
 

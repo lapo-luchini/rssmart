@@ -9,6 +9,7 @@ import {
   scheduleRecompute, recomputeIfDue, clearScheduledRecompute,
 } from '../src/scoring.js';
 import { openDb } from '../src/db.js';
+import { _expectedReasonForTests } from '../src/lagWatchdog.js';
 
 const vecBuf = (...values) => Buffer.from(Float16Array.from(values).buffer);
 
@@ -372,6 +373,31 @@ test('recomputeScores yields to the event loop between chunks, never blocking it
   assert.equal(winner, 'marker', 'an independent timer ran before the full sweep finished');
   assert.ok(sideEffectRan);
   await swept; // let the sweep actually finish before the db closes
+});
+
+test('recomputeScores marks the lag watchdog as expected while running, clears it when done', async () => {
+  const db = tempDb();
+  // Multiple rows + yieldEveryMs: 0 forces a real yield mid-sweep (see the
+  // "yields to the event loop" test above) -- with just one row the whole
+  // sweep can run to completion synchronously before this function even
+  // gets a chance to check the mark, which would prove nothing.
+  seed(db, Array.from({ length: 5 }, (_, i) => ({ title: `t${i}`, topics: ['tech'] })));
+
+  assert.equal(_expectedReasonForTests(), null, 'nothing marked before the sweep starts');
+  const swept = recomputeScores(db, testConfig(), { yieldEveryMs: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 0)); // let it start and yield at least once
+  assert.equal(_expectedReasonForTests(), 'recomputing scores', 'marked while the sweep is in flight');
+  await swept;
+  assert.equal(_expectedReasonForTests(), null, 'cleared once the sweep finishes');
+});
+
+test('recomputeScores clears the lag watchdog mark even if the sweep throws', async () => {
+  const db = tempDb();
+  seed(db, [{ title: 'a', topics: ['tech'] }]);
+  db.close(); // guarantees the sweep's own queries throw partway through
+
+  await assert.rejects(() => recomputeScores(db, testConfig()));
+  assert.equal(_expectedReasonForTests(), null, 'cleared even on failure, not left stuck marked');
 });
 
 function seedTitleId(db, title) {

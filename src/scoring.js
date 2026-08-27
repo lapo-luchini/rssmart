@@ -11,6 +11,7 @@
 
 import { bufToVec, existingTopicNames } from './enrich.js';
 import { createDotBatcher } from './wasmDot.js';
+import { markExpectedStall, clearExpectedStall } from './lagWatchdog.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -359,77 +360,86 @@ const SAVE_SCORE = `
  */
 export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD_MS } = {}) {
   const start = performance.now();
-  const { weights, knn, voteDecayHalflifeYears: halflife } = config.scoring;
-
-  const pref = makePrefExpr(halflife);
-
-  const topicPref = new Map(db.prepare(`
-    WITH tp AS (
-      SELECT at.topic_id AS topic_id, ${pref} AS pref
-      FROM article_topics at
-      JOIN articles a ON a.id = at.article_id
-      GROUP BY at.topic_id
-    )
-    SELECT at2.article_id AS id, AVG(tp.pref) AS pref
-    FROM article_topics at2
-    JOIN tp ON tp.topic_id = at2.topic_id
-    GROUP BY at2.article_id
-  `).all().map((r) => [r.id, r.pref]));
-
-  const feedPref = new Map(db.prepare(`
-    SELECT a.feed_id AS id, ${pref} AS pref
-    FROM articles a GROUP BY a.feed_id
-  `).all().map((r) => [r.id, r.pref]));
-
-  const authorPref = new Map(db.prepare(`
-    SELECT a.author AS name, ${pref} AS pref
-    FROM articles a
-    WHERE a.author IS NOT NULL AND a.author != ''
-    GROUP BY a.author
-  `).all().map((r) => [r.name, r.pref]));
-
-  const rows = db.prepare(
-    'SELECT id, feed_id, vote, depth, text_embedding, author FROM articles',
-  ).all();
-  const voted = votedArticles(db, halflife);
-  const scratches = makeKnnScratches(knn);
-
-  // Load article-to-topics mapping for topic-neighbor scoring.
-  const topicMap = new Map();
-  for (const r of db.prepare(`
-    SELECT at.article_id, t.name FROM article_topics at
-    JOIN topics t ON t.id = at.topic_id
-  `).all()) {
-    let s = topicMap.get(r.article_id);
-    if (!s) { s = new Set(); topicMap.set(r.article_id, s); }
-    s.add(r.name);
-  }
-
-  const batcher = makeVotedBatcher(voted);
-
+  // Annotates (never silences) any watchdog stall log line that fires
+  // during this sweep -- including the unchunked setup below, still a
+  // real single-block cost -- so a reader sees it's the known, bounded
+  // recompute cost, not a signal to go investigate a new regression.
+  markExpectedStall('recomputing scores');
   try {
-    const save = db.prepare(SAVE_SCORE);
-    let i = 0;
-    while (i < rows.length) {
-      const chunkStart = performance.now();
-      db.transaction(() => {
-        // do/while: always process at least one row per chunk before
-        // checking the time budget, so yieldEveryMs=0 (or any value too
-        // small to survive a single row) can't spin forever without i ever
-        // advancing.
-        do {
-          const row = rows[i++];
-          const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
-            authorPref.get(row.author), voted, weights, knn, scratches, batcher, topicMap, halflife);
-          save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, row.id);
-        } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
-      })();
-      if (i < rows.length) await sleep(0);
+    const { weights, knn, voteDecayHalflifeYears: halflife } = config.scoring;
+
+    const pref = makePrefExpr(halflife);
+
+    const topicPref = new Map(db.prepare(`
+      WITH tp AS (
+        SELECT at.topic_id AS topic_id, ${pref} AS pref
+        FROM article_topics at
+        JOIN articles a ON a.id = at.article_id
+        GROUP BY at.topic_id
+      )
+      SELECT at2.article_id AS id, AVG(tp.pref) AS pref
+      FROM article_topics at2
+      JOIN tp ON tp.topic_id = at2.topic_id
+      GROUP BY at2.article_id
+    `).all().map((r) => [r.id, r.pref]));
+
+    const feedPref = new Map(db.prepare(`
+      SELECT a.feed_id AS id, ${pref} AS pref
+      FROM articles a GROUP BY a.feed_id
+    `).all().map((r) => [r.id, r.pref]));
+
+    const authorPref = new Map(db.prepare(`
+      SELECT a.author AS name, ${pref} AS pref
+      FROM articles a
+      WHERE a.author IS NOT NULL AND a.author != ''
+      GROUP BY a.author
+    `).all().map((r) => [r.name, r.pref]));
+
+    const rows = db.prepare(
+      'SELECT id, feed_id, vote, depth, text_embedding, author FROM articles',
+    ).all();
+    const voted = votedArticles(db, halflife);
+    const scratches = makeKnnScratches(knn);
+
+    // Load article-to-topics mapping for topic-neighbor scoring.
+    const topicMap = new Map();
+    for (const r of db.prepare(`
+      SELECT at.article_id, t.name FROM article_topics at
+      JOIN topics t ON t.id = at.topic_id
+    `).all()) {
+      let s = topicMap.get(r.article_id);
+      if (!s) { s = new Set(); topicMap.set(r.article_id, s); }
+      s.add(r.name);
     }
+
+    const batcher = makeVotedBatcher(voted);
+
+    try {
+      const save = db.prepare(SAVE_SCORE);
+      let i = 0;
+      while (i < rows.length) {
+        const chunkStart = performance.now();
+        db.transaction(() => {
+          // do/while: always process at least one row per chunk before
+          // checking the time budget, so yieldEveryMs=0 (or any value too
+          // small to survive a single row) can't spin forever without i ever
+          // advancing.
+          do {
+            const row = rows[i++];
+            const s = scoreParts(row, topicPref.get(row.id), feedPref.get(row.feed_id),
+              authorPref.get(row.author), voted, weights, knn, scratches, batcher, topicMap, halflife);
+            save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, row.id);
+          } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
+        })();
+        if (i < rows.length) await sleep(0);
+      }
+    } finally {
+      batcher?.free();
+    }
+    return { count: rows.length, ms: performance.now() - start };
   } finally {
-    batcher?.free();
+    clearExpectedStall();
   }
-  return { count: rows.length, ms: performance.now() - start };
 }
 
 /**
