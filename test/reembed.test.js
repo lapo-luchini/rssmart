@@ -70,6 +70,42 @@ test('hybrid setup: dedup model change clears only the summary column, text mode
   assert.equal(art2.text_embedding, null, 'text vectors still cleared from above');
 });
 
+test('reembedMissing embeds only the missing column, leaving the present one untouched', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  try {
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+    const blob = Buffer.from(Float16Array.from([0.5, 0.5]).buffer);
+    db.prepare("INSERT OR IGNORE INTO feeds (id, url) VALUES (1, 'http://f')").run();
+
+    const a = Number(db.prepare(`
+      INSERT INTO articles (feed_id, guid, title, content, summary, status, embedding, text_embedding)
+      VALUES (1, 'g-dedup-ok', 'Dedup ok', ?, 'a summary', 'enriched', ?, NULL)
+    `).run(compressText('body text'), blob).lastInsertRowid);
+    const b = Number(db.prepare(`
+      INSERT INTO articles (feed_id, guid, title, content, summary, status, embedding, text_embedding)
+      VALUES (1, 'g-text-ok', 'Text ok', ?, 'a summary', 'enriched', NULL, ?)
+    `).run(compressText('body text'), blob).lastInsertRowid);
+
+    const r = await reembedMissing(db, config, llm);
+    assert.equal(r.reembedded, 2);
+    // exactly one embed per article: a has only text missing, b only dedup
+    assert.equal(stub.calls.embed.length, 2);
+    assert.ok(stub.calls.embed.some((c) => c.input === 'Dedup ok\nbody text'));
+    assert.ok(stub.calls.embed.some((c) => c.input === 'Text ok\na summary'));
+    // the already-present column is byte-identical, the missing one filled
+    const rowA = db.prepare('SELECT embedding, text_embedding FROM articles WHERE id = ?').get(a);
+    assert.ok(rowA.text_embedding, 'text column filled');
+    assert.equal(Buffer.compare(rowA.embedding, blob), 0, 'dedup vector untouched');
+    const rowB = db.prepare('SELECT embedding, text_embedding FROM articles WHERE id = ?').get(b);
+    assert.ok(rowB.embedding, 'dedup column filled');
+    assert.equal(Buffer.compare(rowB.text_embedding, blob), 0, 'text vector untouched');
+  } finally {
+    await stub.close();
+  }
+});
+
 test('reembedMissing fills vectors with the document prefix, respects deadline', async () => {
   const db = tempDb();
   const stub = await startOllamaStub();

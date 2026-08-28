@@ -349,8 +349,11 @@ export function syncEmbeddingSpace(db, config) {
 
 /**
  * Re-embed enriched articles that lack vectors in the current embedding
- * space (after an embedModel change). Embeddings only — no LLM
- * classification, so this runs at dozens of articles per second.
+ * space (after an embedModel or dedupEmbedModel change). Only the missing
+ * column(s) are embedded — a model switch on one column doesn't redo the
+ * other, which shares most of the work when the two columns use different
+ * models. Embeddings only — no LLM classification, so this runs at dozens
+ * of articles per second.
  */
 export async function reembedMissing(db, config, llm, { deadline, onItem } = {}) {
   const result = { reembedded: 0, failed: 0, errors: [] };
@@ -367,14 +370,15 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
 
   const tried = [];
   const next = db.prepare(`
-    SELECT id, title, summary, content, full_content FROM articles
+    SELECT id, title, summary, content, full_content,
+           embedding IS NULL AS needDedup, text_embedding IS NULL AS needText
+    FROM articles
     WHERE status = 'enriched' AND (embedding IS NULL OR text_embedding IS NULL)
       AND id NOT IN (SELECT value FROM json_each(?))
     ORDER BY COALESCE(published_at, created_at) DESC LIMIT 1
   `);
-  const save = db.prepare(
-    'UPDATE articles SET embedding = ?, text_embedding = ? WHERE id = ?',
-  );
+  const saveDedup = db.prepare('UPDATE articles SET embedding = ? WHERE id = ?');
+  const saveText = db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?');
 
   while (!deadline || Date.now() < deadline) {
     const article = next.get(JSON.stringify(tried));
@@ -382,14 +386,19 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
     tried.push(article.id);
     try {
       const text = stripHtml(decompressText(article.full_content ?? article.content));
-  const vec = await llm.embed(
-    `${article.title}\n${article.summary ?? sampleText(text, 500)}`,
-    'document',
-    dedupDims,
-    { dedup: true },
-  );
-      const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
-      save.run(Buffer.from(vec.buffer), Buffer.from(textVec.buffer), article.id);
+      if (article.needDedup) {
+        const vec = await llm.embed(
+          `${article.title}\n${article.summary ?? sampleText(text, 500)}`,
+          'document',
+          dedupDims,
+          { dedup: true },
+        );
+        saveDedup.run(Buffer.from(vec.buffer), article.id);
+      }
+      if (article.needText) {
+        const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
+        saveText.run(Buffer.from(textVec.buffer), article.id);
+      }
       result.reembedded++;
       onItem?.({ id: article.id, done: result.reembedded });
     } catch (err) {
