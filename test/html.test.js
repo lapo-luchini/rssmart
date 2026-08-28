@@ -15,7 +15,10 @@ test('stripHtml falls back to the title attribute when alt is empty', () => {
   assert.equal(stripHtml('<img src="x.png" alt="" title="hover joke">'), '[image: hover joke]');
   assert.equal(stripHtml('<img src="x.png" title="only title">'), '[image: only title]');
   // alt wins when both exist (xkcd pattern: alt = joke, title = extra)
-  assert.equal(stripHtml('<img src="x.png" alt="joke" title="extra">'), '[image: joke]');
+  assert.equal(stripHtml('<img src="x.png" alt="joke" title="extra">'), '[image: joke] [image title: extra]');
+  // ...but a title that merely duplicates alt adds no second marker
+  assert.equal(stripHtml('<img src="x.png" alt="joke" title="joke">'), '[image: joke]');
+  assert.equal(stripHtml('<img src="x.png" alt="Joke" title="joke">'), '[image: Joke]');
 });
 
 test('stripHtml handles attribute quoting styles, entities and length caps in alt text', () => {

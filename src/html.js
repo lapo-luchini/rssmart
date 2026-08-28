@@ -61,6 +61,18 @@ function imgText(tag) {
       .replace(/\s+/g, ' ')
       .trim();
   };
-  const desc = (attr('alt') || attr('title')).slice(0, MAX_IMG_TEXT);
-  return desc ? `[image: ${desc}]` : '[image]';
+  const alt = attr('alt');
+  const title = attr('title');
+  const desc = (alt || title).slice(0, MAX_IMG_TEXT);
+  if (!desc) return '[image]';
+  let out = `[image: ${desc}]`;
+  // Feeds almost always set at most one of the two (measured on this
+  // archive: ~715 alt-only vs 3 both, two of those identical), so the
+  // second attribute is usually absent or a duplicate. When it does carry
+  // different text (Oglaf: alt = caption, title = a separate gag), it is
+  // real extra signal — keep it.
+  if (alt && title && title.toLowerCase() !== alt.toLowerCase()) {
+    out += ` [image title: ${title.slice(0, MAX_IMG_TEXT)}]`;
+  }
+  return out;
 }
