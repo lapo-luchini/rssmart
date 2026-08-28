@@ -9,13 +9,25 @@ import { fileURLToPath } from 'node:url';
 // shape of scoring.js's kNN pass (a query per article, ~170-8000
 // candidates, 512 dims): ~9-10x faster than plain JS on Node, ~46-51x on
 // Bun (JSC's Float16Array element access is dramatically worse-optimized
-// than V8's) - see DESIGN.md. `wasm/cosine-src` is the Rust source;
+// than V8's) - see DESIGN.md. The kernel is simd128 (fixed-width WASM SIMD:
+// 4-wide f32 multiply-add, 4x-unrolled, scalar tail for dims % 4) since
+// 2026-08: ~4.3x over the previous scalar kernel at 170-2000 candidates,
+// ~3.1x at 8000 (memory-bound), measured identically on Node and Bun via
+// scripts/bench-dot.js. `wasm/cosine-src` is the Rust source;
 // `wasm/cosine.wasm` is the committed, portable, prebuilt artifact this
 // loads - no Rust toolchain needed to run the app, only to rebuild it.
 const wasmPath = fileURLToPath(new URL('../wasm/cosine.wasm', import.meta.url));
+// Loud, specific failure on engines without fixed-width SIMD (all engines
+// this project targets have it; wasm/cosine.wasm contains v128 instructions
+// and cannot instantiate without it) instead of a bare CompileError.
+if (!WebAssembly.validate(new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0,
+  10, 22, 1, 20, 0, 253, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11,
+]))) {
+  throw new Error('wasm/cosine.wasm needs the fixed-width SIMD (simd128) WebAssembly feature; this runtime does not support it');
+}
 const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), {});
 const { memory, alloc_f32, free_f32, dot_batch } = instance.exports;
-
 /**
  * Prepare a batch of candidate vectors once, then run many single-query
  * dot-product searches against them cheaply. Mirrors how scoring.js uses

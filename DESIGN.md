@@ -963,6 +963,23 @@ Two paths, with very different scaling:
   change: two articles swapping exact vote values between checks, and
   a voted article re-embedded to a different vector of the same byte
   length.
+
+  A fourth 2026-08 change replaced the scalar dot-product kernel itself
+  with simd128 (fixed-width WASM SIMD: 4-wide f32 multiply-add, 4x
+  unrolled into separate accumulators, scalar tail for dims % 4 -
+  `wasm/cosine-src/src/lib.rs`, rebuilt via `cargo build --release
+  --target wasm32-unknown-unknown`). Measured with
+  `scripts/bench-dot.js` at the real sweep shape (512-dim unit vectors):
+  ~793ns -> ~192ns per candidate pair on Node and ~791ns -> ~247ns on
+  Bun at 170-2000 candidates (~3.2-4.3x), ~3.1x at 8000 where the 16MB
+  candidate matrix is memory-bound. simd-vs-scalar output deviation max
+  1.64e-7 over 50k dots - the same float32 rounding class the WASM port
+  itself introduced vs float64 JS (max 7.7e-08 above), verified by the
+  existing tolerance-based tests on both runtimes. Since the sweep's
+  ~30s at current scale is dominated by the dot products, this is the
+  first change of the round expected to move the full sweep's wall
+  clock substantially (the JS-side items above only trimmed the work
+  around the math).
 - **Ant (antjs.org) investigated as a third runtime, not adopted.** It
   looked promising on the two things this project cares most about:
   `Float16Array` and `WebAssembly.instantiate` both work natively.
