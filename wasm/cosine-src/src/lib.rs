@@ -25,7 +25,10 @@ pub extern "C" fn free_f32(ptr: *mut f32, len: usize) {
 /// out: n f32s, one dot product per candidate row.
 ///
 /// SIMD kernel (fixed-width simd128, supported by every engine this project
-/// targets - Node >= 16.4 on V8, Bun/Safari >= 16.4 on JSC): 4-wide f32
+/// targets: V8 shipped it in Chrome 91 and first default-enabled it in Node
+/// 16.4 (June 2021); JavaScriptCore shipped it in Safari 16.4 (March 2023),
+/// and every current Bun bundles a newer WebKit - verified live on Node
+/// 24.18 and Bun 1.3.14): 4-wide f32
 /// multiply-add, unrolled 4x (16 floats per iteration) into separate
 /// accumulators to hide lane latency, then a horizontal reduction, then a
 /// scalar tail for dims % 4. Works for any dims (including dims < 4); v128
@@ -45,6 +48,20 @@ pub unsafe extern "C" fn dot_batch(
 ) {
     let simd_end = dims & !15; // 16-float chunks: 4x unrolled f32x4
     let vec_end = dims & !3; // remaining 4-float chunks
+
+    // The unoptimized-but-easy-to-read scalar implementation this replaced,
+    // kept as the reference for what the vector loops below compute (same
+    // sum, different accumulation order - see the doc comment above):
+    //
+    // for i in 0..n {
+    //     let row = std::slice::from_raw_parts(candidates.add(i * dims), dims);
+    //     let mut sum = 0.0f32;
+    //     for d in 0..dims {
+    //         sum += query[d] * row[d];
+    //     }
+    //     *out.add(i) = sum;
+    // }
+
     for i in 0..n {
         let row = candidates.add(i * dims);
         let mut qp = query;
