@@ -84,7 +84,7 @@ const { runtime, runtimeVersion, sqliteVersion } = getRuntimeInfo(db);
 log(`rssmart commit ${COMMIT_HASH} (${runtime} ${runtimeVersion}, sqlite ${sqliteVersion})`);
 
 // One-time diagnostic, not a startup gate: confirms the Ollama connection
-// (auth included) works and both configured models are actually installed
+// (auth included) works and all configured models are actually installed
 // there. Logged loudly on failure but never fatal — ingestion and serving
 // already-enriched content don't need Ollama at all, and every real call
 // site already tolerates it being transiently unreachable (see
@@ -92,7 +92,10 @@ log(`rssmart commit ${COMMIT_HASH} (${runtime} ${runtimeVersion}, sqlite ${sqlit
 {
   const check = await new Ollama(config.ollama).checkModels();
   if (check.ok) {
-    if (verbose) log(`ollama: connected, ${config.ollama.chatModel} + ${config.ollama.embedModel} available`);
+    const embedDesc = config.ollama.dedupEmbedModel
+      ? `${config.ollama.embedModel} (text) + ${config.ollama.dedupEmbedModel} (dedup)`
+      : config.ollama.embedModel;
+    if (verbose) log(`ollama: connected, ${config.ollama.chatModel} + ${embedDesc} available`);
   } else {
     logError(`ollama startup check failed: ${check.reason}`);
   }
