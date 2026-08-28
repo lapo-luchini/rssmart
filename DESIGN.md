@@ -1042,7 +1042,14 @@ Two paths, with very different scaling:
   matching the "worst case well under a second" design intent. Not
   urgent, but worth re-measuring again if the archive keeps growing at
   this rate — the WASM-optimized absolute time will keep climbing even
-  though it isn't a problem yet.
+  though it isn't a problem yet. First live measurement after the
+  2026-08 constant-factor round + simd128 kernel: **40,842 articles in
+  16.7s** (from ~30s at the same size just before) — about half, not
+  the kernel's ~4x, confirming the remaining floor is the sweep's
+  non-dot-product work: 40k single-row `score_*` UPDATEs, the per-row
+  Float16 decode of every article's embedding for `batcher.query`, and
+  the fused JS pass - the next ladder rung if this ever matters is
+  batching or moving those, not more kernel tuning.
 
 ## Deferred ideas
 
