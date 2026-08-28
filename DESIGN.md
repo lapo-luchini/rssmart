@@ -694,7 +694,10 @@ Two paths, with very different scaling:
    one pass is a few million float ops (~ms) against ~10 s of LLM time.
 
 2. **kNN vote scoring** (`recomputeScores`): loads *all* text embeddings
-   and compares every article against every voted article —
+   (once per rebuild of the voted snapshot — the snapshot and its WASM
+   buffer are cached per-db behind a freshness aggregate and shared with
+   `recomputeOneScore`, see the 2026-08 note in the known-limits section
+   below) and compares every article against every voted article —
    O(N articles × V votes × dims). Runs only via the debounced
    vote-ripple recompute (`recomputeIfDue`, see below) — never per-vote
    and never after a classification batch, both of which use the cheap
@@ -881,7 +884,10 @@ Two paths, with very different scaling:
   architecture, unlike `better-sqlite3`'s native addon, so no rebuild
   step ever). `src/wasmDot.js` wraps it: `createDotBatcher(candidates,
   dims)` flattens the voted set into WASM linear memory *once* per
-  sweep, then `.query(vec)` computes every dot product against it in a
+  rebuild (and the buffer is recycled across rebuilds via the `reuse`
+  path instead of freed and reallocated; rebuilds happen only when the
+  voted snapshot's freshness key changes - see `_votedCaches` in
+  `scoring.js`), then `.query(vec)` computes every dot product against it in a
   single call - one JS↔WASM boundary crossing per *article scored*,
   not per candidate pair, and no Float16→float conversion happening
   inside a JS loop at all.
@@ -902,7 +908,9 @@ Two paths, with very different scaling:
   generally slower at loops", the earlier, less precise read) is what's
   dramatically worse-optimized than V8's.
 
-  Wired into `scoring.js`'s `knnScore` (the only real hot path -
+  Wired into `scoring.js`'s `knnTerms` (the fused up/down/topic-neighbor/
+  max-similarity pass over `pairSims`; it was named `knnScore` when this
+  landed) - the only real hot path -
   `enrich.js`'s `findDuplicate` and `search.js`'s `semanticSearch` stay
   on plain JS `cosine()`, since neither is a bottleneck at this
   project's scale and per-call WASM overhead isn't worth paying where
@@ -920,12 +928,41 @@ Two paths, with very different scaling:
   end-to-end on the real ~6200-article archive: **Node 17.9s → 3.4s
   (5.3x)**, **Bun ~89s → 3.2s (~27.7x)** - Bun is now marginally
   *faster* than Node for this workload, a complete reversal from
-  where this investigation started. The remaining ladder rungs
-  (caching voted vectors instead of re-reading blobs each sweep;
-  sqlite-vec/approximate NN if this ever gets truly huge) are about
+  where this investigation started. The remaining ladder rung
+  (sqlite-vec/approximate NN if this ever gets truly huge) is about
   the sweep's total *duration*, not urgent now that duration no
   longer blocks anything and is down to single-digit seconds either
-  way.
+  way. The other rung once named here - caching voted vectors instead
+  of re-reading blobs every sweep - has since been implemented; see
+  the 2026-08 note below.
+
+  **2026-08 constant-factor round on the same O(N×V) path, no
+  algorithmic or semantics change** (verified by the existing test
+  suite, including the bit-exact `recomputeOneScore`-matches-full-sweep
+  and mid-sweep-vote isolation tests; no fresh live-archive measurement
+  for this write-up): (1) the four separate passes over each row's
+  `pairSims` array (up-kNN filter, down-kNN filter, topic-neighbor
+  overlap scan, max-similarity scan) are fused into one `knnTerms`
+  loop - identical results, ~4x fewer iterations and one
+  `max(sim, 0)` per candidate instead of up to three; (2) the sweep's
+  WASM candidate buffer stays alive across sweeps and is recycled via
+  `createDotBatcher`'s `reuse` path instead of a free/alloc cycle per
+  sweep; (3) the voted snapshot (decoded vectors + batcher) is a single
+  per-db cache shared by the sweep and `recomputeOneScore`, validated
+  by a cheap aggregate over exactly the rows `votedArticles` selects
+  (COUNT, SUM(vote), MAX(vote time), SUM(LENGTH of the embedding blob) -
+  the last also catches embedding rewrites by another process, e.g.
+  cron re-embedding against a live serve's db, which the old
+  single-score dirty flag could not see). A sweep whose voted set
+  hasn't changed since the last single-article score reuses that
+  snapshot wholesale instead of rebuilding it. The snapshot is leased
+  to the sweep across its await points: a vote landing mid-sweep builds
+  its own ephemeral copy (freed after use) rather than reading the
+  stale leased one; the accepted-stale-sweep tradeoff described above
+  is unchanged. Documented blind spots, self-correcting on any later
+  change: two articles swapping exact vote values between checks, and
+  a voted article re-embedded to a different vector of the same byte
+  length.
 - **Ant (antjs.org) investigated as a third runtime, not adopted.** It
   looked promising on the two things this project cares most about:
   `Float16Array` and `WebAssembly.instantiate` both work natively.
