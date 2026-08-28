@@ -41,6 +41,35 @@ test('syncEmbeddingSpace records, detects changes, clears stale vectors', () => 
   assert.equal(l.changed, true);
 });
 
+test('hybrid setup: dedup model change clears only the summary column, text model only the text column', () => {
+  const db = tempDb();
+  const config = testConfig();
+  config.ollama.embedModel = 'model-a';
+  config.ollama.dedupEmbedModel = 'dedup-a';
+
+  // record both spaces silently, then flip just the text model: only
+  // text_embedding is stale — the dedup column must survive untouched.
+  assert.deepEqual(syncEmbeddingSpace(db, config), { changed: false });
+  seedEnriched(db, 'one');
+  assert.deepEqual(syncEmbeddingSpace(db, config), { changed: false });
+  config.ollama.embedModel = 'model-b';
+  const r = syncEmbeddingSpace(db, config);
+  assert.deepEqual(r, { changed: true, cleared: 1, dedupChanged: false, textChanged: true });
+  const art = db.prepare('SELECT embedding, text_embedding FROM articles').get();
+  assert.notEqual(art.embedding, null, 'dedup vectors kept');
+  assert.equal(art.text_embedding, null, 'text vectors cleared');
+
+  // and flipping just the dedup model: only the summary column goes stale.
+  config.ollama.embedModel = 'model-a';
+  assert.deepEqual(syncEmbeddingSpace(db, config), { changed: false });
+  config.ollama.dedupEmbedModel = 'dedup-b';
+  const r2 = syncEmbeddingSpace(db, config);
+  assert.deepEqual(r2, { changed: true, cleared: 1, dedupChanged: true, textChanged: false });
+  const art2 = db.prepare('SELECT embedding, text_embedding FROM articles').get();
+  assert.equal(art2.embedding, null, 'dedup vectors cleared');
+  assert.equal(art2.text_embedding, null, 'text vectors still cleared from above');
+});
+
 test('reembedMissing fills vectors with the document prefix, respects deadline', async () => {
   const db = tempDb();
   const stub = await startOllamaStub();

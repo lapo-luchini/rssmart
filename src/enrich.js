@@ -317,8 +317,8 @@ export async function getReaderContent(db, article, config) {
  * Track and detect embedding space changes separately for dedup and
  * text embeddings — they can now use different dimensions.
  */
-function checkEmbeddingSpace(db, config, column, key, dims) {
-  const current = `${config.ollama.embedModel}::${dims ?? 'default'}::f16`;
+function checkEmbeddingSpace(db, config, column, key, dims, model) {
+  const current = `${model}::${dims ?? 'default'}::f16`;
   const stored = db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value;
   if (stored === current) return false;
   const record = () => db.prepare(`
@@ -333,9 +333,13 @@ function checkEmbeddingSpace(db, config, column, key, dims) {
 }
 
 export function syncEmbeddingSpace(db, config) {
+  // The two embedding columns can use different models entirely (hybrid
+  // setup): `embedding` holds the summary/dedup vectors, `text_embedding`
+  // the text/taste ones — each column's space is keyed on its own model.
+  const dedupModel = config.ollama.dedupEmbedModel ?? config.ollama.embedModel;
   const dedupDims = config.ollama.dedupEmbedDimensions ?? config.ollama.embedDimensions;
-  const dedupChanged = checkEmbeddingSpace(db, config, 'embedding', 'embed_model_dedup', dedupDims);
-  const textChanged = checkEmbeddingSpace(db, config, 'text_embedding', 'embed_model_text', config.ollama.embedDimensions);
+  const dedupChanged = checkEmbeddingSpace(db, config, 'embedding', 'embed_model_dedup', dedupDims, dedupModel);
+  const textChanged = checkEmbeddingSpace(db, config, 'text_embedding', 'embed_model_text', config.ollama.embedDimensions, config.ollama.embedModel);
   // The recent-articles dedup cache holds vectors from the 'embedding'
   // column — stale the moment that column's space changes.
   if (dedupChanged) clearRecentCache(db);
@@ -378,10 +382,12 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
     tried.push(article.id);
     try {
       const text = stripHtml(decompressText(article.full_content ?? article.content));
-      const vec = await llm.embed(
-        `${article.title}\n${article.summary ?? sampleText(text, 500)}`,
-        'document', dedupDims,
-      );
+  const vec = await llm.embed(
+    `${article.title}\n${article.summary ?? sampleText(text, 500)}`,
+    'document',
+    dedupDims,
+    { dedup: true },
+  );
       const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
       save.run(Buffer.from(vec.buffer), Buffer.from(textVec.buffer), article.id);
       result.reembedded++;
@@ -517,7 +523,7 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
   // retain near-perfect cosine accuracy at 64 dims for duplicate detection.
   const dedupDims = enrichCfg.dedupEmbedDimensions ?? null;
   t = performance.now();
-  const vec = await llm.embed(`${article.title}\n${summary}`, 'document', dedupDims);
+  const vec = await llm.embed(`${article.title}\n${summary}`, 'document', dedupDims, { dedup: true });
   const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
   timings.embed += performance.now() - t;
 

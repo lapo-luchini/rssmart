@@ -19,10 +19,15 @@ export function parseJsonReply(content) {
 
 /** Thin client for a (possibly remote) Ollama instance. */
 export class Ollama {
-  constructor({ url, chatModel, embedModel, embedPrefixes, embedDimensions, timeoutMs = 60_000, apiKey }) {
+  constructor({ url, chatModel, embedModel, embedModelDedup, embedPrefixes, embedDimensions, timeoutMs = 60_000, apiKey }) {
     this.url = url.replace(/\/+$/, '');
     this.chatModel = chatModel;
     this.embedModel = embedModel;
+    // Optional second embedding model for the summary/dedup vectors
+    // (`embedding` column), when a different model scores better there
+    // than the text/taste one — see the 2026-08 benchmark in DESIGN.md.
+    // Null = use embedModel for everything (the historical behavior).
+    this.embedModelDedup = embedModelDedup || null;
     // Retrieval-tuned models use task prefixes (asymmetric: documents vs
     // queries) — model-specific, so they ride in the config.
     this.embedPrefixes = { document: '', query: '', ...embedPrefixes };
@@ -92,7 +97,8 @@ export class Ollama {
     // ":latest", same as `ollama run` / the API itself would resolve it.
     const installed = new Set((data.models ?? []).map((m) => m.name ?? m.model).filter(Boolean));
     const hasModel = (wanted) => installed.has(wanted) || installed.has(`${wanted}:latest`);
-    const missing = [...new Set([this.chatModel, this.embedModel])].filter((name) => !hasModel(name));
+    const missing = [...new Set([this.chatModel, this.embedModel, this.embedModelDedup].filter(Boolean))]
+      .filter((name) => !hasModel(name));
 
     if (missing.length) {
       return {
@@ -168,10 +174,12 @@ export class Ollama {
    * (see bufToVec) — Node needs v24+ for native Float16Array, no
    * hand-rolled bit manipulation.
    * dimensions overrides the instance default for this call.
+   * opts.dedup selects the optional summary/dedup embedding model
+   * (embedModelDedup) instead of the text/taste one.
    */
-  async embed(text, kind = 'document', dimensions) {
+  async embed(text, kind = 'document', dimensions, { dedup = false } = {}) {
     const body = {
-      model: this.embedModel,
+      model: dedup ? (this.embedModelDedup ?? this.embedModel) : this.embedModel,
       input: (this.embedPrefixes[kind] ?? '') + text,
     };
     body.dimensions = dimensions ?? this.embedDimensions;

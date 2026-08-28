@@ -15,6 +15,7 @@ const SCHEMA = {
     chatModel: 'string',
     embedModel: 'string',
     embedDimensions: 'number?',
+    dedupEmbedModel: 'string?',
     dedupEmbedDimensions: 'number?',
     embedPrefixes: { document: 'string', query: 'string' },
     timeoutMs: 'number',

@@ -81,12 +81,18 @@ Configure in `config.yaml`:
 - `ollama.url` — your Ollama instance, e.g. `http://192.168.1.10:11434`.
 - `ollama.chatModel` — any instruct model, e.g. `gemma4:12b-it-qat`, `qwen3`.
 - `ollama.embedModel` — an embedding model, e.g. `nomic-embed-text`
-  (`ollama pull nomic-embed-text`).
+  (`ollama pull nomic-embed-text`). Used for the text embeddings behind
+  taste scoring and search.
+- `ollama.dedupEmbedModel` — optional second embedding model used only for
+  the summary vectors that detect duplicates; useful when one model is
+  better at clustering your votes and another at duplicate detection
+  (that's the shipped default config: harrier for taste, qwen3 for dedup).
+  Omit to use `embedModel` for everything.
 - `ollama.embedDimensions` — optional Matryoshka-style truncation (e.g. `512`
   for a 1024-dim model): halves embedding storage on top of the float16
   format, with little accuracy loss — only if your model supports it
-  (check its card; qwen3-embedding does). Omit to use the model's native
-  dimension.
+  (check its card; qwen3-embedding does, being MRL-trained). Omit to use
+  the model's native dimension.
 - `enrich.dupThreshold` — cosine similarity above which a story counts as a
   repeat (default 0.87; raise it if distinct stories get flagged).
 - `enrich.fetchMinChars` — link-only feeds (e.g. Hacker News) carry almost no

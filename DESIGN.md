@@ -16,6 +16,21 @@ day-one spec was retired for exactly that reason; it's in git history).
   embedding is style-blind by design (see above), so the vote-similarity
   signal uses an embedding of the article's own text, which keeps register
   and genre.
+- **The two embedding jobs may use two different models.** Benchmarked
+  head-to-head on this deployment's archive (2026-08: ~26k articles, 518
+  voted, 3.5k labeled duplicate pairs — `scripts/bench-embed.js`,
+  `scripts/bench-embed-mrl.js`): `leoipulsar/harrier-0.6b` clusters the
+  votes better (same-sign vs opposite-sign kNN AUC 0.64 vs 0.55) but is
+  worse at duplicate detection (recall 53% vs 73% at matched
+  false-positive rate) and — its docs claim no MRL, unlike
+  qwen3-embedding — degrades sharply when truncated to the 64 dims dedup
+  uses (native-dims dedup recovers most of that, without reaching
+  qwen3's level). So the config keeps `qwen3-embedding:0.6b` for dedup
+  via the optional `ollama.dedupEmbedModel` (defaults to `embedModel`)
+  and uses harrier for the text/taste/search vectors, where its win is
+  real and holds at both native and truncated dims. MTEB leaderboard
+  scores don't transfer to this setup: they measure native dims, not
+  64/512-dim truncations, and neither this corpus nor this threshold.
 - **No LLM in the preference loop.** Scores derive from votes at recompute
   time — Laplace-smoothed ratios and a kNN over voted articles. Transparent,
   inspectable (`/api/topics`, the score popover), retrains "for free" on
@@ -41,8 +56,12 @@ day-one spec was retired for exactly that reason; it's in git history).
   jump the queue entirely (`enrich_priority`).
 - **The embedding space is versioned.** Vectors from different models must
   never be compared, so the model that produced the stored vectors is
-  recorded in `meta.embed_model`. Changing `ollama.embedModel` in the config
-  is detected on the next run (cron or serve): all vectors are cleared and
+  recorded in `meta.embed_model_text` / `meta.embed_model_dedup` — one
+  space per column, since the two embedding jobs may use different models
+  (see the two-model bullet above). Changing `ollama.embedModel` (or
+  `ollama.dedupEmbedModel`) in the config
+  is detected on the next run (cron or serve): that column's vectors are
+  cleared and
   rebuilt by `reembedMissing` — embeddings only, no LLM classification, so
   ~2-3 articles/s. Legacy vectors with no record are treated as unknown
   space and rebuilt too. Duplicate marks made in the old space are kept:
@@ -50,9 +69,11 @@ day-one spec was retired for exactly that reason; it's in git history).
   Task prefixes (`ollama.embedPrefixes`, document/query) ride in the config
   because every retrieval model spells them differently (qwen3: plain
   documents + instructed queries; nomic v1.5: `search_document:` /
-  `search_query:`). Current model: qwen3-embedding:0.6b (multilingual —
-  half the feeds are Italian; nomic v1.5 was English-centric). The version
-  key is a composite (`embedModel::embedDimensions::f16`), not just the
+  `search_query:`). Current models: `leoipulsar/harrier-0.6b` for the
+  text/taste/search column (multilingual — half the feeds are Italian;
+  nomic v1.5 was English-centric), `qwen3-embedding:0.6b` for the dedup
+  column (see the two-model bullet above). The version
+  key is a composite (`model::embedDimensions::f16`), not just the
   bare model name — see the next entry for why.
 - **Embeddings stored as float16, at a configurable reduced dimension.**
   `Ollama.embed()` (`src/llm.js`) returns a `Float16Array`; `bufToVec`
