@@ -11,7 +11,11 @@ day-one spec was retired for exactly that reason; it's in git history).
   similarity of summary embeddings is cheap, deterministic, and needs no
   prompt engineering. The summary embedding is deliberately built from *our
   own* uniform-voice summary so that style differences between sources don't
-  mask same-story matches.
+  mask same-story matches. Image-only posts (webcomic feeds, photo blogs)
+  get their `<img alt>`/`title` text recovered into the LLM's input
+  (`stripHtml` emits `[image: alt text]`, or a bare `[image]` marker) —
+  without it every episode of a series summarized to near-identical text
+  and the dedup threshold had nothing to tell episodes apart with.
 - **A second, raw-text embedding exists for taste learning.** The dedup
   embedding is style-blind by design (see above), so the vote-similarity
   signal uses an embedding of the article's own text, which keeps register
