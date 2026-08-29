@@ -653,6 +653,14 @@ export function createApp(db, config, commitHash) {
     });
   });
 
+  // Static assets revalidate on every load (no-cache still allows cheap
+  // 304s): index.html and app.js evolve together, and a browser's
+  // heuristic cache serving a stale app.js against a fresh index.html
+  // crashes the app on first interaction — a blank dark page.
+  app.use('*', async (c, next) => {
+    await next();
+    if (!c.req.path.startsWith('/api/')) c.header('Cache-Control', 'no-cache');
+  });
   app.use('*', serveStatic({ root: PUBLIC_DIR }));
   return app;
 }

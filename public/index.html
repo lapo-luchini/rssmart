@@ -315,17 +315,19 @@
       </div>
 
       <div v-if="expandedVersions[a.id]" class="versions">
+        <!-- optional chaining keeps a cached old app.js (without
+             selectedVersion) from crashing the whole app mid-deploy -->
         <template v-for="v in expandedVersions[a.id]" :key="v.id">
-          <div class="version-row" :class="{ chosen: selectedVersion[a.id] === v.id }">
+          <div class="version-row" :class="{ chosen: selectedVersion?.[a.id] === v.id }">
             <span class="score" :style="{ color: tint(v.score, 55) }">{{ fmtScore(v.score) }}</span>
             <a class="version-title" :href="v.url" target="_blank" rel="noopener">{{ v.title }}</a>
             <span class="source">{{ v.feed_title }}</span>
             <time :title="fullDate(v.published_at || v.created_at)">{{ ago(v.published_at || v.created_at) }}</time>
-            <button class="flag flag-link" :aria-expanded="selectedVersion[a.id] === v.id"
-                    :title="selectedVersion[a.id] === v.id ? 'hide details' : 'show this copy in full — preview and vote it without reading'"
-                    @click="toggleVersionPreview(a.id, v)">{{ selectedVersion[a.id] === v.id ? 'hide' : 'details' }}</button>
+            <button class="flag flag-link" :aria-expanded="selectedVersion?.[a.id] === v.id"
+                    :title="selectedVersion?.[a.id] === v.id ? 'hide details' : 'show this copy in full — preview and vote it without reading'"
+                    @click="toggleVersionPreview(a.id, v)">{{ selectedVersion?.[a.id] === v.id ? 'hide' : 'details' }}</button>
           </div>
-          <div v-if="selectedVersion[a.id] === v.id" class="version-details">
+          <div v-if="selectedVersion?.[a.id] === v.id" class="version-details">
             <span class="score-wrap">
               <button class="score" :style="{ color: tint(v.score, 78) }"
                       :aria-expanded="scoreDetailId === v.id"
