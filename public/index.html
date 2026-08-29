@@ -312,6 +312,11 @@
           <button class="mark" type="submit"
                   :disabled="a.status === 'pending'">{{ a.status === 'pending' ? 'queued…' : 'reclassify' }}</button>
         </form>
+        <div class="rededup-row" v-if="a.status === 'enriched'">
+          <button class="mark" @click="rededup(a)"
+                  title="re-run duplicate detection on this article against the recent window (use after a mistaken “not a duplicate”)">re-check duplicates</button>
+          <span v-if="a.rededupNote" class="rededup-note">{{ a.rededupNote }}</span>
+        </div>
       </div>
 
       <div v-if="expandedVersions[a.id]" class="versions">
@@ -321,6 +326,7 @@
           <div class="version-row" :class="{ chosen: selectedVersion?.[a.id] === v.id }">
             <span class="score" :style="{ color: tint(v.score, 55) }">{{ fmtScore(v.score) }}</span>
             <a class="version-title" :href="v.url" target="_blank" rel="noopener">{{ v.title }}</a>
+            <span v-if="!v.duplicate_of" class="flag" title="the original the other versions were matched against">original</span>
             <span class="source">{{ v.feed_title }}</span>
             <time :title="fullDate(v.published_at || v.created_at)">{{ ago(v.published_at || v.created_at) }}</time>
             <button class="flag flag-link" :aria-expanded="selectedVersion?.[a.id] === v.id"

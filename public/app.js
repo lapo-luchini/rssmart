@@ -907,6 +907,26 @@ createApp({
       else this.selectedVersion[rootId] = version.id;
     },
 
+    // Re-run duplicate detection on one article (same window/threshold as
+    // the enrichment pipeline) — the undo path for a mistaken "not a
+    // duplicate". If it re-attaches, the list reloads so the story bundles
+    // under its original again; otherwise an inline note says so.
+    async rededup(article) {
+      try {
+        const res = await this.api(`/api/articles/${article.id}/rededup`, { method: 'POST' });
+        if (res.duplicateOf) {
+          article.rededupNote = `matched “${res.title || '#' + res.duplicateOf}” — grouped again`;
+          setTimeout(() => this.reload(), 1200);
+        } else {
+          article.rededupNote = res.error === 'no embedding'
+            ? 'no summary embedding yet'
+            : 'no duplicates found in the recent window';
+        }
+      } catch (err) {
+        this.error = `Re-check failed: ${err.message}`;
+      }
+    },
+
     // The reader judged a "duplicate" wrong: detach the copy from its group.
     // Only copies (never the group root) can be detached. The list reloads
     // afterwards so the versions badge and counts reflect the smaller group.

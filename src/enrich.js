@@ -195,6 +195,29 @@ function syncRecentCache(db, dupWindowDays) {
 }
 
 /**
+ * Re-run duplicate detection for one already-enriched article against the
+ * recent window (same vectors, same threshold as the enrichment pipeline).
+ * Used after a manual un-link ("not a duplicate" in the UI) turns out to be
+ * wrong, or to re-check an article that was classified before the dedup
+ * inputs improved. Standalone articles only: grouped ones are already
+ * where dedup wants them.
+ */
+export function recheckDuplicates(db, config, articleId) {
+  const row = db
+    .prepare('SELECT id, duplicate_of, embedding FROM articles WHERE id = ?')
+    .get(articleId);
+  if (!row) return { duplicateOf: null, error: 'not found' };
+  if (row.duplicate_of) return { duplicateOf: row.duplicate_of, alreadyGrouped: true };
+  if (!row.embedding) return { duplicateOf: null, error: 'no embedding' };
+  const recent = syncRecentCache(db, config.enrich.dupWindowDays);
+  const matched = findDuplicate(bufToVec(row.embedding), articleId, recent, config.enrich.dupThreshold);
+  if (!matched) return { duplicateOf: null };
+  const root = resolveGroupRoot(db, matched, articleId);
+  db.prepare('UPDATE articles SET duplicate_of = ? WHERE id = ?').run(root, articleId);
+  return { duplicateOf: root };
+}
+
+/**
  * Find the first external link in HTML content, excluding the article's own
  * URL, profile mentions, and hashtag searches.
  */

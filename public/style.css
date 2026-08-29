@@ -485,6 +485,17 @@ body {
   padding: 0.25rem 0.4rem;
 }
 
+.rededup-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.rededup-note { color: var(--muted); }
+
 .guidelines {
   display: flex;
   flex-direction: column;

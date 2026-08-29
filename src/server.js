@@ -3,7 +3,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
-import { getReaderContent } from './enrich.js';
+import { getReaderContent, recheckDuplicates } from './enrich.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
@@ -412,6 +412,19 @@ export function createApp(db, config, commitHash) {
       .prepare(`SELECT ${ARTICLE_COLUMNS} FROM articles a JOIN feeds f ON f.id = a.feed_id WHERE a.id = ?`)
       .get(id);
     return c.json(rowToArticle(row));
+  });
+
+  // Re-run duplicate detection for one article (e.g. after a mistaken
+  // un-link): same summary embedding, same recent window, same threshold as
+  // the enrichment pipeline. Returns the group root it was attached to, or
+  // null when nothing in the window matches.
+  app.post('/api/articles/:id/rededup', (c) => {
+    const id = c.req.param('id');
+    const result = recheckDuplicates(db, config, Number(id));
+    if (result.error) return c.json(result, 404);
+    if (!result.duplicateOf) return c.json(result);
+    const row = db.prepare('SELECT title FROM articles WHERE id = ?').get(result.duplicateOf);
+    return c.json({ ...result, title: row?.title });
   });
 
   // Re-queue an article for classification, optionally with a persistent

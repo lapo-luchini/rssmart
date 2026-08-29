@@ -186,15 +186,22 @@ test('unlink detaches a false duplicate; the group shrinks, the copy becomes its
   const freshBefore = before.body.articles.find((a) => a.id === ids.fresh);
   assert.equal(freshBefore.versions, 2);
 
+  // a detached copy keeps its OWN score — detaching must never copy the
+  // root's (or anyone's) score onto it
+  db.prepare('UPDATE articles SET score = 0.39 WHERE id = ?').run(ids.dupe);
+  const freshScoreBefore = before.body.articles.find((a) => a.id === ids.fresh).score;
+
   // un-linking the copy: 200 + the un-grouped article back
   const res = await post(`/api/articles/${ids.dupe}/unlink`);
   assert.equal(res.status, 200);
   assert.equal(res.body.duplicate_of, null);
+  assert.equal(res.body.score, 0.39, 'own score preserved through unlink');
 
   // both members now standalone: no versions on either side
   const after = await get('/api/articles?view=all');
   assert.equal(after.body.articles.find((a) => a.id === ids.fresh).versions, 1);
   assert.equal(after.body.articles.find((a) => a.id === ids.dupe).versions, 1);
+  assert.equal(after.body.articles.find((a) => a.id === ids.fresh).score, freshScoreBefore);
   const versions = await get(`/api/articles/${ids.fresh}/versions`);
   assert.deepEqual(versions.body, []);
 
@@ -205,6 +212,44 @@ test('unlink detaches a false duplicate; the group shrinks, the copy becomes its
 
   // restore the link so other tests keep seeing the seeded group
   db.prepare('UPDATE articles SET duplicate_of = ? WHERE id = ?').run(ids.fresh, ids.dupe);
+});
+
+test('rededup re-attaches a mistakenly un-linked copy; no match stays standalone', async () => {
+  // give both group members the same summary embedding (what dedup compares)
+  const setEmb = db.prepare('UPDATE articles SET embedding = ? WHERE id = ?');
+  setEmb.run(vec(1, 0, 0, 0), ids.fresh);
+  setEmb.run(vec(1, 0, 0, 0), ids.dupe);
+
+  // detach again, then re-check: dedup must find fresh and re-attach
+  await post(`/api/articles/${ids.dupe}/unlink`);
+  assert.equal((await get('/api/articles?view=all&dupes=1')).body.articles.find((a) => a.id === ids.fresh).versions, 1);
+  const res = await post(`/api/articles/${ids.dupe}/rededup`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.duplicateOf, ids.fresh);
+  assert.match(res.body.title, /Fresh tech story/);
+  assert.equal((await get('/api/articles?view=all&dupes=1')).body.articles.find((a) => a.id === ids.fresh).versions, 2);
+
+  // an orthogonal summary embedding matches nothing in the window
+  const lone = db.prepare(`
+    INSERT INTO articles (feed_id, guid, title, content, summary, status, embedding, published_at)
+    VALUES (1, 'g-rededup-lone', 'Unrelated rededup story', ?, 'sum', 'enriched', ?, '2026-07-05T00:00:00Z')
+  `).run(compressText('body'), vec(0, 1, 0, 0)).lastInsertRowid;
+  const res2 = await post(`/api/articles/${Number(lone)}/rededup`);
+  assert.equal(res2.status, 200);
+  assert.equal(res2.body.duplicateOf, null);
+  assert.equal(res2.body.alreadyGrouped, undefined);
+
+  // already-grouped articles are a no-op
+  const res3 = await post(`/api/articles/${ids.dupe}/rededup`);
+  assert.equal(res3.body.alreadyGrouped, true);
+  assert.equal(res3.body.duplicateOf, ids.fresh);
+
+  // leave the shared seeded DB exactly as the seed built it: count-based
+  // tests downstream must not see the helper article or the embeddings
+  db.prepare('DELETE FROM article_topics WHERE article_id = ?').run(Number(lone));
+  db.prepare('DELETE FROM articles WHERE id = ?').run(Number(lone));
+  setEmb.run(null, ids.fresh);
+  setEmb.run(null, ids.dupe);
 });
 
 test('status filter narrows to classified (or pending) articles', async () => {
