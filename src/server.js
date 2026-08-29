@@ -290,7 +290,8 @@ export function createApp(db, config, commitHash) {
            SELECT a.id, a.score, a.score_novelty, a.published_at, a.created_at, a.feed_id,
                   ROW_NUMBER() OVER (
                     PARTITION BY COALESCE(a.duplicate_of, a.id)
-                    ORDER BY a.score DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC
+                    ORDER BY a.score DESC, (a.duplicate_of IS NULL) DESC,
+                             COALESCE(a.published_at, a.created_at) DESC, a.id DESC
                   ) AS rn
            FROM articles a ${whereSql}
          )
