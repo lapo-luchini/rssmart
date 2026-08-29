@@ -73,15 +73,28 @@ test('metrics endpoint reports article, vote, feed, topic and db counts', async 
     assert.ok(metricValue(text, 'rssmart_event_loop_max_lag_seconds') >= 0);
     assert.ok(metricValue(text, 'rssmart_db_query_seconds_total') >= 0);
 
-    assert.equal(metricValue(text, 'rssmart_db_dbstat_available'), 1, 'better-sqlite3 (this test runtime) always has dbstat');
-    assert.ok(metricValue(text, 'rssmart_db_table_bytes', { table: 'articles', kind: 'data' }) > 0);
-    assert.ok(metricValue(text, 'rssmart_db_table_bytes', { table: 'articles', kind: 'index' }) > 0, 'articles has several indexes');
+    // bun:sqlite has no dbstat virtual table and reports itself as
+    // runtime="bun" — the dbstat/table-bytes assertions are node-only.
+    const isBun = typeof Bun !== 'undefined';
+
+    assert.equal(
+      metricValue(text, 'rssmart_db_dbstat_available'),
+      isBun ? 0 : 1,
+      isBun ? 'bun:sqlite has no dbstat' : 'better-sqlite3 (this test runtime) always has dbstat',
+    );
+    if (!isBun) {
+      assert.ok(metricValue(text, 'rssmart_db_table_bytes', { table: 'articles', kind: 'data' }) > 0);
+      assert.ok(metricValue(text, 'rssmart_db_table_bytes', { table: 'articles', kind: 'index' }) > 0, 'articles has several indexes');
+    }
 
     const buildInfoLine = text.match(/^rssmart_build_info\{.*\} 1$/m)?.[0];
     assert.ok(buildInfoLine, 'build_info line present');
     assert.match(buildInfoLine, /commit="abc1234"/);
-    assert.match(buildInfoLine, /runtime="node"/, 'this test runtime is plain Node, not Bun');
-    assert.match(buildInfoLine, new RegExp(`runtime_version="${process.version.replace(/^v/, '')}"`));
+    assert.match(buildInfoLine, isBun ? /runtime="bun"/ : /runtime="node"/, 'build_info reports the actual runtime');
+    // Bun's process.version masquerades as a Node version (24.x); metrics.js
+    // reports the actual runtime — Bun.version under Bun.
+    const runtimeVersion = isBun ? Bun.version : process.version.replace(/^v/, '');
+    assert.match(buildInfoLine, new RegExp(`runtime_version="${runtimeVersion}"`));
     assert.match(buildInfoLine, /sqlite_version="\d+\.\d+\.\d+"/);
 
     assert.ok(metricValue(text, 'process_start_time_seconds') > 0);

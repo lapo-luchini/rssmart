@@ -61,8 +61,11 @@ typecheck — `node --test` is the only automated gate.
   decisions in `articles.duplicate_of` point to group roots and are never
   re-derived after being made (re-deriving is O(N²));
   `repairDuplicateGroups` normalizes legacy data.
-- `bun test` runs the suite but has ~11 pre-existing SQLite-driver failures —
-  trust `node --test` as the source of truth.
+- Both `npm test` (Node) and `bun test` are green. If a Bun-only failure
+  shows up, check bun:sqlite vs better-sqlite3 differences first — e.g.
+  bun:sqlite lacks the `dbstat` virtual table (metrics.js degrades
+  gracefully, test/metrics.test.js is runtime-conditional), and Bun's
+  `process.version` masquerades as a Node version.
 - DESIGN.md is the authoritative, dated design log (with live measurements).
   When you change a hot path or make a measured tradeoff, add an entry
   there instead of prose elsewhere.
