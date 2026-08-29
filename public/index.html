@@ -271,6 +271,9 @@
         <button v-if="a.duplicate_of && dupes" class="flag flag-link"
                 :title="'repeat of: ' + (a.duplicate_title || '#' + a.duplicate_of)"
                 @click="goToOriginal(a)">repeat of: {{ a.duplicate_title || '#' + a.duplicate_of }}</button>
+        <button v-if="a.duplicate_of && dupes" class="flag flag-link"
+                title="this copy is not actually the same story: detach it from the group"
+                @click="unlink(a)">not a duplicate</button>
         <span v-if="a.status === 'pending'" class="flag" title="waiting for the next classification run">new</span>
       </div>
 
@@ -312,12 +315,58 @@
       </div>
 
       <div v-if="expandedVersions[a.id]" class="versions">
-        <div class="version-row" v-for="v in expandedVersions[a.id]" :key="v.id">
-          <span class="score" :style="{ color: tint(v.score, 55) }">{{ fmtScore(v.score) }}</span>
-          <a class="version-title" :href="v.url" target="_blank" rel="noopener">{{ v.title }}</a>
-          <span class="source">{{ v.feed_title }}</span>
-          <time :title="fullDate(v.published_at || v.created_at)">{{ ago(v.published_at || v.created_at) }}</time>
-        </div>
+        <template v-for="v in expandedVersions[a.id]" :key="v.id">
+          <div class="version-row" :class="{ chosen: selectedVersion[a.id] === v.id }">
+            <span class="score" :style="{ color: tint(v.score, 55) }">{{ fmtScore(v.score) }}</span>
+            <a class="version-title" :href="v.url" target="_blank" rel="noopener">{{ v.title }}</a>
+            <span class="source">{{ v.feed_title }}</span>
+            <time :title="fullDate(v.published_at || v.created_at)">{{ ago(v.published_at || v.created_at) }}</time>
+            <button class="flag flag-link" :aria-expanded="selectedVersion[a.id] === v.id"
+                    :title="selectedVersion[a.id] === v.id ? 'hide details' : 'show this copy in full — preview and vote it without reading'"
+                    @click="toggleVersionPreview(a.id, v)">{{ selectedVersion[a.id] === v.id ? 'hide' : 'details' }}</button>
+          </div>
+          <div v-if="selectedVersion[a.id] === v.id" class="version-details">
+            <span class="score-wrap">
+              <button class="score" :style="{ color: tint(v.score, 78) }"
+                      :aria-expanded="scoreDetailId === v.id"
+                      aria-label="Show score breakdown"
+                      @click="scoreDetailId = scoreDetailId === v.id ? null : v.id">{{ fmtScore(v.score) }}</button>
+              <span class="score-details" role="tooltip">
+                <span class="score-row" v-for="p in scoreParts(v)" :key="p.label">
+                  <span>{{ p.label }}</span>
+                  <span :style="{ color: tint(p.value, 55) }">{{ fmtPart(p.value) }}</span>
+                </span>
+                <span class="score-row score-total">
+                  <span>score</span>
+                  <span :style="{ color: tint(v.score, 55) }">{{ fmtPart(v.score) }}</span>
+                </span>
+              </span>
+            </span>
+            <p class="version-full-title">{{ v.title }}</p>
+            <p class="story-summary" v-if="v.summary">{{ v.summary }}</p>
+            <p v-else class="notice">no summary</p>
+            <div class="story-foot">
+              <span class="chips">
+                <button v-for="t in v.topics" :key="t" class="chip"
+                        :style="chipStyle(t)" :title="'filter by ' + t"
+                        @click="topic = t; reload()">{{ t }}</button>
+              </span>
+              <span class="actions">
+                <button class="vote up" :class="{ on: v.vote > 0, max: v.vote === 2 }"
+                        @click="voteClick(v, 1)"
+                        :title="v.vote === 1 ? 'WOW! (click once more to clear)' : v.vote === 2 ? 'clear vote' : 'more like this'"
+                        aria-label="More like this">{{ v.vote === 2 ? '▲▲' : '▲' }}</button>
+                <button class="vote down" :class="{ on: v.vote < 0, max: v.vote === -2 }"
+                        @click="voteClick(v, -1)"
+                        :title="v.vote === -1 ? 'never again! (click once more to clear)' : v.vote === -2 ? 'clear vote' : 'less like this'"
+                        aria-label="Less like this">{{ v.vote === -2 ? '▼▼' : '▼' }}</button>
+                <button v-if="v.duplicate_of || a.duplicate_of" class="mark"
+                        @click="unlink(v.duplicate_of ? v : a)"
+                        title="these are not the same story: detach the copy from the group">not a duplicate</button>
+              </span>
+            </div>
+          </div>
+        </template>
       </div>
     </article>
 

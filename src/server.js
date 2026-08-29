@@ -397,6 +397,23 @@ export function createApp(db, config, commitHash) {
     return c.json(row);
   });
 
+  // Un-link a copy the reader judged to be a false duplicate: it becomes
+  // its own group root, the original group just shrinks (its `versions`
+  // count is computed per query). Stored duplicate decisions of the rest
+  // of the group are kept — they were real matches when made, and
+  // re-deriving them is O(N²).
+  app.post('/api/articles/:id/unlink', (c) => {
+    const id = c.req.param('id');
+    const { changes } = db
+      .prepare('UPDATE articles SET duplicate_of = NULL WHERE id = ? AND duplicate_of IS NOT NULL')
+      .run(id);
+    if (!changes) return c.json({ error: 'not found or not a duplicate' }, 404);
+    const row = db
+      .prepare(`SELECT ${ARTICLE_COLUMNS} FROM articles a JOIN feeds f ON f.id = a.feed_id WHERE a.id = ?`)
+      .get(id);
+    return c.json(rowToArticle(row));
+  });
+
   // Re-queue an article for classification, optionally with a persistent
   // reader note the LLM must take into account. Jumps the queue.
   app.post('/api/articles/:id/reclassify', async (c) => {

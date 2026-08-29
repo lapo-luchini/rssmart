@@ -179,6 +179,34 @@ test('repeats are bundled: best of group shown, others via /versions', async () 
   assert.equal(missing.status, 404);
 });
 
+test('unlink detaches a false duplicate; the group shrinks, the copy becomes its own root', async () => {
+  // sanity: the seeded dupe is inside fresh's group, and the group's
+  // version counts reflect it
+  const before = await get('/api/articles?view=all');
+  const freshBefore = before.body.articles.find((a) => a.id === ids.fresh);
+  assert.equal(freshBefore.versions, 2);
+
+  // un-linking the copy: 200 + the un-grouped article back
+  const res = await post(`/api/articles/${ids.dupe}/unlink`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.duplicate_of, null);
+
+  // both members now standalone: no versions on either side
+  const after = await get('/api/articles?view=all');
+  assert.equal(after.body.articles.find((a) => a.id === ids.fresh).versions, 1);
+  assert.equal(after.body.articles.find((a) => a.id === ids.dupe).versions, 1);
+  const versions = await get(`/api/articles/${ids.fresh}/versions`);
+  assert.deepEqual(versions.body, []);
+
+  // re-unlink (already standalone) and un-linking a root both 404
+  assert.equal((await post(`/api/articles/${ids.dupe}/unlink`)).status, 404);
+  assert.equal((await post(`/api/articles/${ids.fresh}/unlink`)).status, 404);
+  assert.equal((await post('/api/articles/99999/unlink')).status, 404);
+
+  // restore the link so other tests keep seeing the seeded group
+  db.prepare('UPDATE articles SET duplicate_of = ? WHERE id = ?').run(ids.fresh, ids.dupe);
+});
+
 test('status filter narrows to classified (or pending) articles', async () => {
   const enriched = await get('/api/articles?view=all&status=enriched');
   assert.equal(enriched.body.total, 4, 'pending article excluded');

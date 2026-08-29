@@ -66,6 +66,7 @@ createApp({
       stats: null,
       expandedId: null,
       expandedVersions: {},
+      selectedVersion: {},
       flashId: null,
       scoreDetailId: null,
       readerArticle: null,
@@ -238,6 +239,7 @@ createApp({
       this.error = null;
       this.expandedId = null;
       this.expandedVersions = {};
+      this.selectedVersion = {};
       try {
         const data = await this.api(`/api/articles?${this.params(0)}`);
         this.articles = data.articles;
@@ -885,6 +887,7 @@ createApp({
     async toggleVersions(article) {
       if (this.expandedVersions[article.id]) {
         delete this.expandedVersions[article.id];
+        delete this.selectedVersion[article.id];
         return;
       }
       try {
@@ -892,6 +895,28 @@ createApp({
           await this.api(`/api/articles/${article.id}/versions`);
       } catch (err) {
         this.error = `Cannot load versions: ${err.message}`;
+      }
+    },
+
+    // Pick one copy of a duplicated story inside the versions list: it gets
+    // full details like a normal card (title, summary, topics, score, vote
+    // buttons — no body, this is a preview, not a read) and votes cast there
+    // land on that specific copy. Clicking again deselects.
+    toggleVersionPreview(rootId, version) {
+      if (this.selectedVersion[rootId] === version.id) delete this.selectedVersion[rootId];
+      else this.selectedVersion[rootId] = version.id;
+    },
+
+    // The reader judged a "duplicate" wrong: detach the copy from its group.
+    // Only copies (never the group root) can be detached. The list reloads
+    // afterwards so the versions badge and counts reflect the smaller group.
+    async unlink(article) {
+      if (!confirm('Detach this copy from its duplicate group?')) return;
+      try {
+        await this.api(`/api/articles/${article.id}/unlink`, { method: 'POST' });
+        await this.reload();
+      } catch (err) {
+        this.error = `Unlink failed: ${err.message}`;
       }
     },
 
