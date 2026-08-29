@@ -50,6 +50,10 @@ typecheck — `node --test` is the only automated gate.
   `bench-comic-alt.js` — read-only against it, reports land in `data/`;
   `bench-dot.js` is the standalone kernel benchmark, no DB involved).
   Don't write to it from experiments; copy it first.
+- `scripts/repair-dedup.js` re-validates every stored duplicate link in the
+  current dedup space (`--fix` un-links stale ones and re-runs detection per
+  detached copy). Run it after any dedup model/dims mismatch window — links
+  made in a mismatched space are never re-derived on their own.
 
 ## Traps
 
