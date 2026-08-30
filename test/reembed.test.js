@@ -70,6 +70,40 @@ test('hybrid setup: dedup model change clears only the summary column, text mode
   assert.equal(art2.text_embedding, null, 'text vectors still cleared from above');
 });
 
+test('reembedMissing skips the dedup vector for articles outside the dedup window', async () => {
+  const db = tempDb();
+  const stub = await startOllamaStub();
+  try {
+    const config = testConfig();
+    const llm = new Ollama({ ...config.ollama, url: stub.url });
+    db.prepare("INSERT OR IGNORE INTO feeds (id, url) VALUES (1, 'http://f')").run();
+
+    const old = Number(db.prepare(`
+      INSERT INTO articles (feed_id, guid, title, content, summary, status, created_at)
+      VALUES (1, 'g-old', 'Old article', ?, 'a summary', 'enriched',
+              strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-20 days'))
+    `).run(compressText('body text')).lastInsertRowid);
+    const recent = Number(db.prepare(`
+      INSERT INTO articles (feed_id, guid, title, content, summary, status)
+      VALUES (1, 'g-recent', 'Recent article', ?, 'a summary', 'enriched')
+    `).run(compressText('body text')).lastInsertRowid);
+
+    const r = await reembedMissing(db, config, llm);
+    assert.equal(r.reembedded, 2, 'both articles need their text vector');
+
+    // out-of-window article: dedup vector stays intentionally absent, text filled
+    const rowOld = db.prepare('SELECT embedding, text_embedding FROM articles WHERE id = ?').get(old);
+    assert.equal(rowOld.embedding, null, 'out-of-window dedup vector not refilled');
+    assert.ok(rowOld.text_embedding, 'text vector still filled');
+    const rowRecent = db.prepare('SELECT embedding, text_embedding FROM articles WHERE id = ?').get(recent);
+    assert.ok(rowRecent.embedding && rowRecent.text_embedding, 'in-window article gets both');
+    // 2 text embeds + 1 dedup embed (the old article's dedup is skipped)
+    assert.equal(stub.calls.embed.length, 3);
+  } finally {
+    await stub.close();
+  }
+});
+
 test('reembedMissing embeds only the missing column, leaving the present one untouched', async () => {
   const db = tempDb();
   const stub = await startOllamaStub();

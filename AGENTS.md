@@ -33,7 +33,11 @@ typecheck — `node --test` is the only automated gate.
   harrier@512). Each column's model+dims is versioned in `meta`
   (`embed_model_text`/`embed_model_dedup`); switching a model clears only
   that column and `reembedMissing` rebuilds it progressively — embeddings
-  only, no LLM classification, and only the missing column.
+  only, no LLM classification, and only the missing column. The dedup
+  vector is only kept for articles inside the dedup window
+  (`enrich.dupWindowDays`): dedup compares against recent articles
+  exclusively, so syncRecentCache drops aged-out vectors from storage and
+  reembedMissing deliberately does not refill them — don't "fix" that NULL.
 - Scoring is entirely vote-driven. A vote recomputes only its own article
   (`recomputeOneScore`, cheap, synchronous in the request) and schedules a
   debounced full sweep (`recomputeIfDue` → `recomputeScores`), which is

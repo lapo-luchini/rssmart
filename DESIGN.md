@@ -729,6 +729,26 @@ Two paths, with very different scaling:
    scoped `recomputeOneScore` instead. This is the path with a real
    ceiling: ~48s measured against a real ~6200-article archive.
 
+   **2026-08-30 — dedup vectors now age out with the window.** Duplicate
+   detection only ever compares against articles inside the
+   `dupWindowDays` (14-day) window, so summary vectors older than that
+   were dead weight (and the pre-64-dim-era rows among them — 512-dim
+   blobs from the single-column days — were outright invisible: `cosine`
+   returns 0 on length mismatch). `syncRecentCache` now drops each
+   article's `embedding` from storage when it ages out of the window,
+   `reembedMissing` deliberately does not refill those (a NULL dedup
+   vector on an out-of-window article is intentional, not missing), and
+   `recheckDuplicates` embeds on demand so the "re-check duplicates"
+   action still works for old articles. Net: the dedup column stays at
+   ~one window of vectors (~2k × 128 B) instead of growing with the
+   archive (~42k × 128 B + legacy), and `text_embedding` is untouched —
+   search and taste kNN reach across the whole archive. The bulk initial
+   drop is `node scripts/repair-dedup.js --drop-old-dedup`; the same
+   script's `--fix` re-validates stored duplicate links in the current
+   space after any model/dims mismatch window (added after the harrier
+   switch left harrier@64-era links behind — measured: 1,844 of 6,415
+   links below threshold on the production copy, cleaned to 0).
+
 ## Known limits (baseline measurements below: ~6200 articles, 2026-07 — see the current-scale note at the end of this section)
 
 - **Vote scoring is decoupled from full-corpus rescoring, to keep votes

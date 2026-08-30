@@ -23,8 +23,14 @@
 // returns 0 on length mismatch). Clearing them makes reembedMissing rebuild
 // them at the configured dims; done only with --fix-legacy.
 //
-// Usage: node scripts/repair-dedup.js [--fix] [--fix-legacy]
-// (config resolved like bin/rssmart.js; writes nothing without --fix)
+// --drop-old-dedup: dedup vectors are only ever compared against the recent
+// window, so vectors for out-of-window articles are dead weight — this
+// drops them in bulk (the ongoing trickle is pruned by syncRecentCache, and
+// reembedMissing deliberately does not refill them). text_embedding is
+// never touched: search and taste kNN reach across the whole archive.
+//
+// Usage: node scripts/repair-dedup.js [--fix] [--fix-legacy] [--drop-old-dedup]
+// (config resolved like bin/rssmart.js; writes nothing without a flag)
 
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
@@ -32,11 +38,13 @@ import { recheckDuplicates, bufToVec } from '../src/enrich.js';
 
 const fix = process.argv.includes('--fix');
 const fixLegacy = process.argv.includes('--fix-legacy');
+const dropOld = process.argv.includes('--drop-old-dedup');
 const config = loadConfig();
 const db = openDb(config.db);
 
 const dedupDims = config.ollama.dedupEmbedDimensions ?? config.ollama.embedDimensions;
 const threshold = config.enrich.dupThreshold;
+const dedupCutoff = new Date(Date.now() - config.enrich.dupWindowDays * 86400000).toISOString();
 const expectedBytes = dedupDims * 2;
 const cosine = (a, b) => {
   if (a.length !== b.length) return 0;
@@ -44,6 +52,14 @@ const cosine = (a, b) => {
   for (let i = 0; i < a.length; i++) s += a[i] * b[i];
   return s;
 };
+
+if (dropOld) {
+  const r = db.prepare('UPDATE articles SET embedding = NULL WHERE embedding IS NOT NULL AND created_at < ?').run(dedupCutoff);
+  console.log(`dropped ${r.changes} out-of-window dedup vectors (freed ~${(r.changes * dedupDims * 2 / 1048576).toFixed(1)} MB); run VACUUM to shrink the file`);
+} else {
+  const kept = db.prepare('SELECT COUNT(*) AS c FROM articles WHERE embedding IS NOT NULL AND created_at < ?').get(dedupCutoff).c;
+  console.log(`out-of-window dedup vectors kept: ${kept} (run with --drop-old-dedup to drop them)`);
+}
 
 const links = db.prepare(`
   SELECT a.id, a.duplicate_of AS root, a.title AS copyTitle,

@@ -188,8 +188,16 @@ function syncRecentCache(db, dupWindowDays) {
     state.cache.set(r.id, { id: r.id, vec: bufToVec(r.embedding), createdAt: r.created_at });
     if (!state.syncedAt || r.created_at > state.syncedAt) state.syncedAt = r.created_at;
   }
+  const prune = db.prepare('UPDATE articles SET embedding = NULL WHERE id = ?');
   for (const [id, entry] of state.cache) {
-    if (entry.createdAt < cutoff) state.cache.delete(id);
+    if (entry.createdAt < cutoff) {
+      // The vector just aged out of the dedup window: dedup only ever
+      // compares against in-window vectors, so drop it from storage too
+      // (keeps the column at ~one window of data instead of growing with
+      // the archive). reembedMissing deliberately does not refill these.
+      prune.run(id);
+      state.cache.delete(id);
+    }
   }
   return state.cache;
 }
@@ -202,15 +210,21 @@ function syncRecentCache(db, dupWindowDays) {
  * inputs improved. Standalone articles only: grouped ones are already
  * where dedup wants them.
  */
-export function recheckDuplicates(db, config, articleId) {
+export function recheckDuplicates(db, config, articleId, vec = null) {
   const row = db
-    .prepare('SELECT id, duplicate_of, embedding FROM articles WHERE id = ?')
+    .prepare('SELECT id, duplicate_of FROM articles WHERE id = ?')
     .get(articleId);
   if (!row) return { duplicateOf: null, error: 'not found' };
   if (row.duplicate_of) return { duplicateOf: row.duplicate_of, alreadyGrouped: true };
-  if (!row.embedding) return { duplicateOf: null, error: 'no embedding' };
+  if (!vec) {
+    // vectors for out-of-window articles are dropped on purpose — callers
+    // that need to re-check one anyway embed it on demand and pass it in
+    const stored = db.prepare('SELECT embedding FROM articles WHERE id = ?').get(articleId)?.embedding;
+    if (!stored) return { duplicateOf: null, error: 'no embedding' };
+    vec = bufToVec(stored);
+  }
   const recent = syncRecentCache(db, config.enrich.dupWindowDays);
-  const matched = findDuplicate(bufToVec(row.embedding), articleId, recent, config.enrich.dupThreshold);
+  const matched = findDuplicate(vec, articleId, recent, config.enrich.dupThreshold);
   if (!matched) return { duplicateOf: null };
   const root = resolveGroupRoot(db, matched, articleId);
   db.prepare('UPDATE articles SET duplicate_of = ? WHERE id = ?').run(root, articleId);
@@ -375,15 +389,23 @@ export function syncEmbeddingSpace(db, config) {
  * space (after an embedModel or dedupEmbedModel change). Only the missing
  * column(s) are embedded — a model switch on one column doesn't redo the
  * other, which shares most of the work when the two columns use different
- * models. Embeddings only — no LLM classification, so this runs at dozens
- * of articles per second.
+ * models. The dedup vector is only required for articles inside the dedup
+ * window (dedup compares against recent articles exclusively; older
+ * summaries have theirs dropped by syncRecentCache) — so a NULL dedup
+ * vector on an out-of-window article is intentional, not missing.
+ * Embeddings only — no LLM classification, so this runs at dozens of
+ * articles per second.
  */
 export async function reembedMissing(db, config, llm, { deadline, onItem } = {}) {
   const result = { reembedded: 0, failed: 0, errors: [] };
+  const dedupCutoff = new Date(
+    Date.now() - config.enrich.dupWindowDays * 24 * 60 * 60 * 1000,
+  ).toISOString();
   const pendingCount = () => db.prepare(`
     SELECT COUNT(*) AS c FROM articles
-    WHERE status = 'enriched' AND (embedding IS NULL OR text_embedding IS NULL)
-  `).get().c;
+    WHERE status = 'enriched'
+      AND (text_embedding IS NULL OR (embedding IS NULL AND created_at >= ?))
+  `).get(dedupCutoff).c;
   if (pendingCount() === 0) return result;
   if (!(await llm.available())) {
     return { ...result, skipped: true, reason: `ollama not reachable at ${llm.url}` };
@@ -393,10 +415,12 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
 
   const tried = [];
   const next = db.prepare(`
-    SELECT id, title, summary, content, full_content,
-           embedding IS NULL AS needDedup, text_embedding IS NULL AS needText
+    SELECT id, title, summary, content, full_content, created_at,
+           (embedding IS NULL AND created_at >= ?) AS needDedup,
+           text_embedding IS NULL AS needText
     FROM articles
-    WHERE status = 'enriched' AND (embedding IS NULL OR text_embedding IS NULL)
+    WHERE status = 'enriched'
+      AND (text_embedding IS NULL OR (embedding IS NULL AND created_at >= ?))
       AND id NOT IN (SELECT value FROM json_each(?))
     ORDER BY COALESCE(published_at, created_at) DESC LIMIT 1
   `);
@@ -404,7 +428,7 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
   const saveText = db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?');
 
   while (!deadline || Date.now() < deadline) {
-    const article = next.get(JSON.stringify(tried));
+    const article = next.get(dedupCutoff, dedupCutoff, JSON.stringify(tried));
     if (!article) break;
     tried.push(article.id);
     try {

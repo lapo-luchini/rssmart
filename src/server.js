@@ -3,7 +3,8 @@ import { bodyLimit } from 'hono/body-limit';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
-import { getReaderContent, recheckDuplicates } from './enrich.js';
+import { getReaderContent, recheckDuplicates, bufToVec, sampleText } from './enrich.js';
+import { stripHtml } from './html.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
@@ -419,13 +420,33 @@ export function createApp(db, config, commitHash) {
   // un-link): same summary embedding, same recent window, same threshold as
   // the enrichment pipeline. Returns the group root it was attached to, or
   // null when nothing in the window matches.
-  app.post('/api/articles/:id/rededup', (c) => {
-    const id = c.req.param('id');
-    const result = recheckDuplicates(db, config, Number(id));
+  app.post('/api/articles/:id/rededup', async (c) => {
+    const id = Number(c.req.param('id'));
+    const row = db
+      .prepare('SELECT duplicate_of, embedding, title, summary, content, full_content FROM articles WHERE id = ?')
+      .get(id);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    // out-of-window articles have their dedup vector dropped on purpose —
+    // embed the summary on demand so re-check works for them too
+    let vec = row.embedding ? bufToVec(row.embedding) : null;
+    if (!vec) {
+      const text = stripHtml(decompressText(row.full_content ?? row.content) ?? '');
+      try {
+        vec = await llm.embed(
+          `${row.title}\n${row.summary ?? sampleText(text, 500)}`,
+          'document',
+          config.ollama.dedupEmbedDimensions ?? config.ollama.embedDimensions,
+          { dedup: true },
+        );
+      } catch (err) {
+        return c.json({ error: `embedding failed: ${err.message}` }, 502);
+      }
+    }
+    const result = recheckDuplicates(db, config, id, vec);
     if (result.error) return c.json(result, 404);
     if (!result.duplicateOf) return c.json(result);
-    const row = db.prepare('SELECT title FROM articles WHERE id = ?').get(result.duplicateOf);
-    return c.json({ ...result, title: row?.title });
+    const t = db.prepare('SELECT title FROM articles WHERE id = ?').get(result.duplicateOf);
+    return c.json({ ...result, title: t?.title });
   });
 
   // Re-queue an article for classification, optionally with a persistent

@@ -252,6 +252,24 @@ test('rededup re-attaches a mistakenly un-linked copy; no match stays standalone
   setEmb.run(null, ids.dupe);
 });
 
+test('rededup embeds on demand for articles whose dedup vector aged out', async () => {
+  // simulate an aged-out vector: the dedup column is NULL for the copy;
+  // the on-demand embed (stub returns [1,0,0,0]) must still match fresh
+  db.prepare('UPDATE articles SET embedding = ? WHERE id = ?').run(vec(1, 0, 0, 0), ids.fresh);
+  db.prepare('UPDATE articles SET embedding = NULL WHERE id = ?').run(ids.dupe);
+  await post(`/api/articles/${ids.dupe}/unlink`);
+  assert.equal(
+    (await get('/api/articles?view=all&dupes=1')).body.articles.find((a) => a.id === ids.fresh).versions,
+    1,
+    'detached for the test',
+  );
+
+  const res = await post(`/api/articles/${ids.dupe}/rededup`);
+  assert.equal(res.status, 200, `got ${res.status}: ${JSON.stringify(res.body)}`);
+  assert.equal(res.body.duplicateOf, ids.fresh, 'on-demand embedded vector matches the original');
+  assert.equal(res.body.alreadyGrouped, undefined);
+});
+
 test('status filter narrows to classified (or pending) articles', async () => {
   const enriched = await get('/api/articles?view=all&status=enriched');
   assert.equal(enriched.body.total, 4, 'pending article excluded');
