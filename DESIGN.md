@@ -90,8 +90,9 @@ day-one spec was retired for exactly that reason; it's in git history).
   it; verified same-text cosine ≈1.0 across dimensions, ranking behavior
   unaffected); defaults to the model's native dimension since not every
   embedding model supports MRL. Both are folded into `syncEmbeddingSpace`'s
-  version key (`embedModel::embedDimensions::f16`), so upgrading always
-  invalidates old vectors and triggers `reembedMissing`. `better-sqlite3`'s
+  per-column version keys (see the versioned-space bullet above), so
+  upgrading always invalidates old vectors and triggers `reembedMissing`.
+  `better-sqlite3`'s
   native addon is ABI-tied to the Node version it was built under, so
   bumping Node needs one rebuild (`npm rebuild better-sqlite3`) — not a
   code change, but a real one-time step, documented in the README.
@@ -131,77 +132,40 @@ day-one spec was retired for exactly that reason; it's in git history).
   (`src/scoring.js`) computes a Laplace-smoothed ratio *per topic*, so a
   merge is a real, permanent change to historical scoring input, not just
   display text. `proposeTopicMerges` sends the LLM the *full* topic list
-  (not the capped suggestion list above — the long, rarely-used tail is
-  exactly where duplicates accumulate) and asks it to find genuinely
-  redundant pairs; proposals are filtered to ones naming two different,
-  real, known topics before ever reaching the reader (`normalizeMergeProposals`).
-  Nothing is written to the DB until the reader clicks "merge" on a
-  specific proposal in the Topics tab — `applyTopicMerge` then retags
-  every affected article (an article already tagged with both collapses
-  to one row, no PK violation) and deletes the now-orphaned topic.
-  A `topic_aliases` table (migration v12) records the mapping: the
-  classifier has no memory of the merge and can easily name the
-  merged-away topic again, so `resolveTopicId` (`src/enrich.js`) checks
-  it first and redirects to the canonical topic instead of recreating the
-  old one. A later merge of the canonical topic itself repoints any
-  alias that already pointed at it, so a chain (A -> B, later B -> C)
-  still resolves to the final survivor rather than a dead intermediate.
-  Gets its own, longer timeout (`ollama.topicMergeTimeoutMs`, default 5
-  minutes) rather than sharing `ollama.timeoutMs` — a real user hit a
-  spurious 502 before `chatJSON`'s `timeoutMs` option existed as a
-  per-call override (it previously always used the instance's
-  constructor default regardless of what a caller needed). Diagnosed
-  live with that same user rather than assumed: prompt length isn't the
-  reason this is slower than classification (it's comparable, sometimes
-  shorter) — it's *output* length. Classification's reply is small and
-  bounded (1-3 topics, a summary capped at 500 chars, one digit); a
-  vocabulary of a few hundred topics can easily yield dozens of merge
-  proposals, each with a `"reason"` field, and generation time scales
-  with output tokens, not input. Confirmed by ruling out a competing
-  theory first: a cold model reload (`ollama ps` showed the model
-  unloading) was a plausible one-time cause, but a warm retry still took
-  2 minutes for 54 proposals, isolating the real cost to output size. A
-  first attempt at a fix (cutting `"reason"` to 3-5 words) traded away
-  something the same user actually valued for a marginal speed gain, and
-  was reverted — `"reason"` is back to a full short sentence, capped at
-  200 chars.
-  **The real, more important bug found in that same batch of proposals:**
-  the model was confusing "same concept, different name" (what a merge
-  should be) with "narrower category of a broader one" — proposing things
-  like "laptops" -> "hardware" and "hardware" -> "computing". A merge
-  isn't just a labeling fix in that shape: it would flatten a real,
-  meaningful distinction a reader's votes already rely on into a vaguer
-  bucket, silently hurting scoring granularity rather than just tidying
-  the vocabulary. The prompt now explicitly separates these two
-  relationships with the exact counter-examples that went wrong, and
-  tells the model that an uncertain call should be skipped, not
-  proposed — a missed merge costs nothing, a wrong one blends two topics'
-  vote history together irreversibly.
-  **Follow-up, from a real reply the user shared:** the model doesn't
-  reliably follow its own stated reasoning — about half the entries in
-  one real batch had a `"reason"` that explicitly argued *against* the
-  merge ("...however, they are not synonyms. Skipping merge.", "These are
-  distinct enough to remain separate.") yet were included in `"merges"`
-  anyway, alongside several "confident" ones that still violated the
-  broader/narrower rule above (e.g. "artificial intelligence" ->
-  "machine learning", "computer science" -> "computing"). The prompt now
-  explicitly forbids including a pair the model has decided to reject
-  (with those exact counter-examples added) — a change whose real-world
-  effectiveness isn't yet re-verified live. `normalizeMergeProposals`
-  flags (`lowConfidence: true`) any proposal whose own `reason` text
-  contains self-rejecting language (`"skip"`, `"not a synonym"`, `"remain
-  separate"`, `"distinct enough"`, etc.), but — on request, after first
-  trying outright removal — **never drops a structurally valid proposal**:
-  the LLM call is the expensive part of this whole feature, and the
-  reader would rather see everything it produced (dimmed, for a
-  contradicting one) than have results silently discarded after paying
-  for them. The flag can't and doesn't catch a confidently-stated
-  broader/narrower merge the model doesn't contradict itself on; that
-  class of mistake is only as good as the prompt's own guidance. A
-  **manual merge** form (same `POST /api/topics/merge` endpoint,
-  from/to `<select>`s populated from the already-loaded topic list) lets
-  the reader merge a pair they noticed themselves, independent of
-  whatever the LLM did or didn't propose.
+  (the long, rarely-used tail is exactly where duplicates accumulate) and
+  filters proposals to ones naming two different, real, known topics
+  (`normalizeMergeProposals`); nothing is written until the reader clicks
+  "merge" on a specific proposal in the Topics tab — `applyTopicMerge`
+  then retags every affected article and deletes the now-orphaned topic.
+  A `topic_aliases` table records the mapping: the classifier has no
+  memory of the merge and can easily name the merged-away topic again, so
+  `resolveTopicId` (`src/enrich.js`) checks it first and redirects to the
+  canonical topic; a later merge of the canonical topic itself repoints
+  aliases, so a chain (A -> B, later B -> C) still resolves to the final
+  survivor.
+  It gets its own, longer timeout (`ollama.topicMergeTimeoutMs`, default
+  5 minutes) rather than sharing `ollama.timeoutMs`: generation time
+  scales with *output* tokens, and a few hundred topics can yield dozens
+  of merge proposals, each with a reason sentence — prompt length is
+  comparable to classification, the reply is not. ("reason" stays a full
+  short sentence: cutting it to a few words traded away something the
+  reader valued for a marginal speed gain, and was reverted.)
+  Two live-data prompt lessons, both encoded as exact counter-examples in
+  the prompt: the model conflates "same concept, different name" with
+  "narrower category of a broader one" ("laptops" -> "hardware" — a merge
+  of that shape would flatten a real distinction votes rely on into a
+  vaguer bucket), and about half of one real batch included pairs whose
+  own `reason` argued *against* the merge. The prompt now forbids both
+  and says an uncertain call should be skipped (a missed merge costs
+  nothing; a wrong one blends two topics' vote history irreversibly).
+  `normalizeMergeProposals` additionally flags proposals whose `reason`
+  contains self-rejecting language as `lowConfidence` — dimmed, not
+  dropped: the LLM call is the expensive part, and silently discarding
+  paid-for results is worse than showing them. It can't catch a
+  confidently-wrong merge; that class is only as good as the prompt's
+  guidance. A **manual merge** form (same `POST /api/topics/merge`
+  endpoint, from/to `<select>`s) lets the reader merge a pair they
+  noticed themselves, independent of the LLM.
 - **Semantic search (`src/search.js`) reuses the taste-learning embeddings,
   no vector index.** The query is embedded with the same model and the
   `query` task prefix, then ranked by brute-force cosine against
@@ -226,11 +190,12 @@ day-one spec was retired for exactly that reason; it's in git history).
   better-sqlite3 throws on `.get()` for pragma forms it statically
   classifies as non-data-returning (`foreign_keys = ON`) — `pragma()`
   falls back to `.run()` on that specific error rather than guessing per
-  pragma. `bun test` cannot run more than one `node:test`-based file per
-  invocation ([oven-sh/bun#5090](https://github.com/oven-sh/bun/issues/5090));
-  this project's suite still runs fine under Bun one file at a time, or
-  under `node --test` (`pnpm test`) either way. One more difference found
-  while writing `scripts/dbstats.js`: SQLite's `dbstat` virtual table
+  pragma. `bun test` runs the full suite green; one caveat — a failing
+  test can cascade "test() inside another test()" errors into every
+  later file ([oven-sh/bun#5090](https://github.com/oven-sh/bun/issues/5090)),
+  so fix the first failure instead of chasing the cascade. One more
+  driver difference, found while writing `scripts/dbstats.js`: SQLite's
+  `dbstat` virtual table
   (real, precise per-table/index byte sizes from its own page accounting)
   is always available under Node/better-sqlite3, but not under
   `bun:sqlite` (`no such table: dbstat`) — confirmed identically on the
@@ -241,43 +206,19 @@ day-one spec was retired for exactly that reason; it's in git history).
   environment-dependent — the script treats it as an optional capability
   to probe for and fall back on regardless, since a fact this specific
   isn't worth hardcoding into a branch.
-  **A detour worth remembering, since it nearly became a wrong
-  conclusion:** a user's first test of `bun run dbstats` under Bun
-  produced output identical to Node's, byte for byte, including the
-  `dbstat` section — seemingly contradicting the above and triggering a
-  real investigation (two separate wrong theories: a NixOS build-from-
-  source difference, then a dynamic-linking difference, each ruled out
-  in turn by direct `ldd`/`compile_options` checks on their machine).
-  The actual cause was much simpler and had nothing to do with SQLite at
-  all: `dbstats`'s package.json entry is the literal shell command `node
-  scripts/dbstats.js`. `bun run <script>` (or its `bun <script>`
-  shorthand) does not translate a script's own `node` command to Bun's
-  runtime — it just shells out to whatever `node` binary is on `PATH` as
-  a real subprocess, confirmed directly (`process.execPath` inside that
-  subprocess pointed at the actual system Node binary, `typeof Bun` was
-  `undefined`). So `bun run dbstats` had been invoking real Node the
-  whole time, never `bun:sqlite` at all — the two runtimes' outputs
-  matched because they were the same runtime. `package.json` now has a
-  whole time, never `bun:sqlite` at all — the two runtimes' outputs
-  matched because they were the same runtime. The same gotcha already
-  existed, undiscovered, for `cron`/`serve`/`postinstall`, and a
-  genuinely bun-only machine (verified live with an isolated `PATH`
-  containing nothing but a `bun` binary) would hit it immediately on a
-  fresh clone: `bun install`'s own `postinstall` hook spawns real `node`
-  the same way, so `scripts/vendor.js` — required for the app to serve
-  at all — would never run there at all if Node weren't *also* installed.
-  Fixed at the source rather than by telling people to remember to
-  invoke `bin/rssmart.js` directly: all four scripts (`cron`, `serve`,
-  `dbstats`, `postinstall`) are now `if command -v bun >/dev/null 2>&1;
-  then exec bun ...; else exec node ...; fi` — a plain POSIX shell
-  conditional, not a Node-side or Bun-side trick, so it doesn't depend on
-  either runtime being present to make the *decision*, only on whichever
-  one it ends up choosing. Verified live in three isolated `PATH`
-  configurations: both installed (prefers Bun), only Bun reachable
-  (works, no Node anywhere), only Node reachable (falls back correctly).
-  `command -v` is a shell builtin, not an external program, so even a
-  `PATH` containing nothing but `bun`'s own directory is enough for the
-  conditional itself to evaluate correctly.
+  **Gotcha worth remembering:** `bun run dbstats` once produced output
+  identical to Node's — seemingly contradicting all of the above. The
+  cause had nothing to do with SQLite: `bun run <script>` does not
+  translate a script's own `node` command into Bun's runtime, it shells
+  out to whatever `node` is on `PATH`, so `bun run dbstats` had been
+  invoking real Node the whole time (`process.execPath` inside the
+  subprocess proved it). All npm scripts are therefore
+  runtime-conditional shell (`if command -v bun ...; then exec bun ...
+  else exec node ...`), covering `cron`/`serve`/`dbstats`/`postinstall`
+  — the same gotcha would otherwise bite a genuinely bun-only machine
+  on a fresh clone, where `bun install`'s postinstall hook spawns real
+  `node` and `scripts/vendor.js` (required to serve at all) would never
+  run without Node also installed.
 - **`busy_timeout` is set explicitly, not left to the driver's default.**
   better-sqlite3 waits out lock contention by default; bun:sqlite does not
   — a real `SQLITE_BUSY` crash surfaced under genuine concurrent cron +
@@ -817,236 +758,70 @@ Two paths, with very different scaling:
   longer than Node's (observed in the 90-115s range for the same
   archive on the same machine).
 
-  **Root-caused**, via an isolated microbenchmark (same shape: 6200
-  rows × 170 voted, 512-dim vectors, no DB/SQL involved at all): Bun's
-  JavaScriptCore engine ran the old `cosine()` (full norm+dot+sqrt+divide)
-  several times slower than Node's V8 for *every* typed array element
-  type tested — roughly 6.6× slower on `Float16Array`, 4.8× on
-  `Float32Array`, 8.9× on `Float64Array` — and, tried again with plain
-  JS number arrays instead of typed arrays, still 2.5× slower, though
-  interestingly plain arrays were JSC's *fastest* representation of the
-  four (beating even `Float32Array` there), while V8 preferred
-  `Float32Array` and put plain arrays second-worst.
+  **Root cause of the early Bun gap**: JavaScriptCore has no JIT support
+  for `Float16Array` on x86-64 at all
+  ([bun#34063](https://github.com/oven-sh/bun/issues/34063), open as of
+  writing), forcing a slow C++ fallback regardless of monomorphism — an
+  isolated microbenchmark at the real sweep shape showed the old
+  `cosine()` several times slower on Bun for every typed-array type
+  tested. The ladder of fixes, each verified against the real
+  ~6200-article archive:
 
-  **Caveat on those specific numbers, found afterward**: that
-  microbenchmark called one shared `cosine()` function sequentially
-  across all four vector types (Float16, then Float32, then Float64,
-  then plain arrays) in the same process. Per a Bun maintainer
-  (`robobun`)'s reply on [bun#34063](https://github.com/oven-sh/bun/issues/34063)
-  (opened by this project's own author, not a third party - filed
-  2026-07-13, open/unresolved as of writing, reproduced on Bun
-  1.3.13/1.3.14, same versions tested here): "once the `a[i]` access
-  site has seen a Float16Array, JSC can no longer use its optimized
-  typed-array path there, and every later call (including the float32
-  one) pays for it" - their own benchmark showed `Float32Array` alone
-  at ~1.77us degrading to ~3.25us once mixed with other types through a
-  shared function. That means this project's own 6.6x/4.8x/8.9x/2.5x
-  figures likely aren't clean isolated per-type measurements either -
-  the qualitative conclusion (Bun slower here) still stands, but not
-  necessarily at exactly those ratios, since the call site measuring
-  Float32Array/Float64Array/plain-arrays had already been polluted by
-  the earlier Float16Array calls at that same site.
-
-  The **more precise root cause**, per the same reply: JavaScriptCore
-  has no JIT support for `Float16Array` on x86-64 at all, forcing a
-  slow C++ fallback path regardless of monomorphism - confirmed to
-  match this project's own test environment (`process.arch` is `x64`).
-  This is stronger, not weaker, support for the fix actually shipped
-  below: the later, decision-driving benchmark (9-10x Node / 46-51x Bun,
-  further down) used a dedicated single-type script - `Float16Array`
-  only, throughout, no call-site mixing - so it isn't subject to the
-  polymorphism artifact above, and this maintainer explanation gives it
-  a harder architectural reason (no JIT path at all) rather than just
-  "JSC seems worse at this." The bug reporter's own conclusion in that
-  thread was also to move the hot path to WebAssembly - the same
-  direction taken independently here before reading that reply.
-
-  Since it's a confirmed, currently-open upstream bug with no fix or
-  workaround yet, not a misconfiguration on this project's side, the
-  WASM route below remains the practical mitigation until Bun resolves
-  it - worth revisiting (the JS path could get simpler again) if/when
-  that issue closes.
-
-  **Optimized anyway, on a different axis**: checked live against the
-  real archive (6200 stored vectors, plus a 2000-row sample of the
-  separate summary-embedding column) whether they're actually
-  L2-normalized as `llm.js`'s Matryoshka-truncation comment already
-  claimed — confirmed: norms ranged 0.999954-1.000043, i.e. deviation
-  from exactly 1 fully explained by Float16 storage rounding, not a
-  real lack of normalization. Cosine similarity of two unit vectors is
-  exactly their dot product, so `cosine()` (`enrich.js`) now skips the
-  norm/sqrt/divide entirely - correct given the verified precondition,
-  not an approximation, and doesn't touch the zero-copy `Float16Array`
-  storage/memory profile at all (unlike the pre-decode idea above,
-  which is why this was implemented and that wasn't). Measured live
-  against the real ~6200-article archive: full sweep dropped from
-  ~44.7s to **19.2s on Node** (2.3×) — roughly the expected 3× on the
-  raw arithmetic, diluted by `knnScore`'s then-unchanged array/object
-  overhead. On Bun it dropped only to **89.4s**, barely below its
-  noisy ~90-115s baseline.
-
-  **`knnScore`'s array/object overhead optimized next** (`scoring.js`):
-  the old `.filter().map().sort().slice()` allocated a `{sim, vote}`
-  object per candidate and fully sorted the entire voted list, on every
-  one of the ~1M row × voted-article pairs a sweep makes. Replaced with
-  insertion into a small (size k, default 20) descending-sorted window
-  the caller allocates once per sweep and reuses across every row -
-  most candidates never beat the current k-th best once the window
-  fills, and even the worst case only shifts within the k-sized window,
-  never the full voted list. Verified bit-identical output against the
-  real archive (same min/max score before and after, to the last
-  decimal) and against two new unit tests covering what the old
-  suite never exercised - every existing test's `voted.length` was
-  smaller than `k`, so the top-k truncation and tie-at-the-cutoff paths
-  had zero coverage until now.
-
-  Measured impact, and it's a genuinely useful negative result: **Node
-  dropped only to 17.6s** (from 19.2s, ~8%) and **Bun barely moved at
-  all, 89.0s** (from 89.4s). The hypothesis that this array/object
-  churn was Bun's dominant remaining cost was wrong - disproven by
-  measurement, not assumed away. What actually dominates on both
-  runtimes, especially Bun, is simply the volume of `cosine()` calls
-  itself: 1,054,000 of them, each a 512-element multiply-add loop, and
-  JSC runs that loop several times slower than V8 regardless of what
-  wraps it. Trimming the wrapper code around those calls was worth
-  doing (it's real, verified-correct work) but doesn't touch the call
-  volume or per-call cost, which is where the time actually goes.
-
-  **`altor-vec` (a WASM/HNSW approximate-NN library) considered and
-  rejected**: the whole point of ANN is turning an O(N) scan into
-  roughly O(log N), which only pays off at large N - our voted set
-  was ~170 at the time (log2(170)≈ 7.4, but HNSW's default
-  `ef_search=50` already examines close to a third of the entire
-  dataset at that size, so the algorithmic win is marginal here).
-  It's also approximate, a real correctness-character change for a
-  codebase that had verified every other optimization bit-identical;
-  v0.1.0/53-stars/4-commits with no confirmed Bun support was an
-  unproven dependency risk on top of a marginal, uncertain gain.
-
-  **Hand-rolled WASM instead - and this is the lever that actually
-  worked.** `wasm/cosine-src` (Rust, ~30 lines) compiles to
-  `wasm/cosine.wasm` (~12KB, committed - portable across Node/Bun/OS/
-  architecture, unlike `better-sqlite3`'s native addon, so no rebuild
-  step ever). `src/wasmDot.js` wraps it: `createDotBatcher(candidates,
-  dims)` flattens the voted set into WASM linear memory *once* per
-  rebuild (and the buffer is recycled across rebuilds via the `reuse`
-  path instead of freed and reallocated; rebuilds happen only when the
-  voted snapshot's freshness key changes - see `_votedCaches` in
-  `scoring.js`), then `.query(vec)` computes every dot product against it in a
-  single call - one JS↔WASM boundary crossing per *article scored*,
-  not per candidate pair, and no Float16→float conversion happening
-  inside a JS loop at all.
-
-  Isolated microbenchmark, matching the real shape exactly (a query per
-  article against N candidates, 512 dims, `Float16Array` throughout -
-  the actual production storage type, not a `Float32Array` stand-in
-  which understates the gap): **~9-10x faster than plain JS on Node,
-  ~46-51x faster on Bun**, consistent from N=170 (today's real count)
-  up through N=8000 (a plausible size after months of continued
-  voting - the per-pair cost is flat across that whole range on both
-  paths, so this holds up as the voted set grows, not just today).
-  This also finally pins down *why* Bun was so much slower: if raw JS
-  is ~51x worse than WASM on Bun and ~9.5x worse on Node, that predicts
-  Bun's plain-JS should be ~5.4x slower than Node's - and the real
-  production sweep was 89s vs 17.6s, a 5.1x gap. Not a coincidence:
-  JSC's `Float16Array` element access specifically (not "JSC is
-  generally slower at loops", the earlier, less precise read) is what's
-  dramatically worse-optimized than V8's.
+  - **Verified L2-normalization, then dropped norm/sqrt/divide** from
+    `cosine()` (`enrich.js`) — exact for unit vectors, not an
+    approximation: 44.7s → 19.2s on Node, 89.4s on Bun.
+  - **Top-k insertion window instead of `.filter().map().sort().slice()`
+    per candidate pair** (`insertDescending`, `scoring.js`):
+    bit-identical output, but only ~8% (19.2s → 17.6s) — a useful
+    negative result proving the call volume itself dominates, not the
+    wrapper code.
+  - **Hand-rolled WASM batcher** (`wasm/cosine-src`, Rust ~30 lines →
+    `wasm/cosine.wasm`, committed and portable): the voted set is
+    flattened into WASM linear memory once per rebuild and every
+    article's dot products are computed in a single `dot_batch` call —
+    one JS↔WASM crossing per article scored, no Float16→float
+    conversion in a JS loop. ~9-10x faster than plain JS on Node,
+    ~46-51x on Bun; live before/after score diff max deviation 7.7e-08.
+    End-to-end: Node 17.9s → 3.4s, Bun ~89s → 3.2s — Bun marginally
+    faster than Node, a complete reversal.
+  - **2026-08 constant-factor round** (verified by the test suite,
+    including the bit-exact recomputeOneScore-matches-full-sweep and
+    mid-sweep-vote isolation tests): the four per-row passes over
+    `pairSims` fused into one `knnTerms` loop (~4x fewer iterations);
+    the WASM candidate buffer recycled across sweeps via
+    `createDotBatcher`'s `reuse` path; one shared freshness-checked
+    voted snapshot for the sweep and `recomputeOneScore` (leased to the
+    sweep across its await points — details in `_votedCaches`); and the
+    scalar kernel replaced with simd128 (4-wide f32, 4x unrolled;
+    `scripts/bench-dot.js`: ~793ns → ~192ns per pair on Node, ~3.2-4.3x,
+    ~3.1x at 8000 candidates where the matrix is memory-bound). First
+    live full sweep after the round: 40,842 articles in **16.7s** (from
+    ~30s) — the kernel was the only change that moved the wall clock;
+    everything else trimmed the work around the math.
 
   Wired into `scoring.js`'s `knnTerms` (the fused up/down/topic-neighbor/
-  max-similarity pass over `pairSims`; it was named `knnScore` when this
-  landed) - the only real hot path -
-  `enrich.js`'s `findDuplicate` and `search.js`'s `semanticSearch` stay
-  on plain JS `cosine()`, since neither is a bottleneck at this
-  project's scale and per-call WASM overhead isn't worth paying where
-  volume is low). Verified two ways: a dedicated `wasmDot.test.js`
-  covering the batcher in isolation (correct dot products, mixed
-  `Float16Array`/`Float32Array` input, sequential queries, two
-  independent batchers coexisting safely - the mid-sweep-vote scenario
-  - and dims-mismatch guards that fail loud instead of silently
-  corrupting WASM memory, since raw pointer arithmetic has no bounds
-  checking of its own); and a live before/after diff against the real
-  archive, comparing every article's score between the pre-WASM and
-  WASM code paths: **max deviation 7.7e-08** - float32-vs-float64
-  accumulation noise, utterly dwarfed by the Float16 storage
-  quantization already baked into every stored vector. Measured
-  end-to-end on the real ~6200-article archive: **Node 17.9s → 3.4s
-  (5.3x)**, **Bun ~89s → 3.2s (~27.7x)** - Bun is now marginally
-  *faster* than Node for this workload, a complete reversal from
-  where this investigation started. The remaining ladder rung
-  (sqlite-vec/approximate NN if this ever gets truly huge) is about
-  the sweep's total *duration*, not urgent now that duration no
-  longer blocks anything and is down to single-digit seconds either
-  way. The other rung once named here - caching voted vectors instead
-  of re-reading blobs every sweep - has since been implemented; see
-  the 2026-08 note below.
-
-  **2026-08 constant-factor round on the same O(N×V) path, no
-  algorithmic or semantics change** (verified by the existing test
-  suite, including the bit-exact `recomputeOneScore`-matches-full-sweep
-  and mid-sweep-vote isolation tests; no fresh live-archive measurement
-  for this write-up): (1) the four separate passes over each row's
-  `pairSims` array (up-kNN filter, down-kNN filter, topic-neighbor
-  overlap scan, max-similarity scan) are fused into one `knnTerms`
-  loop - identical results, ~4x fewer iterations and one
-  `max(sim, 0)` per candidate instead of up to three; (2) the sweep's
-  WASM candidate buffer stays alive across sweeps and is recycled via
-  `createDotBatcher`'s `reuse` path instead of a free/alloc cycle per
-  sweep; (3) the voted snapshot (decoded vectors + batcher) is a single
-  per-db cache shared by the sweep and `recomputeOneScore`, validated
-  by a cheap aggregate over exactly the rows `votedArticles` selects
-  (COUNT, SUM(vote), MAX(vote time), SUM(LENGTH of the embedding blob) -
-  the last also catches embedding rewrites by another process, e.g.
-  cron re-embedding against a live serve's db, which the old
-  single-score dirty flag could not see). A sweep whose voted set
-  hasn't changed since the last single-article score reuses that
-  snapshot wholesale instead of rebuilding it. The snapshot is leased
-  to the sweep across its await points: a vote landing mid-sweep builds
-  its own ephemeral copy (freed after use) rather than reading the
-  stale leased one; the accepted-stale-sweep tradeoff described above
-  is unchanged. Documented blind spots, self-correcting on any later
-  change: two articles swapping exact vote values between checks, and
-  a voted article re-embedded to a different vector of the same byte
-  length.
-
-  A fourth 2026-08 change replaced the scalar dot-product kernel itself
-  with simd128 (fixed-width WASM SIMD: 4-wide f32 multiply-add, 4x
-  unrolled into separate accumulators, scalar tail for dims % 4 -
-  `wasm/cosine-src/src/lib.rs`, rebuilt via `cargo build --release
-  --target wasm32-unknown-unknown`). Measured with
-  `scripts/bench-dot.js` at the real sweep shape (512-dim unit vectors):
-  ~793ns -> ~192ns per candidate pair on Node and ~791ns -> ~247ns on
-  Bun at 170-2000 candidates (~3.2-4.3x), ~3.1x at 8000 where the 16MB
-  candidate matrix is memory-bound. simd-vs-scalar output deviation max
-  1.64e-7 over 50k dots - the same float32 rounding class the WASM port
-  itself introduced vs float64 JS (max 7.7e-08 above), verified by the
-  existing tolerance-based tests on both runtimes. Since the sweep's
-  ~30s at current scale is dominated by the dot products, this is the
-  first change of the round expected to move the full sweep's wall
-  clock substantially (the JS-side items above only trimmed the work
-  around the math).
+  max-similarity pass over `pairSims`; named `knnScore` when the WASM
+  work landed) only — `enrich.js`'s `findDuplicate` and `search.js`'s
+  `semanticSearch` stay on plain JS `cosine()`, neither being a
+  bottleneck at this scale. Remaining rung: sqlite-vec/approximate NN if
+  this ever gets truly huge — ANN was evaluated and rejected at
+  V=170-8000 (HNSW's `ef_search` already examines a third of the data;
+  approximate results vs a bit-verified-exact codebase; `altor-vec` was
+  an unproven dependency), worth revisiting only if sweep duration
+  matters again. Revisit the JS path if bun#34063 ever closes.
 - **Ant (antjs.org) investigated as a third runtime, not adopted.** It
-  looked promising on the two things this project cares most about:
-  `Float16Array` and `WebAssembly.instantiate` both work natively.
-  The blocker is SQLite - there is no `node:sqlite`, no
-  `better-sqlite3`/`sqlite3` support, nothing built in at all. Ant does
-  expose a raw FFI (`ant:ffi`, `dlopen`) capable of loading the
-  system's real `libsqlite3` and calling its C API directly (confirmed
-  via Ant's own FFI example), so a driver is *possible* - but only by
-  hand-writing a full `sqlite3_prepare_v2`/`bind`/`step`/`column_*`
-  binding to match `better-sqlite3`'s `.prepare().run()/.get()/.all()`
-  interface `src/db.js` already assumes, including correct BLOB byte-
-  length handling for the embedding/compressed-text columns - real
-  scope and real correctness risk (a marshaling bug here means data
-  corruption) for a runtime that shipped two versions in the course of
-  investigating it. Decided to wait rather than build and maintain a
-  third from-scratch driver: [ant#51](https://github.com/theMackabu/ant/issues/51)
-  asks upstream about SQLite support directly; revisit once that (or
-  `node:sqlite`/`better-sqlite3` support) lands rather than re-doing
-  this investigation from scratch.
-- **Nothing prunes articles.** The archive grows forever (~6 KB of
-  embeddings per article plus text). Fine for years at current intake;
-  see retention above.
+  handles `Float16Array` and `WebAssembly` natively, but has no SQLite
+  story at all: a driver would mean hand-writing a full
+  `sqlite3_prepare_v2`/`bind`/`step` binding to match what `src/db.js`
+  assumes, with real data-corruption risk (a marshaling bug means
+  corrupt embeddings) for a runtime that shipped two versions during
+  the investigation. [ant#51](https://github.com/theMackabu/ant/issues/51)
+  asks upstream about SQLite support; revisit if that (or
+  `node:sqlite`/`better-sqlite3` support) lands.
+- **Nothing prunes articles.** The archive grows forever (text plus one
+  ~1 KB `text_embedding` per article; the 128-byte dedup vector now ages
+  out with the dedup window — see the cosine-math section). Fine for
+  years at current intake; see retention above.
 - **DB access is single-process-friendly.** WAL mode (either driver, see
   below); the enrichment lease (soft, TTL 90 s) prevents duplicated LLM
   work between a serve scheduler and cron runs, not corruption (which WAL
@@ -1098,31 +873,20 @@ Two paths, with very different scaling:
 
 ## Deferred ideas
 
-- Harden `sanitizeHtml` (`src/html.js`): it's a regex blocklist (strips
-  `<script>/<style>/<iframe>/<object>/<embed>/<form>`, `on*` attributes,
-  `javascript:` URLs), not a parser-based allowlist, so it's more exposed to
-  malformed/nested-markup evasion than a real sanitizer library. Every
-  `v-html` in the app (`a.content`, `readerHtml`) relies on this same
-  write-time sanitization (`ingest.js`, `fetchpage.js`). Investigated on
-  request: DOMPurify looked nearly free since it could reuse the
-  happy-dom instance already carried for Readability (~1.7MB, ~1 package
-  vs. sanitize-html's ~2MB/17), but live-tested against real XSS payloads
-  it silently passed *everything* through unsanitized against happy-dom
-  (script tags, `onerror`, `javascript:` hrefs — untouched) while working
-  correctly against real jsdom — and DOMPurify's own internal
-  `isSupported` self-check reports `true` for happy-dom regardless, so
-  there's no signal a caller could detect and fall back from. That rules
-  out DOMPurify unless jsdom comes back (undoing that migration's
-  savings). `sanitize-html` (string-based, no DOM dependency, verified
-  live to correctly strip every payload above) is the real option:
-  ~2MB/17 packages, and would replace both functions in `src/html.js`
-  without touching call sites, provided the exported names/signatures
-  stay the same. The main design cost isn't the library swap itself but
-  moving from a blocklist to an allowlist: `sanitize-html` requires
-  explicitly declaring which tags/attributes survive, so real feed HTML
-  needs checking against that allowlist first so legitimate formatting
-  (images, tables, code blocks) doesn't quietly get stripped. Deferred,
-  not implemented.
+- Harden `sanitizeHtml` (`src/html.js`): it's a regex blocklist, not a
+  parser-based allowlist, so it's more exposed to malformed/nested-markup
+  evasion than a real sanitizer library. Every `v-html` in the app relies
+  on this same write-time sanitization. Investigated: DOMPurify silently
+  passed *everything* through unsanitized against happy-dom (the DOM
+  implementation this project carries) while working correctly against
+  jsdom, and its `isSupported` self-check reports `true` for happy-dom
+  regardless — no detectable signal to fall back on, so DOMPurify is
+  ruled out unless jsdom comes back. `sanitize-html` (string-based,
+  verified live to strip every tested payload) is the real option; the
+  design cost is moving from blocklist to allowlist — real feed HTML
+  needs checking against the declared tags/attributes first so
+  legitimate formatting doesn't quietly get stripped. Deferred, not
+  implemented.
 - Non-RSS sources (the feeds table would grow a `kind` column).
 - Bookmarkable filter state in the URL hash (tabs already have routes).
 - "Promote this note to guidelines" one-click from a reclassify note.
