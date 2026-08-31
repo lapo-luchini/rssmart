@@ -59,6 +59,17 @@ typecheck — `node --test` is the only automated gate.
   detached copy). Run it after any dedup model/dims mismatch window — links
   made in a mismatched space are never re-derived on their own.
 
+## Docs
+
+- `README.md` is for a user deciding to run the project: what it is, what
+  it does, setup, config keys, runtime modes, the web UI. Keep it
+  user-facing — no implementation internals (runtime selection, storage
+  formats, rebuild steps, driver quirks); those belong in `DESIGN.md`.
+- `DESIGN.md` is the authoritative, dated design log: architecture
+  rationale, measurements, internal mechanics, known limits. When you
+  change a hot path or make a measured tradeoff, add an entry there
+  instead of prose elsewhere.
+
 ## Traps
 
 - SQLite runs under two drivers: better-sqlite3 (Node) and bun:sqlite (Bun).
@@ -74,6 +85,3 @@ typecheck — `node --test` is the only automated gate.
   bun:sqlite lacks the `dbstat` virtual table (metrics.js degrades
   gracefully, test/metrics.test.js is runtime-conditional), and Bun's
   `process.version` masquerades as a Node version.
-- DESIGN.md is the authoritative, dated design log (with live measurements).
-  When you change a hot path or make a measured tradeoff, add an entry
-  there instead of prose elsewhere.
