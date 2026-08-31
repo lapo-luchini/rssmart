@@ -822,6 +822,21 @@ Two paths, with very different scaling:
   ~1 KB `text_embedding` per article; the 128-byte dedup vector now ages
   out with the dedup window — see the cosine-math section). Fine for
   years at current intake; see retention above.
+- **Single-linkage dedup chains formulaic series.** Dedup links an
+  article to a group when it matches ANY member ≥ `dupThreshold`, so a
+  retro-ingested archive of a formulaic newsletter chains into one giant
+  group: 145 LLVM Weekly issues (2014-2016) ingested on one day
+  (2026-08-30) chained into a 164-member group that also contained an
+  unrelated-but-same-domain cluster the burst had glued on (measured:
+  issues mutually 0.94-0.97 in dedup space while their raw-text
+  similarity is 0.55-0.92 across mostly-different stories — the
+  template-shaped LLM summaries dominate). Every member reaches the
+  threshold against *some* sibling, so the group-aware re-validation
+  (repair-dedup) correctly reports the links as holding and cannot split
+  it; a split is a manual un-link of the wrong members. Mitigation would
+  be a linkage-policy change (e.g. compare against the group
+  representative only, or cap group size) — both trade recall on
+  legitimate cross-outlet coverage, so not done.
 - **DB access is single-process-friendly.** WAL mode (either driver, see
   below); the enrichment lease (soft, TTL 90 s) prevents duplicated LLM
   work between a serve scheduler and cron runs, not corruption (which WAL
