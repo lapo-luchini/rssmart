@@ -24,7 +24,11 @@ Click or hover an article's score in the UI to see the breakdown.
 Near-duplicate stories (detected by cosine similarity of summary embeddings)
 are bundled: the list shows one card per news item — its best-scoring
 version — with an "N more versions" badge that expands the others inline.
-The "all versions" toggle ungroups them.
+Each copy there can be previewed with full details and voted on directly,
+marked "not a duplicate" if the match was wrong (with a **re-check
+duplicates** action in the expanded article to undo a mistake), and the
+original the others were matched against is tagged. The "all versions"
+toggle ungroups everything.
 
 ## Setup
 
@@ -33,66 +37,29 @@ pnpm install
 cp config.example.yaml config.yaml   # then edit; config.yaml is gitignored
 ```
 
-`pnpm install` needs network access once: its `postinstall` step
-(`scripts/vendor.js`) fetches the frontend's Vue build directly from a CDN,
-checksum-verified, rather than installing the full `vue` npm package (whose
-own dependency chain — SSR, SFC compilation, none of it used here — is
-~28MB for a single 170KB file). Already-vendored installs skip the fetch.
+`pnpm install` needs network access once: its `postinstall` step fetches the
+frontend's Vue build from a CDN (checksum-verified). Runs on both **Node.js
+(24+)** and **[Bun](https://bun.sh)** — the package scripts pick whichever
+runtime is installed; see [DESIGN.md](DESIGN.md) for how that works and what
+to do after upgrading Node (a one-time native-addon rebuild).
 
-Runs on both **Node.js (24+)** and **[Bun](https://bun.sh)**: `src/db.js`
-picks `bun:sqlite` under Bun and `better-sqlite3` under Node automatically.
-Invoking `bin/rssmart.js` directly (`bun bin/rssmart.js serve` / `node
-bin/rssmart.js serve`) always uses the binary you named. The `cron`/
-`serve`/`dbstats`/`postinstall` package.json scripts pick whichever runtime
-is actually installed on their own (`bun`, if present, else `node`) —
-`npm`/`pnpm`/`bun run serve` all work the same way regardless of which
-package manager invokes them, and so does a genuinely single-runtime
-machine with only one of the two installed (verified live: an isolated
-Bun-only `PATH`, with no `node` reachable at all, ran `bun run dbstats`
-and its own `postinstall` hook correctly; a Bun-free `PATH` correctly fell
-back to `node` for the same two). This isn't automatic in package.json —
-a script that just says `"node ..."` never becomes Bun's own runtime
-merely because `bun run` was the one asked to run it (confirmed live: it
-spawns a real `node` subprocess, `typeof Bun` is `undefined` inside it) —
-so each of those four scripts is `if command -v bun >/dev/null 2>&1; then
-exec bun ...; else exec node ...; fi` rather than a single hardcoded
-interpreter name.
-Node 24 is required for native
-`Float16Array` (embeddings are stored as float16 — see below); if you're
-on an older Node, install 24 via `nvm install 24` and rebuild the native
-addon once: `nvm use 24 && npm rebuild better-sqlite3`. `bin/rssmart.js`
-checks for `Float16Array` at startup and exits with a clear error if it's
-missing, rather than failing later inside an embed/search call — the
-project is only tested against Node/Bun versions meeting `engines` in
-`package.json`; older-but-Float16-capable runtimes get a warning, not a
-hard stop.
-
-The kNN taste-similarity signal's vector math runs in WASM (`wasm/cosine.wasm`,
-committed, portable across Node/Bun/OS/architecture - no rebuild needed when
-you update Node or Bun, unlike `better-sqlite3`'s native addon above). It's
-prebuilt; a Rust toolchain (`rustup target add wasm32-unknown-unknown`) is
-only needed if you ever change `wasm/cosine-src`'s source and want to rebuild
-it (`cd wasm/cosine-src && cargo build --target wasm32-unknown-unknown
---release`, then copy the resulting `.wasm` over `wasm/cosine.wasm`) - not to
-run the app.
-
-Configure in `config.yaml`:
+Configure in `config.yaml` (the shipped `config.example.yaml` already has
+these defaults):
 
 - `ollama.url` — your Ollama instance, e.g. `http://192.168.1.10:11434`.
-- `ollama.chatModel` — any instruct model, e.g. `gemma4:12b-it-qat`, `qwen3`.
-- `ollama.embedModel` — an embedding model, e.g. `nomic-embed-text`
-  (`ollama pull nomic-embed-text`). Used for the text embeddings behind
-  taste scoring and search.
+- `ollama.chatModel` — any instruct model for topics/summaries/depth, e.g.
+  `gemma4:26b-mlx`.
+- `ollama.embedModel` — embedding model for the text vectors behind taste
+  scoring and search. Default: `leoipulsar/harrier-0.6b`.
 - `ollama.dedupEmbedModel` — optional second embedding model used only for
-  the summary vectors that detect duplicates; useful when one model is
-  better at clustering your votes and another at duplicate detection
-  (that's the shipped default config: harrier for taste, qwen3 for dedup).
-  Omit to use `embedModel` for everything.
-- `ollama.embedDimensions` — optional Matryoshka-style truncation (e.g. `512`
-  for a 1024-dim model): halves embedding storage on top of the float16
-  format, with little accuracy loss — only if your model supports it
-  (check its card; qwen3-embedding does, being MRL-trained). Omit to use
-  the model's native dimension.
+  the summary vectors that detect duplicates. Default:
+  `qwen3-embedding:0.6b` — benchmarked better at duplicate detection than
+  harrier, which instead wins at taste clustering. Omit to use `embedModel`
+  for everything.
+- `ollama.embedDimensions` / `dedupEmbedDimensions` — optional
+  Matryoshka-style truncation (defaults in the example config: 512 for text
+  vectors, 64 for dedup). Only models trained for it (MRL, e.g.
+  qwen3-embedding) keep quality when truncated — check the model card.
 - `enrich.dupThreshold` — cosine similarity above which a story counts as a
   repeat (default 0.87; raise it if distinct stories get flagged).
 - `enrich.fetchMinChars` — link-only feeds (e.g. Hacker News) carry almost no
@@ -101,16 +68,10 @@ Configure in `config.yaml`:
   (Firefox reader mode) for classification, summarizing, and the expanded
   view. Set 0 to disable.
 - `enrich.maxArticleChars` (default 50000) — hard cap on a fetched origin
-  page's stored text/html, regardless of how well it extracted. Guards
-  against pages that aren't really a single article (e.g. an `#anchor`
-  into a shared listing/archive page, which fetches the same huge page
-  every time since fragments never reach the server).
+  page's stored text/html, regardless of how well it extracted.
 - `enrich.maxSuggestedTopics` (default 150) — the topic vocabulary only
   grows, and the full list rides in every classification prompt; this
-  shows the classifier only the N most-used topics, bounding that cost
-  regardless of how large the vocabulary gets. Already-tagged articles
-  are unaffected, and a topic outside the cap can still be reused if the
-  model names it anyway. 0 shows the full list.
+  shows the classifier only the N most-used topics. 0 shows the full list.
 
 ## Usage
 
@@ -127,8 +88,10 @@ classifies pending articles. No system cron required.
 `cron` remains for one-shot uses: backfills (`--max-run 0`), debugging
 (`--debug`), or driving rssmart from system cron instead of the scheduler
 (set `scheduler.enabled: false` then). It fetches only feeds that are due
-(`--all-feeds` overrides), and a lease in the DB ensures a cron run and a
-running scheduler never classify the same queue twice.
+(`--all-feeds` overrides), works within a time budget (`cron.maxRunMs`,
+default 5 minutes; unfinished classification continues on the next run), and
+a lease in the DB ensures a cron run and a running scheduler never classify
+the same queue twice. `cron` and `serve` can run concurrently (SQLite WAL).
 
 `--config <path>` (or `RSSMART_CONFIG`) selects the config file;
 `--port <n>` overrides the serve port.
@@ -136,10 +99,7 @@ running scheduler never classify the same queue twice.
 `cron` follows cron etiquette: silent when all is well, problems on stderr
 (so real cron only emails you on failure). To watch it work when running
 manually, add `--verbose` (per-feed and per-article progress) or `--debug`
-(also prints the generated summaries). Every log line (cron and serve,
-including the internal scheduler's) is prefixed with an ISO8601 timestamp
-(`src/log.js`), so output from concurrent processes can be interleaved and
-ordered correctly.
+(also prints the generated summaries).
 
 If you prefer system cron over the internal scheduler, e.g. every 30 minutes:
 
@@ -150,62 +110,39 @@ If you prefer system cron over the internal scheduler, e.g. every 30 minutes:
 Feeds themselves are managed from the web UI (Feeds tab); a config `feeds:`
 list is optional and only seeds the database.
 
-Each cron run fetches feeds and classifies articles in parallel (one is
-network-bound, the other Ollama-bound) within a time budget
-(`cron.maxRunMs`, default 5 minutes; `--max-run <minutes>` overrides it,
-`--max-run 0` removes it for long backfills); classification work that
-doesn't fit continues on the next run. `cron` and `serve` can run concurrently
-(SQLite WAL). If Ollama is down,
-ingestion still works; articles stay `pending` and are classified on a later
-run (after 5 failed attempts an article is parked as unclassifiable).
+If Ollama is down, ingestion still works; articles stay `pending` and are
+classified on a later run (after 5 failed attempts an article is parked as
+unclassifiable).
 
 ## Web UI
 
 - **Interesting** (default): unread, sorted "hot" — interest blended with
-  freshness (`scoring.hotDecayPerDay`), so an old article can't bury a
-  fresh one just by having a slightly higher score. Pure "by interest" and
-  "by date" are also selectable.
-- **Unread**: unread articles, newest first, repeats hidden. **All** shows
-  everything. Plus topic + feed filters, full-text search, and a "repeats"
-  toggle.
-- Every tab has its own hash route (`#/unread`, `#/interesting`, `#/all`,
-  `#/triage`, `#/topics`, `#/feeds`) — bookmarkable, and back/forward works.
+  freshness (`scoring.hotDecayPerDay`), so an old article can't bury a fresh
+  one just by having a slightly higher score. **Unread** is newest first;
+  **Explore** sorts by novelty (furthest from anything you've voted on).
+  Plus topic + feed filters, full-text search, and an "include read" toggle.
+- Every tab has its own hash route (`#/interesting`, `#/unread`,
+  `#/explore`, `#/triage`, `#/topics`, `#/feeds`) — bookmarkable, and
+  back/forward works.
 - **⚡Triage**: a fast, keyboard-driven way to vote through your unread,
-  *classified* backlog (not-yet-classified articles are excluded — triage
-  runs on title/summary/topics, which a pending article doesn't have yet)
-  — one article at a time, no clicking into anything. `↑` more interesting,
-  `↓` less interesting, `Shift+↑` WOW, `Shift+↓` never, `←`/`⌫` back,
-  `→`/`space`/`enter` skip (marks read without voting), `esc` exit.
-  The on-screen buttons form a cross matching this layout: WOW/never are
-  the outer top/bottom buttons, back/skip flank the middle two. `p` (or
-  click the title, or `PgDn` the first time — after that `PgDn` just
-  scrolls the now-visible content normally) expands
-  the full extracted article inline below the vote buttons — wider than
-  the card itself, so long paragraphs cost fewer scrolled lines — without
-  leaving triage or marking it read; `o` (or **open original ↗** next to
-  the byline) opens the real source page in a new tab for the cases where
-  the extraction isn't enough. Aimed squarely at the sparsity problem: a
-  smarter algorithm can't beat more training data, and this is the fastest
-  way to generate it.
-- **⚡ triage this** (Interesting/Unread/All, next to the filters) runs the
-  exact same triage UI and keybindings over whatever the list is already
-  showing — current topic/feed/search/sort included — instead of the
-  ⚡Triage tab's own fixed unread/classified/date scope. `esc` returns to
-  that same filtered view, filters intact. **✕ clear filters** (shown
-  once any filter is active) resets topic/feed/search/toggles back to a
-  plain tab in one click.
+  *classified* backlog — one article at a time, no clicking into anything.
+  `↑` more interesting, `↓` less interesting, `Shift+↑` WOW, `Shift+↓`
+  never, `←`/`⌫` back, `→`/`space`/`enter` skip (marks read without
+  voting), `esc` exit, `p` expands the full article inline, `o` opens the
+  source in a new tab. Aimed squarely at the sparsity problem: a smarter
+  algorithm can't beat more training data, and this is the fastest way to
+  generate it.
+- **⚡ triage this** (next to the filters) runs the same triage UI over
+  whatever the list is already showing — current topic/feed/search/sort
+  included. `esc` returns to that filtered view.
 - ▲ / ▼ vote to teach it: one click = interesting (±1), a second click = WOW
   (±2, counts double in every signal), a third clears. Expanding a story
-  marks it read; `esc` collapses whichever one is open, from anywhere on
-  the page — handy after scrolling down into a long one. Topic chips and
+  marks it read; `esc` collapses whichever one is open. Topic chips and
   each story's left edge are tinted by learned preference: green = liked,
   red = disliked.
-- **open ↗** opens an in-page reader instead of a new tab. It shows our own
-  extracted full-text — many sites refuse to be iframed — fetching the
+- **open ↗** opens an in-page reader instead of a new tab, fetching the
   origin page on demand if the feed's own text looks thin. `esc` or **←
-  back** returns to exactly where you were; **open original ↗** is still
-  there as a real new tab for when you want the live page. Vote and
-  mark-read controls stay reachable from the reader's top bar.
+  back** returns to exactly where you were.
 - Disagree with a classification? Expand the article and hit **reclassify**,
   optionally with a note ("this is about hardware, not software") — the note
   is stored with the article, shown to the LLM together with the previous
@@ -214,79 +151,37 @@ run (after 5 failed attempts an article is parked as unclassifiable).
   the Topics tab: that text rides along with every classification request.
 - Check **semantic** next to the search box to rank results by meaning
   instead of matching words — "microwave power grid" can find an article
-  that never uses those words. It embeds your query with the same model
-  used to store article vectors and ranks by cosine similarity; only
-  classified articles are searchable (pending ones have no vector yet),
-  and results show a match-strength badge. Falls back to a clear error
-  if Ollama is unreachable rather than silently returning nothing.
-- **Topics** and **Feeds** tabs (right side of the tab bar) replace the
-  article list with their own views: Topics shows every learned topic with
-  its preference, votes and article count (click through to its articles);
-  Feeds is feed management — add a feed, import/export OPML, enable/disable
-  sources, and see each feed's average vote, articles/week, and fetch
-  success/error record.
+  that never uses those words. Results show a match-strength badge.
+- **Topics** and **Feeds** tabs: Topics shows every learned topic with its
+  preference, votes and article count; Feeds is feed management — add a
+  feed, import/export OPML, enable/disable sources, and see each feed's
+  average vote, articles/week, and fetch success/error record.
 - **Find redundant topics** (Topics tab) asks the LLM to spot near-duplicate
-  topics (e.g. "ai" vs "artificial-intelligence") and propose collapsing
-  each into one. Nothing is applied automatically — review each proposal
-  and click **merge** or **skip**; merging retags every affected article
-  and blends the two topics' vote history permanently, so it's never done
-  without an explicit click. A merged-away name is remembered: if the
-  classifier suggests it again later, it's silently redirected to the
-  topic you kept rather than recreated. Each proposal shows both topics'
-  article counts, so you can sanity-check the direction (and size of the
-  impact) before merging. Every proposal the model returns is shown — none
-  are silently dropped, since generating them is the slow part — but one
-  whose own wording reads like it's arguing against its own suggestion is
-  dimmed with a ⚠, for your judgment rather than a guess on the app's
-  part. Noticed a redundant pair yourself, or the tool didn't catch one?
-  The **manual merge** form below the proposals does the exact same
-  merge, from a plain from/to dropdown, without waiting on a proposal.
+  topics and propose collapsing each into one. Nothing is applied
+  automatically — review each proposal and click **merge** or **skip**;
+  merging retags every affected article and blends the two topics' vote
+  history permanently. A merged-away name is remembered: if the classifier
+  suggests it again later, it's silently redirected to the topic you kept.
 
 ## Notes
 
 - Data lives in the SQLite file set by `config.db` (default `./data/rssmart.db`).
 - Feed HTML is stripped of scripts/event handlers before storage, but this is
   a personal-use reader — don't expose it to the open internet.
-- `content`/`full_content` are stored brotli-compressed (still `TEXT`-typed
-  columns — SQLite stores the BLOB as-is), which is why full-text search only
-  matches title/summary, not article bodies; use **semantic** search (embeds
-  a sample of the full text) to search by meaning instead.
-- `pnpm run dbstats` (or `node`/`bun scripts/dbstats.js` directly) reports
-  file size, row counts, and a per-column breakdown of the `articles`
-  table (the one that dominates the file) — read-only, safe to run
-  anytime. Table/index-level sizes come from SQLite's own `dbstat`
-  accounting, always present under Node/better-sqlite3 but not (at least
-  as far as tested, on two different builds) under `bun:sqlite` — the
-  script probes for it live and just skips that one section if it's
-  missing, everything else still works either way. `pnpm run dbstats`
-  prefers Bun when it's installed, so on a machine with both, run `node
-  scripts/dbstats.js` explicitly if you want the fuller Node-side report
-  by default. Example, a real ~6,200-article database (38.3 MB total):
-
-  | column | size | notes |
-  |---|---|---|
-  | `embedding` + `text_embedding` | 24.2 MB | two float16 vectors/article (see `ollama.embedDimensions`) |
-  | `content` | 3.7 MB | brotli-compressed RSS text |
-  | `full_content` | 3.1 MB | brotli-compressed, only for articles with a fetched/cached copy |
-  | `summary` | 1.4 MB | LLM-generated |
-  | `url` + `title` + `author` | ~0.8 MB | |
-  | every other column + per-row/page overhead | ~5.1 MB | id, dates, scores, status, vote… — many small columns, none individually significant, plus index sizes |
-
-  The *shape* — embeddings and article text dominate, everything else is
-  small — should hold generally; run the script yourself for current,
-  exact numbers rather than trusting this snapshot as it ages. SQLite
-  doesn't reclaim freed pages from the file on its own after a large
-  backfill or config change — the script reports reclaimable space if a
-  `VACUUM` is worth running.
-- `pnpm run bench-model <model> [model2 ...]` (or `node scripts/bench-model.js
-  ...` directly) benchmarks one or more Ollama chat models for speed and
-  output quality against a fixed spread of real, already-classified
-  articles from your own DB, using the exact production classification
-  prompt — read-only, safe to run anytime. Writes
-  `data/bench-model-<timestamp>.txt`: average wall time per model first,
-  then every model's full generated output per article underneath, to
-  read through and judge for yourself. A handy way to re-check whether a
-  new model release is worth switching to as they come out.
+- Full-text search only matches title/summary, not article bodies; use
+  **semantic** search (embeds a sample of the full text) to search by meaning.
+- `pnpm run dbstats` reports file size, row counts, and a per-column
+  breakdown of the database — read-only, safe to run anytime.
+- `pnpm run bench-model <model> [...]` benchmarks one or more Ollama chat
+  models for speed and output quality against real articles from your own
+  DB, using the exact production classification prompt — read-only, and a
+  handy way to judge whether a new model release is worth switching to.
+- Duplicate grouping links a story to a group when it's similar to any
+  member, so a bulk-ingested archive of a formulaic newsletter (e.g. years
+  of a weekly digest at once) can chain into one large group; the versions
+  list tags the original and the per-copy "not a duplicate" action is the
+  fix. `node scripts/repair-dedup.js` re-validates every stored link after
+  any embedding-model change (`--fix` applies; see the script header).
 - Origin-page fetching refuses article links that resolve to private, loopback
   or link-local addresses (feed content is third-party input; this prevents a
   malicious feed from probing your LAN). `enrich.allowPrivateFetch: true`
@@ -295,5 +190,6 @@ run (after 5 failed attempts an article is parked as unclassifiable).
 
 ## Design
 
-Why things are built this way — and where the known scaling limits are —
-lives in [DESIGN.md](DESIGN.md).
+Why things are built this way — including the runtime-selection details,
+embedding storage internals, and where the known scaling limits are — lives
+in [DESIGN.md](DESIGN.md).
