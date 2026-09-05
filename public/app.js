@@ -312,6 +312,13 @@ createApp({
     applyRoute(hash, { replace = false } = {}) {
       const route = hash.replace(/^#\//, '');
       const routes = ['interesting', 'unread', 'explore', 'triage', 'topics', 'feeds'];
+      const article = route.match(/^article\/(\d+)$/);
+      if (article) {
+        // permalink: the normal full-page reader view from any mode — it
+        // doesn't encode triage/list state
+        this.openReaderById(Number(article[1]));
+        return;
+      }
       if (replace && !routes.includes(route)) {
         history.replaceState(null, '', `#/${this.currentRoute()}`);
         return;
@@ -767,9 +774,13 @@ createApp({
 
     // In-page reader: full extracted text in an overlay, instead of a new
     // tab (which used to steal tab focus on close). "open original ↗" in
-    // the overlay remains as the real-new-tab escape hatch.
+    // the overlay remains as the real-new-tab escape hatch. The overlay's
+    // URL is the article permalink (#/article/<id>); closing restores the
+    // tab's hash.
     async openReader(article) {
       this.readerArticle = article;
+      const permalink = `#/article/${article.id}`;
+      if (location.hash !== permalink) location.hash = permalink;
       this.readerHtml = '';
       this.readerSource = null;
       this.readerLoading = true;
@@ -790,6 +801,23 @@ createApp({
 
     closeReader() {
       this.readerArticle = null;
+      this.syncHash();
+    },
+
+    // Permalink target: reuse the list's copy of the article when present
+    // (so votes stay in sync), otherwise fetch it — works from any mode,
+    // including deep links straight into triage or topics.
+    async openReaderById(id) {
+      if (this.readerArticle?.id === id) return;
+      const local = this.articles.find((a) => a.id === id);
+      if (local) return this.openReader(local);
+      try {
+        const article = await this.api(`/api/articles/${id}`);
+        if (this.readerArticle?.id === id) return;
+        this.openReader(article);
+      } catch (err) {
+        this.error = `Cannot load article: ${err.message}`;
+      }
     },
 
     async addFeed() {

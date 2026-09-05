@@ -213,6 +213,8 @@
         <time :title="fullDate(triageCurrent.published_at || triageCurrent.created_at)">{{ ago(triageCurrent.published_at || triageCurrent.created_at) }}</time>
         <a v-if="triageCurrent.url" class="mark" :href="triageCurrent.url" target="_blank" rel="noopener"
            title="open in a new tab (o)">open original ↗</a>
+        <a class="mark" :href="'#/article/' + triageCurrent.id"
+           title="permalink — opens the normal full-page view (leaves triage)">permalink</a>
       </div>
       <h2 class="triage-title" title="read full article (p)" @click="toggleTriageContent">{{ triageCurrent.title }}</h2>
       <p class="triage-summary" v-if="triageCurrent.summary">{{ triageCurrent.summary }}</p>
