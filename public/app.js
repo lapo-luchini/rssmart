@@ -421,6 +421,11 @@ createApp({
       this.triageProcessed++;
       this.triagePos++;
       this.collapseTriageContent();
+      // a mouse-clicked vote/skip button keeps DOM focus across cards; once
+      // any keyboard input follows, :focus-visible paints a selection ring
+      // on it over an article that was never voted — blur it on advance
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && focused.closest('.triage-controls')) focused.blur();
       if (this.triagePos >= this.triageQueue.length) await this.loadTriageBatch();
     },
 
