@@ -796,15 +796,19 @@ createApp({
       if (!article.read_at) this.toggleRead(article);
       try {
         const data = await this.api(`/api/articles/${article.id}/reader`);
-        if (this.readerArticle !== article) return; // closed or switched while loading
+        // identity by id, never by reference: a deep-linked article arrives
+        // as a raw object while this.readerArticle reads back as Vue's
+        // reactive proxy of it — reference equality would always differ and
+        // leave the overlay on "Loading…" forever
+        if (this.readerArticle?.id !== article.id) return; // closed or switched while loading
         this.readerHtml = data.html;
         this.readerSource = data.source;
       } catch (err) {
-        if (this.readerArticle !== article) return;
+        if (this.readerArticle?.id !== article.id) return;
         this.error = `Cannot load article: ${err.message}`;
         this.readerArticle = null;
       } finally {
-        if (this.readerArticle === article) this.readerLoading = false;
+        if (this.readerArticle?.id === article.id) this.readerLoading = false;
       }
     },
 
