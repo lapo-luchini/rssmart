@@ -277,7 +277,7 @@
         <button v-if="a.duplicate_of && dupes" class="flag flag-link"
                 :title="'repeat of: ' + (a.duplicate_title || '#' + a.duplicate_of)"
                 @click="goToOriginal(a)">repeat of: {{ a.duplicate_title || '#' + a.duplicate_of }}</button>
-        <button v-if="a.duplicate_of && dupes" class="flag flag-link"
+        <button v-if="a.duplicate_of && dupes" class="mark"
                 title="this copy is not actually the same story: detach it from the group"
                 @click="unlink(a)">not a duplicate</button>
         <span v-if="a.status === 'pending'" class="flag" title="waiting for the next classification run">new</span>
