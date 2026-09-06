@@ -67,6 +67,8 @@ createApp({
       expandedId: null,
       expandedVersions: {},
       selectedVersion: {},
+      shownVersion: {},
+      shownOriginal: {},
       flashId: null,
       scoreDetailId: null,
       readerArticle: null,
@@ -240,6 +242,8 @@ createApp({
       this.expandedId = null;
       this.expandedVersions = {};
       this.selectedVersion = {};
+      this.shownVersion = {};
+      this.shownOriginal = {};
       try {
         const data = await this.api(`/api/articles?${this.params(0)}`);
         this.articles = data.articles;
@@ -917,27 +921,69 @@ createApp({
       reader.readAsText(file);
     },
 
+    // Group identity of a (possibly shown) article: shown copies carry their
+    // duplicate_of, the group root carries null — both resolve to the root,
+    // so the versions/shown maps stay keyed consistently across a "show" swap.
+    groupKey(a) {
+      return a.duplicate_of ?? a.id;
+    },
+
     async toggleVersions(article) {
-      if (this.expandedVersions[article.id]) {
-        delete this.expandedVersions[article.id];
-        delete this.selectedVersion[article.id];
+      const key = this.groupKey(article);
+      if (this.expandedVersions[key]) {
+        delete this.expandedVersions[key];
+        delete this.selectedVersion[key];
         return;
       }
       try {
-        this.expandedVersions[article.id] =
+        this.expandedVersions[key] =
           await this.api(`/api/articles/${article.id}/versions`);
       } catch (err) {
         this.error = `Cannot load versions: ${err.message}`;
       }
     },
 
-    // Pick one copy of a duplicated story inside the versions list: it gets
-    // full details like a normal card (title, summary, topics, score, vote
-    // buttons — no body, this is a preview, not a read) and votes cast there
-    // land on that specific copy. Clicking again deselects.
-    toggleVersionPreview(rootId, version) {
-      if (this.selectedVersion[rootId] === version.id) delete this.selectedVersion[rootId];
-      else this.selectedVersion[rootId] = version.id;
+    // Row button, three-way: unshow a shown copy, close an open preview, or
+    // open the preview (whose actions are "show" and "not a duplicate").
+    versionRowAction(display, version) {
+      const key = this.groupKey(display);
+      if (this.shownVersion[key]?.id === version.id) return this.unshowVersion(display);
+      if (this.selectedVersion[key] === version.id) delete this.selectedVersion[key];
+      else this.selectedVersion[key] = version.id;
+    },
+
+    // Temporarily show a copy as the group's card: the full usual controls
+    // (mark read, open ↗, votes, reclassify) then apply to that copy.
+    // Purely client-side — nothing is persisted, reload restores the original.
+    async showVersion(display, version) {
+      const key = this.groupKey(display);
+      const idx = this.articles.findIndex((x) => this.groupKey(x) === key);
+      if (idx < 0) return;
+      let full = version;
+      if (!full.content) {
+        try {
+          full = { ...version, ...(await this.api(`/api/articles/${version.id}`)) };
+        } catch (err) {
+          this.error = `Cannot load article: ${err.message}`;
+          return;
+        }
+      }
+      full.versions = this.articles[idx].versions; // keep the group badge
+      this.shownOriginal[key] = this.articles[idx];
+      this.shownVersion[key] = full;
+      this.articles.splice(idx, 1, full);
+      delete this.selectedVersion[key];
+    },
+
+    unshowVersion(display) {
+      const key = this.groupKey(display);
+      const original = this.shownOriginal[key];
+      const shown = this.shownVersion[key];
+      if (!shown) return;
+      const idx = this.articles.findIndex((x) => x.id === shown.id);
+      if (idx >= 0 && original) this.articles.splice(idx, 1, original);
+      delete this.shownVersion[key];
+      delete this.shownOriginal[key];
     },
 
     // Re-run duplicate detection on one article (same window/threshold as

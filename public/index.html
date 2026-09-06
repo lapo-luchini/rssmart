@@ -246,6 +246,10 @@
     <article v-for="a in articles" :key="a.id" :id="'article-' + a.id"
              class="story" :class="{ read: a.read_at, expanded: expandedId === a.id, flash: flashId === a.id }"
              :style="edgeStyle(a)">
+      <div v-if="shownVersion?.[groupKey(a)]" class="shown-note">
+        showing copy #{{ shownVersion[groupKey(a)].id }} —
+        <button class="flag flag-link" @click="unshowVersion(a)" title="back to the original card">restore original</button>
+      </div>
       <div class="story-meta">
         <span class="score-wrap" :class="{ pinned: scoreDetailId === a.id }">
           <button class="score" :style="{ color: tint(a.score, 78) }"
@@ -321,21 +325,25 @@
         </div>
       </div>
 
-      <div v-if="expandedVersions[a.id]" class="versions">
+      <div v-if="expandedVersions[groupKey(a)]" class="versions">
         <!-- optional chaining keeps a cached old app.js (without
              selectedVersion) from crashing the whole app mid-deploy -->
-        <template v-for="v in expandedVersions[a.id]" :key="v.id">
-          <div class="version-row" :class="{ chosen: selectedVersion?.[a.id] === v.id }">
+        <template v-for="v in expandedVersions[groupKey(a)]" :key="v.id">
+          <div class="version-row" :class="{ chosen: selectedVersion?.[groupKey(a)] === v.id }">
             <span class="score" :style="{ color: tint(v.score, 55) }">{{ fmtScore(v.score) }}</span>
             <a class="version-title" :href="v.url" target="_blank" rel="noopener">{{ v.title }}</a>
             <span v-if="!v.duplicate_of" class="flag" title="the original the other versions were matched against">original</span>
             <span class="source">{{ v.feed_title }}</span>
             <time :title="fullDate(v.published_at || v.created_at)">{{ ago(v.published_at || v.created_at) }}</time>
-            <button class="flag flag-link" :aria-expanded="selectedVersion?.[a.id] === v.id"
-                    :title="selectedVersion?.[a.id] === v.id ? 'hide details' : 'show this copy in full — preview and vote it without reading'"
-                    @click="toggleVersionPreview(a.id, v)">{{ selectedVersion?.[a.id] === v.id ? 'hide' : 'details' }}</button>
+            <button class="flag flag-link" :aria-expanded="selectedVersion?.[groupKey(a)] === v.id"
+                    :title="shownVersion?.[groupKey(a)]?.id === v.id ? 'restore the original card'
+                            : selectedVersion?.[groupKey(a)] === v.id ? 'hide details'
+                            : 'preview this copy — or show it as the card, with all the usual controls'"
+                    @click="versionRowAction(a, v)">{{
+                      shownVersion?.[groupKey(a)]?.id === v.id ? 'unshow'
+                      : selectedVersion?.[groupKey(a)] === v.id ? 'hide' : 'details' }}</button>
           </div>
-          <div v-if="selectedVersion?.[a.id] === v.id" class="version-details">
+          <div v-if="selectedVersion?.[groupKey(a)] === v.id" class="version-details">
             <span class="score-wrap">
               <button class="score" :style="{ color: tint(v.score, 78) }"
                       :aria-expanded="scoreDetailId === v.id"
@@ -362,14 +370,8 @@
                         @click="topic = t; reload()">{{ t }}</button>
               </span>
               <span class="actions">
-                <button class="vote up" :class="{ on: v.vote > 0, max: v.vote === 2 }"
-                        @click="voteClick(v, 1)"
-                        :title="v.vote === 1 ? 'WOW! (click once more to clear)' : v.vote === 2 ? 'clear vote' : 'more like this'"
-                        aria-label="More like this">{{ v.vote === 2 ? '▲▲' : '▲' }}</button>
-                <button class="vote down" :class="{ on: v.vote < 0, max: v.vote === -2 }"
-                        @click="voteClick(v, -1)"
-                        :title="v.vote === -1 ? 'never again! (click once more to clear)' : v.vote === -2 ? 'clear vote' : 'less like this'"
-                        aria-label="Less like this">{{ v.vote === -2 ? '▼▼' : '▼' }}</button>
+                <button class="mark" @click="showVersion(a, v)"
+                        title="temporarily show this copy as the card — mark read, open ↗ and votes then apply to it">show</button>
                 <button v-if="v.duplicate_of || a.duplicate_of" class="mark"
                         @click="unlink(v.duplicate_of ? v : a)"
                         title="these are not the same story: detach the copy from the group">not a duplicate</button>
