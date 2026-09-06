@@ -58,8 +58,10 @@ these defaults):
   for everything.
 - `ollama.embedDimensions` / `dedupEmbedDimensions` — optional
   Matryoshka-style truncation (defaults in the example config: 512 for text
-  vectors, 64 for dedup). Only models trained for it (MRL, e.g.
-  qwen3-embedding) keep quality when truncated — check the model card.
+  vectors, 256 for dedup — measured live: at 64 dims, same-genre but
+  different stories collapse above the dedup threshold). Only models
+  trained for it (MRL, e.g. qwen3-embedding) keep quality when truncated —
+  check the model card.
 - `enrich.dupThreshold` — cosine similarity above which a story counts as a
   repeat (default 0.87; raise it if distinct stories get flagged).
 - `enrich.fetchMinChars` — link-only feeds (e.g. Hacker News) carry almost no

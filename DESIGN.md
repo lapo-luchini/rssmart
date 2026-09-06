@@ -28,8 +28,11 @@ day-one spec was retired for exactly that reason; it's in git history).
   worse at duplicate detection (recall 53% vs 73% at matched
   false-positive rate) and — its docs claim no MRL, unlike
   qwen3-embedding — degrades sharply when truncated to the 64 dims dedup
-  uses (native-dims dedup recovers most of that, without reaching
-  qwen3's level). So the config keeps `qwen3-embedding:0.6b` for dedup
+  used before 2026-08-30 (measured live on a real false-duplicate cluster:
+  five different performance-war-story posts collapsed to 0.865-0.961 at
+  64 dims while the one true cross-language duplicate stayed 0.919 at 256
+  — dedup dims raised to 256, where every false pair drops below the
+  threshold and the true one stays above). So the config keeps `qwen3-embedding:0.6b` for dedup
   via the optional `ollama.dedupEmbedModel` (defaults to `embedModel`)
   and uses harrier for the text/taste/search vectors, where its win is
   real and holds at both native and truncated dims. MTEB leaderboard

@@ -29,8 +29,11 @@ ollama:
                           # everything. NOTE: it needs ~2x the per-vector
                           # bytes only if its dims differ (see
                           # dedupEmbedDimensions below).
-  dedupEmbedDimensions: 64 # summary embeddings (duplicate detection) use fewer dims — near-zero accuracy loss at
-                           # 64 for cosine dedup thresholds. null = same as embedDimensions.
+  dedupEmbedDimensions: 256 # summary embeddings (duplicate detection) use fewer dims — near-zero accuracy loss at
+                           # 256 for cosine dedup thresholds (measured live: 64 dims collapses same-genre
+                           # summaries — e.g. distinct performance-war-story posts — to 0.87+, 256 keeps
+                           # true duplicates ~0.92 while false pairs drop below the threshold).
+                           # null = same as embedDimensions.
   embedPrefixes:
     document: ""
     query: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "

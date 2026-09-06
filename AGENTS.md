@@ -28,7 +28,7 @@ typecheck — `node --test` is the only automated gate.
 
 - Two embedding columns per article with separate models (hybrid setup):
   `embedding` = title+summary, used for duplicate detection
-  (`ollama.dedupEmbedModel`, qwen3-embedding@64 dims); `text_embedding` =
+  (`ollama.dedupEmbedModel`, qwen3-embedding@256 dims); `text_embedding` =
   title+text, used for taste kNN + semantic search (`ollama.embedModel`,
   harrier@512). Each column's model+dims is versioned in `meta`
   (`embed_model_text`/`embed_model_dedup`); switching a model clears only
