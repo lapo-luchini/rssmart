@@ -204,7 +204,7 @@ function fetchInRankOrder(db, ranked) {
   return ranked.map((r) => ({ ...rowToArticle(byId.get(r.id)), similarity: r.similarity }));
 }
 
-export function createApp(db, config, commitHash) {
+export function createApp(db, config, commitHash, describe = '') {
   const app = new Hono();
 
   // /metrics auth exemption: an IP allowlist (default loopback) so a local
@@ -698,7 +698,7 @@ export function createApp(db, config, commitHash) {
   // at the root, unauthenticated (matching this app's existing no-auth
   // posture; see server.host's own doc comment in config.example.yaml).
   app.get('/metrics', (c) => {
-    return c.body(renderMetrics(db, config, commitHash), 200, {
+    return c.body(renderMetrics(db, config, commitHash, describe), 200, {
       'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
     });
   });

@@ -90,6 +90,7 @@ test('metrics endpoint reports article, vote, feed, topic and db counts', async 
     const buildInfoLine = text.match(/^rssmart_build_info\{.*\} 1$/m)?.[0];
     assert.ok(buildInfoLine, 'build_info line present');
     assert.match(buildInfoLine, /commit="abc1234"/);
+    assert.ok(!buildInfoLine.includes('describe='), 'no describe label when none was provided');
     assert.match(buildInfoLine, isBun ? /runtime="bun"/ : /runtime="node"/, 'build_info reports the actual runtime');
     // Bun's process.version masquerades as a Node version (24.x); metrics.js
     // reports the actual runtime — Bun.version under Bun.
@@ -106,6 +107,20 @@ test('metrics endpoint reports article, vote, feed, topic and db counts', async 
 
     // Every metric line is preceded by its own HELP/TYPE — spot-check one.
     assert.match(text, /# HELP rssmart_votes Number of articles with a given \(non-zero\) vote value\.\n# TYPE rssmart_votes gauge/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('metrics build_info carries the git describe label when the caller provides one', async () => {
+  const db = tempDb();
+  const app = createApp(db, testConfig(), 'abc1234', '1.0.0-36-g5ef3d72');
+  const server = await startApp(app);
+  try {
+    const text = await (await fetch(`${server.url}/metrics`)).text();
+    const line = text.match(/^rssmart_build_info\{.*\} 1$/m)?.[0];
+    assert.match(line, /describe="1\.0\.0-36-g5ef3d72"/);
+    assert.match(line, /commit="abc1234"/);
   } finally {
     await server.close();
   }

@@ -89,7 +89,7 @@ export function getRuntimeInfo(db) {
  * externally visible upside — a scraper always wants the current value,
  * never a deliberately-stale one.
  */
-export function renderMetrics(db, config, commitHash) {
+export function renderMetrics(db, config, commitHash, describe = '') {
   const lines = [];
 
   const articles = db.prepare(`
@@ -205,13 +205,17 @@ export function renderMetrics(db, config, commitHash) {
   }
 
   const { runtime, runtimeVersion, sqliteVersion } = getRuntimeInfo(db);
+  const buildLabels = {
+    commit: commitHash || 'unknown',
+    // git-describe version (tag-count-gHash), present only when the .git
+    // directory yielded one (see src/gitmeta.js)
+    ...(describe ? { describe } : {}),
+    runtime,
+    runtime_version: runtimeVersion,
+    sqlite_version: sqliteVersion,
+  };
   metric(lines, 'rssmart_build_info', 'gauge', 'Always 1; labels identify the running build and runtime.', [
-    [{
-      commit: commitHash || 'unknown',
-      runtime,
-      runtime_version: runtimeVersion,
-      sqlite_version: sqliteVersion,
-    }, 1],
+    [buildLabels, 1],
   ]);
 
   // Standard prom-client-style names (unprefixed) for the process/runtime

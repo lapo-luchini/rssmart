@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
+import { describeFromDisk } from '../src/gitmeta.js';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
 import { syncMastodonFeed, ingestAll } from '../src/ingest.js';
@@ -27,6 +28,12 @@ function readCommitHash() {
   } catch { return 'unknown'; }
 }
 const COMMIT_HASH = readCommitHash();
+
+// git-describe-style version ("<tag>-<n>-g<hash>", or just the short hash
+// when the repo has no reachable tags), read straight from the .git
+// directory — no git binary execution, no git dependency: unresolvable
+// state degrades to '' and the metrics fall back to commit-only.
+const COMMIT_DESCRIBE = describeFromDisk(process.cwd());
 
 checkRuntime();
 
@@ -81,7 +88,7 @@ const db = openDb(config.db);
 const verbose = values.verbose || values.debug;
 
 const { runtime, runtimeVersion, sqliteVersion } = getRuntimeInfo(db);
-log(`rssmart commit ${COMMIT_HASH} (${runtime} ${runtimeVersion}, sqlite ${sqliteVersion})`);
+log(`rssmart commit ${COMMIT_HASH}${COMMIT_DESCRIBE ? ` (${COMMIT_DESCRIBE})` : ''} (${runtime} ${runtimeVersion}, sqlite ${sqliteVersion})`);
 
 // One-time diagnostic, not a startup gate: confirms the Ollama connection
 // (auth included) works and all configured models are actually installed
@@ -228,7 +235,7 @@ if (mode === 'cron') {
   if (space.changed) {
     log(`embedding space changed: ${space.cleared} column(s) cleared, the scheduler will re-embed`);
   }
-  const app = createApp(db, config, COMMIT_HASH);
+  const app = createApp(db, config, COMMIT_HASH, COMMIT_DESCRIBE);
   const port = Number(values.port) || config.server.port;
   // Hono's app.fetch is a standard Fetch API handler — Bun runs it
   // natively, Node needs @hono/node-server to adapt it to node:http (same
