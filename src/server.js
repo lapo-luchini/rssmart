@@ -15,7 +15,7 @@ import { renderMetrics } from './metrics.js';
 import { getDbQueryMs } from './db.js';
 import { log } from './log.js';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySession, passwordMatches } from './auth.js';
+import { SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySession, passwordMatches, ipAllowed } from './auth.js';
 
 // Bun ships its own static-file middleware (hono/bun); Node needs
 // @hono/node-server's, which resolves relative paths from the process cwd
@@ -25,6 +25,12 @@ import { SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySession, passwordMat
 const serveStatic = typeof Bun !== 'undefined'
   ? (await import('hono/bun')).serveStatic
   : (await import('@hono/node-server/serve-static')).serveStatic;
+
+// Client connection address, for the /metrics IP allowlist. Source per
+// runtime: bin/rssmart.js's Bun.serve wrapper passes requestIP() as
+// c.env.ip; @hono/node-server exposes the IncomingMessage on c.env.
+const clientAddress = (c) =>
+  c.env?.ip ?? c.env?.incoming?.socket?.remoteAddress ?? c.env?.incoming?.remoteAddress ?? null;
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -201,6 +207,14 @@ function fetchInRankOrder(db, ranked) {
 export function createApp(db, config, commitHash) {
   const app = new Hono();
 
+  // /metrics auth exemption: an IP allowlist (default loopback) so a local
+  // monitoring agent can scrape without a login session. Checked against
+  // the direct connection address, not X-Forwarded-For (spoofable) — so a
+  // localhost reverse proxy is covered by the default, and a remote proxy
+  // needs its own address in the list. Disabled by an empty value.
+  const metricsAllowFrom = (config.server.metricsAllowFrom ?? '127.0.0.1')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+
   // Single-password login (config.example.yaml's auth.password),
   // independent of anything a reverse proxy does: a login page + signed
   // cookie, not the browser's native HTTP Basic Auth dialog, which an
@@ -211,6 +225,7 @@ export function createApp(db, config, commitHash) {
   app.use('*', async (c, next) => {
     if (!config.auth.password) return next();
     if (c.req.path === '/login' || c.req.path === '/login.html') return next();
+    if (c.req.path === '/metrics' && ipAllowed(metricsAllowFrom, clientAddress(c))) return next();
     if (verifySession(config.auth.password, getCookie(c, SESSION_COOKIE))) return next();
     if (c.req.path.startsWith('/api/')) return c.json({ error: 'authentication required' }, 401);
     return c.redirect('/login.html');

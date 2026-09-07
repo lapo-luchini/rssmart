@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb, testConfig, startApp } from './helpers.js';
 import { createApp } from '../src/server.js';
-import { signSession, verifySession, passwordMatches } from '../src/auth.js';
+import { signSession, verifySession, passwordMatches, ipAllowed, normalizeIp } from '../src/auth.js';
 
 test('signSession/verifySession: a session signed with one password fails against another', () => {
   const token = signSession('correct-horse');
@@ -114,4 +114,50 @@ test('auth enabled: a session cookie signed with a different (old) password is r
   const staleCookie = `rssmart_session=${signSession('old-password')}`;
   const res = await fetch(`${server.url}/api/stats`, { headers: { cookie: staleCookie } });
   assert.equal(res.status, 401);
+});
+
+test('metrics: loopback clients skip auth (default allowlist), empty allowlist keeps the login requirement', async () => {
+  // the shared server: auth enabled, default metricsAllowFrom (127.0.0.1) —
+  // the test client connects over loopback, so /metrics is open to it with
+  // no cookie at all, even an invalid one
+  const open = await fetch(`${server.url}/metrics`, { headers: { cookie: 'rssmart_session=garbage' } });
+  assert.equal(open.status, 200);
+  assert.match(open.headers.get('content-type'), /text\/plain/);
+
+  // a session cookie signed with the wrong password does not unlock the API
+  // — the exemption is IP-based, not cookie-based
+  const stats = await fetch(`${server.url}/api/stats`, { headers: { cookie: 'rssmart_session=garbage' } });
+  assert.equal(stats.status, 401);
+
+  // empty allowlist: /metrics is an HTML path, so it redirects to login
+  const db2 = tempDb();
+  const cfg = testConfig({ auth: { password: 'letmein' } });
+  cfg.server = { ...cfg.server, metricsAllowFrom: '' };
+  const app2 = createApp(db2, cfg);
+  const server2 = await startApp(app2);
+  try {
+    const res = await fetch(`${server2.url}/metrics`, { redirect: 'manual' });
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.get('location'), '/login.html');
+  } finally {
+    await server2.close();
+  }
+});
+
+test('normalizeIp/ipAllowed: IPv4-mapped and IPv6 loopback collapse to 127.0.0.1', () => {
+  assert.equal(normalizeIp('127.0.0.1'), '127.0.0.1');
+  assert.equal(normalizeIp('::ffff:127.0.0.1'), '127.0.0.1');
+  assert.equal(normalizeIp('::1'), '127.0.0.1');
+  assert.equal(normalizeIp('192.168.1.10'), '192.168.1.10');
+  assert.equal(normalizeIp(null), null);
+  assert.equal(normalizeIp(''), null);
+
+  const list = ['127.0.0.1', '192.168.1.10'];
+  assert.ok(ipAllowed(list, '127.0.0.1'));
+  assert.ok(ipAllowed(list, '::ffff:127.0.0.1'));
+  assert.ok(ipAllowed(list, '::1'));
+  assert.ok(ipAllowed(list, '192.168.1.10'));
+  assert.ok(!ipAllowed(list, '10.0.0.5'));
+  assert.ok(!ipAllowed(list, null));
+  assert.ok(!ipAllowed([], '127.0.0.1'));
 });

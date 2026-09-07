@@ -12,7 +12,12 @@ export function tempDb() {
  */
 export async function startApp(app) {
   if (typeof Bun !== 'undefined') {
-    const server = Bun.serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
+    // Same env-passthrough as bin/rssmart.js's Bun.serve wrapper: the
+    // client address rides in c.env.ip (the /metrics IP allowlist reads it).
+    const server = Bun.serve({
+      fetch: (req, srv) => app.fetch(req, { ip: srv.requestIP(req)?.address }),
+      port: 0, hostname: '127.0.0.1',
+    });
     return {
       url: `http://127.0.0.1:${server.port}`,
       close: () => server.stop(true),

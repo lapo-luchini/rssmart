@@ -850,6 +850,11 @@ Two paths, with very different scaling:
   origin-page fetching refuses private/loopback targets (SSRF) unless
   `enrich.allowPrivateFetch` is set. Residual, accepted: DNS-rebinding
   TOCTOU on page fetches — firewall the process if that ever matters.
+  `/metrics` is exempt from login for an IP allowlist
+  (`server.metricsAllowFrom`, default loopback — for a local monitoring
+  agent): checked against the direct connection address, never
+  X-Forwarded-For (spoofable), so a localhost reverse proxy is covered by
+  the default and a remote one needs its own address listed.
 - **The topic vocabulary still only grows between merge passes.** The
   suggestion-list cap (`existingTopicNames`) bounds prompt cost, and the
   propose-review-approve merge tool (`src/topicMerge.js`, see below) can

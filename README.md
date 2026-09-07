@@ -74,6 +74,14 @@ these defaults):
 - `enrich.maxSuggestedTopics` (default 150) — the topic vocabulary only
   grows, and the full list rides in every classification prompt; this
   shows the classifier only the N most-used topics. 0 shows the full list.
+- `auth.password` — login password for the web UI; empty disables login
+  entirely (this is a personal-use reader — don't expose it to the open
+  internet either way).
+- `server.metricsAllowFrom` (default `'127.0.0.1'`) — IPs (comma-separated)
+  that may fetch `/metrics` without login, for a local monitoring agent.
+  Checked against the direct connection address (`X-Forwarded-For` is
+  ignored as spoofable — a localhost reverse proxy is covered by the
+  default). Empty (`''`) requires login for `/metrics` too.
 
 ## Usage
 

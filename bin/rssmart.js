@@ -234,7 +234,12 @@ if (mode === 'cron') {
   // natively, Node needs @hono/node-server to adapt it to node:http (same
   // per-runtime split as src/db.js's SQLite driver choice).
   if (typeof Bun !== 'undefined') {
-    Bun.serve({ fetch: app.fetch, port, hostname: config.server.host });
+    // Pass the client address through for the /metrics IP allowlist
+    // (server.requestIP — Bun's equivalent of node-server's c.env.incoming).
+    Bun.serve({
+      fetch: (req, server) => app.fetch(req, { ip: server.requestIP(req)?.address }),
+      port, hostname: config.server.host,
+    });
     log(`rssmart serving on http://${config.server.host}:${port}`);
   } else {
     const { serve } = await import('@hono/node-server');

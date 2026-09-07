@@ -41,3 +41,27 @@ export function verifySession(password, token) {
 export function passwordMatches(configured, provided) {
   return typeof provided === 'string' && timingSafeStringEqual(configured, provided);
 }
+
+/**
+ * Normalize a connection address for allowlist matching: strip the
+ * IPv4-mapped-IPv6 prefix (`::ffff:127.0.0.1` is how a dual-stack listener
+ * reports IPv4 loopback) and treat IPv6 loopback as 127.0.0.1 — localhost
+ * is localhost whichever stack the connection arrived on.
+ */
+export function normalizeIp(ip) {
+  if (!ip) return null;
+  const bare = String(ip).replace(/^::ffff:/, '');
+  return bare === '::1' ? '127.0.0.1' : bare;
+}
+
+/**
+ * Comma-separated allowlist membership (exact addresses; empty list never
+ * matches). Used for the /metrics auth exemption — the check runs against
+ * the direct connection address, not X-Forwarded-For, which a client can
+ * forge.
+ */
+export function ipAllowed(allowFrom, ip) {
+  const normalized = normalizeIp(ip);
+  if (!normalized) return false;
+  return allowFrom.some((entry) => entry === normalized);
+}

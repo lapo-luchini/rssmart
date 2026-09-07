@@ -59,6 +59,7 @@ const SCHEMA = {
   server: {
     host: 'string',
     port: 'number',
+    metricsAllowFrom: 'string?',
   },
   auth: {
     password: 'string',
@@ -79,7 +80,12 @@ function validateConfig(config, schema = SCHEMA, path = 'config') {
     const val = config[key];
 
     if (!(key in config)) {
-      errors.push(`${full}: missing key (copy from config.example.yaml)`);
+      // keys marked with ? are truly optional: omit them and the consuming
+      // code falls back (e.g. dedupEmbedModel -> embedModel) — a config
+      // written for an older version keeps working across deploys
+      if (typeof spec === 'object' || !spec.endsWith('?')) {
+        errors.push(`${full}: missing key (copy from config.example.yaml)`);
+      }
       continue;
     }
 
@@ -116,9 +122,11 @@ function validateConfig(config, schema = SCHEMA, path = 'config') {
 }
 
 /**
- * Load configuration. The config file is mandatory and must contain every
- * key in the schema (copy config.example.yaml to start). No defaults are
- * merged — the example file IS the default.
+ * Load configuration. The config file must contain every required key in
+ * the schema (copy config.example.yaml to start); keys marked with `?` are
+ * optional — omit them and the consuming code falls back (e.g.
+ * dedupEmbedModel -> embedModel). No other defaults are merged — the
+ * example file IS the default.
  * Relative paths (db) resolve against the config file's directory.
  */
 export function loadConfig(path) {

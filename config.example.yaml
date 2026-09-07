@@ -149,6 +149,13 @@ server:
                    # above covers the app itself, but a reverse proxy is
                    # still worth keeping in front for TLS/external access.
   port: 8098
+  metricsAllowFrom: '127.0.0.1'  # IPs (comma-separated) that may fetch
+                                 # /metrics without login — for a local
+                                 # monitoring agent. Checked against the
+                                 # direct connection address (a localhost
+                                 # reverse proxy is covered by the
+                                 # default; X-Forwarded-For is ignored as
+                                 # spoofable). '' = login required.
 
 # Feeds are managed from the web UI (Feeds tab: add, enable/disable, OPML
 # import/export). No config seed list — use OPML import for bulk setup.
