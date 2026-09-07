@@ -151,8 +151,9 @@ createApp({
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => (this.darkMode = e.matches));
     this.reload();
     this.loadSidebarData();
-    // Log commit hash for debugging
-    this.api('/api/version').then((v) => console.log('rssmart', v.commit)).catch(() => {});
+    // Log the running version for debugging (git describe when available,
+    // commit hash otherwise — see /api/version)
+    this.api('/api/version').then((v) => console.log('rssmart', v.describe || v.commit)).catch(() => {});
 
     // Retry queued triage votes/skips (see outbox.js) whenever there's a
     // reasonable signal connectivity might be back: on load (in case they

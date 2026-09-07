@@ -88,7 +88,7 @@ const db = openDb(config.db);
 const verbose = values.verbose || values.debug;
 
 const { runtime, runtimeVersion, sqliteVersion } = getRuntimeInfo(db);
-log(`rssmart commit ${COMMIT_HASH}${COMMIT_DESCRIBE ? ` (${COMMIT_DESCRIBE})` : ''} (${runtime} ${runtimeVersion}, sqlite ${sqliteVersion})`);
+log(`rssmart ${COMMIT_DESCRIBE || COMMIT_HASH} (${runtime} ${runtimeVersion}, sqlite ${sqliteVersion})`);
 
 // One-time diagnostic, not a startup gate: confirms the Ollama connection
 // (auth included) works and all configured models are actually installed

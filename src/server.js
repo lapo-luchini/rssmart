@@ -691,7 +691,7 @@ export function createApp(db, config, commitHash, describe = '') {
   });
 
   app.get('/api/version', (c) => {
-    return c.json({ commit: commitHash || 'unknown' });
+    return c.json({ commit: commitHash || 'unknown', describe: describe || undefined });
   });
 
   // Not under /api — Prometheus's default scrape_config expects /metrics
