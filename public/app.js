@@ -537,6 +537,17 @@ createApp({
     },
 
     handleGlobalKey(e) {
+      // While typing (reclassify note, search box, selects, any editable
+      // target) letter/arrow shortcuts must never fire — "o" in a note must
+      // not open the original. Focus can linger in such an input even under
+      // an overlay opened afterwards. Escape stays live everywhere: closing
+      // overlays is intentional from an input too.
+      const target = e.target;
+      const typing = target instanceof HTMLElement
+        && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+          || target.tagName === 'SELECT' || target.isContentEditable);
+      if (typing && e.key !== 'Escape') return;
+
       if (this.readerArticle) {
         if (e.key === 'Escape') {
           e.preventDefault();
