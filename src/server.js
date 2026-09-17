@@ -10,6 +10,7 @@ import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
 import { semanticSearch } from './search.js';
 import { decompressText } from './compress.js';
+import { pragma } from './db.js';
 import { proposeTopicMerges, applyTopicMerge } from './topicMerge.js';
 import { renderMetrics } from './metrics.js';
 import { getDbQueryMs } from './db.js';
@@ -391,14 +392,25 @@ export function createApp(db, config, commitHash, describe = '') {
     // Casting a real vote (not retracting one) implies the article was
     // read — you can't rate what you haven't seen. Retraction (vote = 0)
     // leaves read_at alone: it doesn't mean you un-read it.
-    const { changes } = db.prepare(`
-      UPDATE articles
-      SET vote = ?,
-          read_at = CASE WHEN ? != 0 THEN COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ELSE read_at END,
-          voted_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-      WHERE id = ?
-    `).run(vote, vote, id);
-    if (!changes) return c.json({ error: 'not found' }, 404);
+    // Durability: synchronous runs NORMAL process-wide (see db.js) for
+    // cheap background commits, but a recorded vote is worth one fsync —
+    // raise to FULL around the vote's own commit and restore immediately.
+    // better-sqlite3 commits synchronously inside .run(), so nothing can
+    // interleave between the flip and the restore.
+    pragma(db, 'synchronous = FULL');
+    let results;
+    try {
+      results = db.prepare(`
+        UPDATE articles
+        SET vote = ?,
+            read_at = CASE WHEN ? != 0 THEN COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ELSE read_at END,
+            voted_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+        WHERE id = ?
+      `).run(vote, vote, id);
+    } finally {
+      pragma(db, 'synchronous = NORMAL');
+    }
+    if (!results.changes) return c.json({ error: 'not found' }, 404);
     // Instant, cheap: this article's own score only. The full-corpus
     // ripple (this vote can shift any other article's kNN term) is
     // debounced — see DESIGN.md — rather than blocking this response.

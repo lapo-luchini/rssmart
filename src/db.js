@@ -338,7 +338,10 @@ function instrumentQueryTiming(db) {
 // either case; better-sqlite3 statically classifies each statement as
 // data-returning or not and throws if you call the wrong one of get()/run(),
 // so fall back to run() on that specific error rather than guess per pragma.
-function pragma(db, statement) {
+// Exported for callers that need temporary durability flips (the vote
+// endpoint raises synchronous to FULL around its own commit so a recorded
+// vote survives a power loss, while everything else runs NORMAL).
+export function pragma(db, statement) {
   const stmt = db.prepare(`PRAGMA ${statement}`);
   try {
     return stmt.get();

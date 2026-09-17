@@ -242,7 +242,11 @@ day-one spec was retired for exactly that reason; it's in git history).
   or a read mark, never data. Measured impact on the reported host:
   vote wall ~730ms → single-digit ms, and most sweep-session stalls
   disappear (the compute chunks that remain are the sweep's own ~100ms
-  budget, watchdog-annotated as expected).
+  budget, watchdog-annotated as expected). The deliberate exception is
+  the vote endpoint: it raises synchronous to FULL around its own
+  commit, restoring NORMAL immediately after, so a recorded vote pays
+  exactly one fsync and survives a power loss — reader priorities put
+  the durability of a cast vote above re-doing re-embeddable work.
 - **Log lines carry an ISO8601 timestamp (`src/log.js`), `--help` usage
   text doesn't.** `log()`/`logError()` wrap `console.log`/`console.error`
   with `new Date().toISOString()` prepended, and every real log call site
