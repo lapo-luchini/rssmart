@@ -355,6 +355,16 @@ export function openDb(path) {
   instrumentQueryTiming(db);
   pragma(db, 'journal_mode = WAL');
   pragma(db, 'foreign_keys = ON');
+  // synchronous=NORMAL is the standard WAL-mode pairing (SQLite's own
+  // recommendation): commits stop fsyncing the WAL on every transaction,
+  // which on hosts with slow disk flushes meant all writers — every vote,
+  // every sweep chunk commit, every lease heartbeat — stalling the event
+  // loop by 300-700ms. Crash safety is unchanged (WAL corruption remains
+  // impossible): the only trade is that a power loss may roll back the
+  // last few in-memory commits of a *personal news reader* — lost votes
+  // and read marks, never lost articles. Note this does NOT bound fsyncs
+  // outside WAL commits (checkpoints still flush) — those are rare.
+  pragma(db, 'synchronous = NORMAL');
   // better-sqlite3 waits out lock contention by default; bun:sqlite does
   // not (observed: an immediate SQLITE_BUSY under concurrent cron + serve
   // writers, a supported scenario the enrichment lease already relies on

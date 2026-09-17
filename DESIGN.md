@@ -230,6 +230,19 @@ day-one spec was retired for exactly that reason; it's in git history).
   rather than fail immediately). `openDb()` now sets `PRAGMA busy_timeout
   = 5000` unconditionally so both drivers behave the same way, rather
   than relying on an implicit default that turned out to differ.
+- **`synchronous = NORMAL` pairs WAL with much cheaper commits.** Every
+  write in WAL+`FULL` (better-sqlite3's default) ends with an fsync of
+  the WAL, and on the production host's disk that flush measures
+  300-700ms — logging as unannotated event-loop stalls every few seconds,
+  a ~730ms DB wall for a single-row *vote*, and sweep-annotated stalls
+  inflated by commit flushes. `NORMAL` (SQLite's recommended WAL pairing)
+  keeps crash safety — WAL roll-forward remains possible, corruption
+  still impossible — and trades only "a power loss may roll back the
+  last handful of commits": for a personal reader that's losing a vote
+  or a read mark, never data. Measured impact on the reported host:
+  vote wall ~730ms → single-digit ms, and most sweep-session stalls
+  disappear (the compute chunks that remain are the sweep's own ~100ms
+  budget, watchdog-annotated as expected).
 - **Log lines carry an ISO8601 timestamp (`src/log.js`), `--help` usage
   text doesn't.** `log()`/`logError()` wrap `console.log`/`console.error`
   with `new Date().toISOString()` prepended, and every real log call site
