@@ -736,7 +736,7 @@ Two paths, with very different scaling:
   vote-ripple debounce actually elapses) had this exact same blocking
   problem: it's still the same expensive `recomputeScores`. **Fixed**:
   `recomputeScores` is now async and chunked — it processes rows in
-  bursts of at most `yieldEveryMs` (default 150ms) of synchronous work,
+  bursts of at most `yieldEveryMs` (default 100ms) of synchronous work,
   each burst its own SQLite transaction, `await`ing a `setTimeout(0)`
   between bursts so the event loop (and any concurrent request) gets a
   turn. `topicPref`/`feedPref`/`voted` are still snapshotted once up
