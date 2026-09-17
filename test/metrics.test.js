@@ -2,7 +2,33 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDb, testConfig, startApp } from './helpers.js';
 import { createApp } from '../src/server.js';
+import { recomputeScores, getScoreSweepStats } from '../src/scoring.js';
+import { renderMetrics } from '../src/metrics.js';
 import { compressText } from '../src/compress.js';
+
+test('score sweep stats feed the score_sweep metric family', async () => {
+  const db = tempDb();
+  db.prepare("INSERT INTO feeds (id, url) VALUES (1, 'http://f')").run();
+  db.prepare("INSERT INTO articles (feed_id, guid, title) VALUES (1, 'g1', 'a'), (1, 'g2', 'b')").run();
+
+  const before = getScoreSweepStats();
+  await recomputeScores(db, testConfig());
+  const after = getScoreSweepStats();
+
+  assert.equal(after.totalSweeps, before.totalSweeps + 1);
+  assert.equal(after.totalArticles, before.totalArticles + 2);
+  assert.ok(after.lastCount >= 2);
+  assert.ok(after.lastFinishedAt >= before.lastFinishedAt);
+
+  const text = renderMetrics(db, testConfig(), 'test');
+  const sweep = text.split('\n').filter((l) => l.startsWith('rssmart_score_sweep'));
+  assert.ok(sweep.some((l) => l.startsWith('rssmart_score_sweep_last_seconds ')), 'last_seconds gauge');
+  assert.ok(sweep.some((l) => l.startsWith('rssmart_score_sweep_last_articles ')), 'last_articles gauge');
+  assert.ok(sweep.some((l) => l.includes('rssmart_score_sweeps_total')), 'sweeps counter');
+  assert.ok(sweep.some((l) => l.startsWith('rssmart_score_sweep_seconds_total ')), 'seconds counter');
+  assert.ok(sweep.some((l) => l.startsWith('rssmart_score_sweep_articles_total ')), 'articles counter');
+  assert.ok(sweep.some((l) => l.startsWith('rssmart_score_sweep_last_finished_timestamp_seconds ')), 'finished-at gauge');
+});
 
 // Minimal line-based lookup, not a full Prometheus text-format parser —
 // proportionate to what these tests need (exact metric lines), and easier

@@ -15,6 +15,25 @@ import { markExpectedStall, clearExpectedStall } from './lagWatchdog.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Sweep telemetry for /metrics (rssmart_score_sweep_*): last completed
+// sweep's wall clock and article count (gauges, for a dashboard's current
+// view), plus cumulative totals (counters, for rate() trends) and the
+// worst chunk — a long chunk is what the event-loop watchdog logs as
+// "(expected: recomputing scores)".
+const _sweepStats = {
+  lastMs: null,
+  lastCount: null,
+  lastFinishedAt: null,
+  totalMs: 0,
+  totalSweeps: 0,
+  totalArticles: 0,
+  maxChunkMs: 0,
+};
+
+export function getScoreSweepStats() {
+  return { ..._sweepStats };
+}
+
 // How long recomputeScores works synchronously before handing control back
 // to the event loop. Measured live: a full sweep over a real ~6200-article
 // archive takes ~48s of near-continuous CPU (the kNN pass dominates); with
@@ -513,13 +532,23 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
             save.run(s.topics, s.embedding, s.depth, s.feed, s.bonus, s.novelty, s.total, row.id);
           } while (i < rows.length && performance.now() - chunkStart < yieldEveryMs);
         })();
+        _sweepStats.maxChunkMs = Math.max(_sweepStats.maxChunkMs, performance.now() - chunkStart);
         if (i < rows.length) await sleep(0);
       }
     } finally {
       privateBatcher?.free();
       if (lease) releaseSweepVoted(lease);
     }
-    return { count: rows.length, ms: performance.now() - start };
+    const ms = performance.now() - start;
+    // telemetry for /metrics — every completed sweep updates the gauges and
+    // accumulates the counters; failed sweeps (throw) leave them untouched
+    _sweepStats.lastMs = ms;
+    _sweepStats.lastCount = rows.length;
+    _sweepStats.lastFinishedAt = Date.now();
+    _sweepStats.totalMs += ms;
+    _sweepStats.totalSweeps += 1;
+    _sweepStats.totalArticles += rows.length;
+    return { count: rows.length, ms };
   } finally {
     clearExpectedStall();
   }

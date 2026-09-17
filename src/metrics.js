@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import { getEnrichTimings, getEnrichMaxTimings } from './enrich.js';
 import { getLagStats } from './lagWatchdog.js';
+import { getScoreSweepStats } from './scoring.js';
 import { getDbQueryMs } from './db.js';
 
 // Prometheus text exposition format:
@@ -178,6 +179,45 @@ export function renderMetrics(db, config, commitHash, describe = '') {
     'Longest single event-loop stall observed, since process start.', [
       [{}, lag.maxLagMs / 1000],
     ]);
+
+  // Full score sweeps (recomputeScores — the debounced vote-ripple
+  // recompute). last_* gauges answer "how expensive is a sweep right
+  // now"; the counters feed rate() for trends as the archive grows.
+  // A sweep that throws leaves these untouched, so the gauges always
+  // describe a genuinely completed sweep.
+  const sweep = getScoreSweepStats();
+  if (sweep.lastMs != null) {
+    metric(lines, 'rssmart_score_sweep_last_seconds', 'gauge',
+      'Wall-clock duration of the last completed full score sweep.', [
+        [{}, sweep.lastMs / 1000],
+      ]);
+    metric(lines, 'rssmart_score_sweep_last_articles', 'gauge',
+      'Articles scored by the last completed full sweep.', [
+        [{}, sweep.lastCount],
+      ]);
+    metric(lines, 'rssmart_score_sweep_last_finished_timestamp_seconds', 'gauge',
+      'Unix time the last full sweep finished (0 = none since process start).', [
+        [{}, sweep.lastFinishedAt / 1000],
+      ]);
+    metric(lines, 'rssmart_score_sweep_max_chunk_seconds', 'gauge',
+      'Longest single synchronous chunk within a sweep (yieldEveryMs bounds it) — the event-loop stall the watchdog annotates as expected.', [
+        [{}, sweep.maxChunkMs / 1000],
+      ]);
+  }
+  if (sweep.totalSweeps > 0) {
+    metric(lines, 'rssmart_score_sweeps_total', 'counter',
+      'Completed full score sweeps since process start.', [
+        [{}, sweep.totalSweeps],
+      ]);
+    metric(lines, 'rssmart_score_sweep_seconds_total', 'counter',
+      'Cumulative wall-clock time spent in full score sweeps since process start.', [
+        [{}, sweep.totalMs / 1000],
+      ]);
+    metric(lines, 'rssmart_score_sweep_articles_total', 'counter',
+      'Cumulative articles scored by full sweeps since process start.', [
+        [{}, sweep.totalArticles],
+      ]);
+  }
 
   // Cumulative wall-clock time spent inside any SQLite query, across the
   // whole app (see db.js's instrumentQueryTiming) — not just enrichment's
