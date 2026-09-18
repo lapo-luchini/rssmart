@@ -1,8 +1,55 @@
 import { statSync } from 'node:fs';
+import { PerformanceObserver, constants as perfConstants } from 'node:perf_hooks';
 import { getEnrichTimings, getEnrichMaxTimings } from './enrich.js';
 import { getLagStats } from './lagWatchdog.js';
 import { getScoreSweepStats } from './scoring.js';
 import { getDbQueryMs } from './db.js';
+
+// GC runs, counted and timed via the perf_hooks gc entry type (the Node
+// equivalent of JVM's per-collector GC metrics). Buffering is off — counts
+// and durations accumulate from observer start (process boot) onward. JSC
+// under Bun emits no gc performance entries, so the kinds stay at zero
+// counters there; Bun's own signal for "a GC happened" remains the pause
+// itself, which the event-loop stall family picks up (GC pauses dominate
+// long unannotated stalls on Bun).
+const _gcStats = new Map([
+  ['major', { runs: 0, durationMs: 0 }],
+  ['minor', { runs: 0, durationMs: 0 }],
+  ['incremental', { runs: 0, durationMs: 0 }],
+]);
+const _gcKindNames = { 1: 'major', 2: 'minor', 3: 'incremental', 4: 'weakcb' };
+const _gcStatFor = (kind) => {
+  let st = _gcStats.get(kind);
+  if (!st) { st = { runs: 0, durationMs: 0 }; _gcStats.set(kind, st); }
+  return st;
+};
+
+// the gc observer is the only automatically-emitting member of this family —
+// the runtime itself is the event source, so it starts once at boot
+try {
+  const observer = new PerformanceObserver((list) => {
+    for (const event of list.getEntries()) {
+      const kind = _gcKindNames[event.detail?.kind] ?? String(event.detail?.kind ?? 'major');
+      const st = _gcStatFor(kind);
+      st.runs += 1;
+      st.durationMs += event.duration ?? 0;
+    }
+  });
+  observer.observe({ entryTypes: ['gc'] });
+} catch {
+  // Bun's PerformanceObserver does not support the gc entry type — the
+  // kinds stay at the zero counters they init as
+}
+
+export function getGcStats() {
+  return Object.fromEntries([..._gcStats].map(([kind, st]) => [kind, { ...st }]));
+}
+
+export function _recordGcForTests(kind, durationMs = 0) {
+  const st = _gcStatFor(kind);
+  st.runs += 1;
+  st.durationMs += durationMs;
+}
 
 // Prometheus text exposition format:
 // https://prometheus.io/docs/instrumenting/exposition_formats/
@@ -268,6 +315,19 @@ export function renderMetrics(db, config, commitHash, describe = '') {
   metric(lines, 'process_resident_memory_bytes', 'gauge', 'Resident set size.', [[{}, mem.rss]]);
   metric(lines, 'nodejs_heap_size_used_bytes', 'gauge', 'V8 heap used.', [[{}, mem.heapUsed]]);
   metric(lines, 'nodejs_heap_size_total_bytes', 'gauge', 'V8 heap total.', [[{}, mem.heapTotal]]);
+  // GC runs/durations per collector kind — always every kind, even at zero,
+  // so a dashboard never needs `or vector(0)` for a kind not yet observed
+  // (same convention as rssmart_votes above). Zero counters are the norm
+  // under Bun, which emits no gc perf entries (see the gc observer above):
+  // the event-loop stall family there remains the observable for GC pauses.
+  for (const [kind, { runs, durationMs }] of _gcStats) {
+    metric(lines, 'nodejs_gc_runs_total', 'counter', `Number of ${kind} collections since process start.`, [
+      [{ type: kind }, runs],
+    ]);
+    metric(lines, 'nodejs_gc_duration_seconds', 'counter', `Cumulative duration of ${kind} collections, since process start.`, [
+      [{ type: kind }, durationMs / 1000],
+    ]);
+  }
   // Not logged on the CLI (scheduler.js's memLog only prints rss/heap), but
   // one field away on the same process.memoryUsage() call, and arrayBuffers
   // specifically is exactly the number the Float16Array/ArrayBuffer leak

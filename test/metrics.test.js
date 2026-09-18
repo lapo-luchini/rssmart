@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { tempDb, testConfig, startApp } from './helpers.js';
 import { createApp } from '../src/server.js';
 import { recomputeScores, getScoreSweepStats } from '../src/scoring.js';
-import { renderMetrics } from '../src/metrics.js';
+import { renderMetrics, _recordGcForTests, getGcStats } from '../src/metrics.js';
 import { compressText } from '../src/compress.js';
 
 test('score sweep stats feed the score_sweep metric family', async () => {
