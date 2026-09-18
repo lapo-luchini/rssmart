@@ -45,6 +45,23 @@ test('detects a real synchronous stall past the threshold and logs it', async ()
   }
 });
 
+test('a stall with a dbPath annotates the wal delta, not silenced', async () => {
+  const logs = [];
+  const stop = startLagWatchdog({ log: (msg) => logs.push(msg), intervalMs: 20, thresholdMs: 80, dbPath: 'nonexistent-dir/test.db' });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    busyWaitMs(200);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    // with no write activity, the wal file doesn't exist — reported as empty,
+    // proving the dbPath plumbing works end to end rather than silently
+    // leaving the suffix off
+    assert.ok(logs.some((m) => /event loop stalled/.test(m) && m.includes('(wal empty)')),
+      `expected a wal-annotated stall line, got: ${JSON.stringify(logs)}`);
+  } finally {
+    clearExpectedStall();
+  }
+});
+
 test('a stall while markExpectedStall is set is annotated, not silenced', async () => {
   const logs = [];
   const stop = startLagWatchdog({ log: (msg) => logs.push(msg), intervalMs: 20, thresholdMs: 80 });

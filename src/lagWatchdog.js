@@ -8,7 +8,7 @@
 // own drift from the expected period — any drift past `thresholdMs` is a
 // real stall, not ordinary timer jitter.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 
 let maxLagMs = 0;
 let stallCount = 0;
@@ -66,17 +66,41 @@ function psiSummary() {
     ` cpu pressure some=${pct(cpu?.some)}% full=${pct(cpu?.full)}%)`;
 }
 
-export function startLagWatchdog({ log, intervalMs = 50, thresholdMs = 200 } = {}) {
+export function startLagWatchdog({ log, intervalMs = 50, thresholdMs = 200, dbPath = null } = {}) {
   let last = performance.now();
+  // WAL size tracked at every sample: when a stall is recorded, the delta
+  // across the whole stall window (last sample before the freeze -> first
+  // sample after) is the diagnostic — shrinkage means an autocheckpoint
+  // copied the WAL back into the db, a flat line means compute, and a big
+  // growth marks a writer burst.
+  let lastWal = null;
   const timer = setInterval(() => {
     const now = performance.now();
+    const walBefore = lastWal;
+    let wal = null;
+    if (dbPath) {
+      try {
+        wal = statSync(`${dbPath}-wal`).size;
+      } catch {
+        wal = 0; // no WAL activity yet, or a :memory: db
+      }
+    }
     const lag = now - last - intervalMs;
+    lastWal = wal;
     last = now;
     if (lag > thresholdMs) {
       stallCount++;
       if (lag > maxLagMs) maxLagMs = lag;
       const reasonSuffix = expectedReason ? ` (expected: ${expectedReason})` : '';
-      log(`event loop stalled for ${lag.toFixed(0)}ms${reasonSuffix}${psiSummary()}`);
+      let walSuffix = '';
+      if (dbPath) {
+        if (lastWal === 0) walSuffix = ' (wal empty)';
+        else if (walBefore == null) walSuffix = '';
+        else if (Math.abs(wal - walBefore) < 1024) walSuffix = ` (wal unchanged at ${(wal / 1048576).toFixed(1)} MB)`;
+        else if (wal < walBefore) walSuffix = ` (wal ${((walBefore - wal) / 1024) | 0} KB copied back into the db)`;
+        else walSuffix = ` (wal +${((wal - walBefore) / 1024) | 0} KB)`;
+      }
+      log(`event loop stalled for ${lag.toFixed(0)}ms${reasonSuffix}${psiSummary()}${walSuffix}`);
     }
   }, intervalMs);
   timer.unref(); // diagnostic only — must never keep the process alive on its own

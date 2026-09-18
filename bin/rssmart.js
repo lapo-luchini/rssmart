@@ -229,7 +229,7 @@ if (mode === 'cron') {
   // parse, plain JS) — the actual mechanism behind "the web UI is
   // unresponsive during enrichment", not SQLite's own locking (WAL mode
   // already lets reads and writes coexist at the database level).
-  startLagWatchdog({ log });
+  startLagWatchdog({ log, dbPath: config.db });
   syncMastodonFeed(db, config);
   const space = syncEmbeddingSpace(db, config);
   if (space.changed) {
