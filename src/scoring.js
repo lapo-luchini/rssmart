@@ -38,15 +38,14 @@ export function getScoreSweepStats() {
 // to the event loop. Measured live: a full sweep over a real ~6200-article
 // archive takes ~48s of near-continuous CPU (the kNN pass dominates); with
 // no yielding, that blocks every concurrent request — including a vote's
-// HTTP response — for the whole 48s. 100ms keeps the worst-case wait a
+// HTTP response — for the whole 48s. 150ms keeps the worst-case wait a
 // vote might see well under a second, while still keeping the per-chunk
 // SQLite transaction long enough that committing thousands of rows doesn't
-// turn into thousands of tiny fsyncs. The budget also sits at 2x headroom
-// under the lagWatchdog's 200ms stall threshold: a chunk's commit plus its
-// last row can overshoot the budget (a chunk can't split mid-row), and at
-// 150ms those overshoots sampled past 200ms — producing a burst of
-// "(expected: recomputing scores)" stall logs on every sweep.
-const DEFAULT_YIELD_MS = 100;
+// turn into thousands of tiny fsyncs. Note: production measured the 100ms
+// budget slower than 150ms (31-35s vs 27.2s) — on ZFS every transaction
+// commit waits for the ~5s transaction-group sync anyway, so more chunks
+// only add fixed overhead per unit of work.
+const DEFAULT_YIELD_MS = 150;
 
 // Votes range -2..+2 ("WOW" votes count double). The Laplace ratio works on
 // the weighted magnitudes: SUM(MAX(v,0)) up-weight vs SUM(ABS(v)) total.
