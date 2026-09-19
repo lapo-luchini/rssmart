@@ -48,12 +48,19 @@
         <option value="">all feeds</option>
         <option v-for="f in feeds" :key="f.id" :value="f.id">{{ f.title || f.url }}</option>
       </select>
-      <select v-model="sort" @change="reload" aria-label="Sort order" v-if="!(semantic && q)">
+      <select v-model="sort" @change="reload" aria-label="Sort order" v-if="view !== 'custom' && !(semantic && q)">
         <option value="hot" title="interest, but a fresh article doesn't need as high a score to compete with an old one">hot</option>
         <option value="score">by interest</option>
         <option value="date">by date</option>
         <option value="novelty" title="furthest from anything you've voted on so far — for finding new directions, not just more of the same">explore</option>
       </select>
+      <div class="custom-sliders" v-if="view === 'custom'" role="group" aria-label="Ranking weight experiment">
+        <label v-for="axis in customAxes" :key="axis.key">
+          <input type="range" min="0" max="2" step="0.05" :value="customWeights[axis.key] ?? axis.defaults"
+                 :title="axis.title" @input="setCustomWeight(axis.key, $event.target.value)">{{ axis.label }}
+        </label>
+        <button class="mark" title="reset the sliders to the configured scoring weights and decay">reset</button>
+      </div>
       <em v-else class="feed-notice">sorted by relevance</em>
       <input type="search" v-model="q" placeholder="search…" aria-label="Search articles">
       <label class="dupes-toggle" v-if="q"

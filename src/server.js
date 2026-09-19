@@ -152,16 +152,44 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
   pushMatchFilters(where, params, { topic, feedId, q, skipTextFilter });
 
   const sortKey = sort ?? (view === 'interesting' ? 'hot' : 'date');
-  if (!['hot', 'score', 'date', 'date-rr', 'novelty'].includes(sortKey)) {
+  if (!['hot', 'score', 'date', 'date-rr', 'novelty', 'custom'].includes(sortKey)) {
     return { error: `unknown sort "${sort}"` };
   }
+
+  // sort=custom: rank by an experimental weighted sum of the persisted
+  // per-signal score components (score_topics etc. — the same numbers the
+  // score tooltip shows). Read-time lens only: it never re-derives the
+  // stored score, so experimentation can't feed back into scoring. Weights
+  // arrive as query params, fall back to the configured profile, and are
+  // clamped to sane ranges before they touch the SQL text.
+  const clamp = (name, fallback, max = 2) => {
+    const raw = Number(query[name]);
+    return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), max) : Math.min(Math.max(fallback, 0), fallback);
+  };
+  const w = sortKey === 'custom' ? {
+    topics: clamp('w_topics', config.scoring.weights.topics),
+    embedding: clamp('w_embedding', config.scoring.weights.embedding),
+    depth: clamp('w_depth', config.scoring.weights.depth),
+    feed: clamp('w_feed', config.scoring.weights.feed),
+    bonus: clamp('w_bonus', 1),
+    decay: clamp('w_decay', config.scoring.hotDecayPerDay, 2),
+  } : null;
+  const customExprBody = w
+    ? `COALESCE(a.score_topics, 0) * ${w.topics} + COALESCE(a.score_embedding, 0) * ${w.embedding}` +
+      ` + COALESCE(a.score_depth, 0) * ${w.depth} + COALESCE(a.score_feed, 0) * ${w.feed}` +
+      ` + COALESCE(a.score_bonus, 0) * ${w.bonus}`
+    : null;
 
   // "hot" blends interest with freshness (à la Hacker News) so an old
   // article can't outrank a fresh one on score alone; computed at query
   // time from published_at, so it's always current with no stored/stale
   // column. orderParams must be spliced in right after the WHERE params —
   // it's the only sort with a bound value of its own.
-  const orderBy = { hot: 'a.score - ? * (julianday(\'now\') - julianday(COALESCE(a.published_at, a.created_at))) DESC, ' + BY_DATE,
+  const customExpr = sortKey === 'custom'
+    ? `(${customExprBody}) - ${w.decay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))) DESC, `
+    : '';
+  const orderBy = {
+    hot: 'a.score - ? * (julianday(\'now\') - julianday(COALESCE(a.published_at, a.created_at))) DESC, ' + BY_DATE,
     score: 'a.score DESC, ' + BY_DATE,
     date: BY_DATE,
     'date-rr': dateRoundRobinSql(config.triage.roundRobinWindowDays),
@@ -169,7 +197,15 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
     // migration comment, src/db.js). NULLs (no embedding yet, or nothing
     // voted on at all) sort last under SQLite's default DESC ordering —
     // exactly where "no basis to judge novelty" belongs.
-    novelty: 'a.score_novelty DESC, ' + BY_DATE }[sortKey];
+    novelty: 'a.score_novelty DESC, ' + BY_DATE,
+    custom: (customExpr ?? '') + BY_DATE,
+  }[sortKey];
+  // The grouped view's group representative is ranked by whichever
+  // ordering the list itself uses: under sort=custom, that's the
+  // experimental weighted expression (groups then order by that winner).
+  const rankOrderBy = sortKey === 'custom'
+    ? `(${customExprBody}) - ${w.decay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))) DESC, (a.duplicate_of IS NULL) DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC`
+    : 'a.score DESC, (a.duplicate_of IS NULL) DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC';
   const orderParams = sortKey === 'hot' ? [config.scoring.hotDecayPerDay] : [];
 
   return {
@@ -180,6 +216,7 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
     extraJoin: sortKey === 'date-rr' ? FEED_LATEST_JOIN : '',
     orderBy,
     lim: Math.min(Math.max(Number(limit) || 50, 1), 200),
+    rankOrderBy,
     off: Math.max(Number(offset) || 0, 0),
   };
 }
@@ -304,11 +341,10 @@ export function createApp(db, config, commitHash, describe = '') {
     // score_novelty, published_at, created_at, feed_id).
     const winnersSql = grouped
       ? `WITH ranked AS (
-           SELECT a.id, a.score, a.score_novelty, a.published_at, a.created_at, a.feed_id,
+           SELECT a.id, a.score, a.score_novelty, a.score_topics, a.score_embedding, a.score_depth, a.score_feed, a.score_bonus, a.published_at, a.created_at, a.feed_id,
                   ROW_NUMBER() OVER (
                     PARTITION BY COALESCE(a.duplicate_of, a.id)
-                    ORDER BY a.score DESC, (a.duplicate_of IS NULL) DESC,
-                             COALESCE(a.published_at, a.created_at) DESC, a.id DESC
+                    ORDER BY ${parsed.rankOrderBy}
                   ) AS rn
            FROM articles a ${whereSql}
          )

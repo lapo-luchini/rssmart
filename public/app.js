@@ -20,6 +20,7 @@ createApp({
         { id: 'interesting', label: 'Interesting' },
         { id: 'unread', label: 'Unread' },
         { id: 'explore', label: 'Explore' },
+        { id: 'custom', label: 'Custom' },
       ],
       view: 'interesting',
       topic: '',
@@ -27,6 +28,19 @@ createApp({
       q: '',
       semantic: false,
       sort: 'hot',
+      // sort=custom experiment sliders: relative multipliers over the
+      // stored per-signal score components (1.0 = the configured weight).
+      // The server's defaults are the configured profile; the client keeps
+      // its own copies lazily-set from /api/version's weight profile.
+      customWeights: { topics: null, embedding: null, depth: null, feed: null, bonus: null, decay: null },
+      customAxes: [
+        { key: 'topics', label: 'topics', defaults: 1 },
+        { key: 'embedding', label: 'similar', defaults: 1 },
+        { key: 'depth', label: 'depth', defaults: 1 },
+        { key: 'feed', label: 'source', defaults: 1 },
+        { key: 'bonus', label: 'explore-nudge', defaults: 1 },
+        { key: 'decay', label: 'freshness', defaults: 1, perDay: true },
+      ],
       dupes: false,
       enrichedOnly: false,
       includeRead: false,
@@ -80,6 +94,7 @@ createApp({
       prefByTopic: {},
       articlesByTopic: {},
       searchTimer: null,
+      customTimer: null,
       darkMode: window.matchMedia('(prefers-color-scheme: dark)').matches,
       touchStartY: null,
     };
@@ -113,7 +128,7 @@ createApp({
     // terms) without changing which tab looks active.
     apiView() {
       if (this.includeRead) return 'all';
-      return this.view === 'explore' ? 'unread' : this.view;
+      return this.view === 'explore' || this.view === 'custom' ? 'unread' : this.view;
     },
 
     emptyMessage() {
@@ -135,6 +150,7 @@ createApp({
   watch: {
     q() {
       clearTimeout(this.searchTimer);
+      clearTimeout(this.customTimer);
       this.searchTimer = setTimeout(() => this.reload(), 300);
     },
   },
@@ -168,6 +184,16 @@ createApp({
   },
 
   methods: {
+
+    // Custom-tab slider: debounce like the search box, then reload with the
+    // weight params riding on sort=custom. Sliders are relative multipliers
+    // over the stored per-signal components (1.0 = the configured weight).
+    setCustomWeight(axis, value) {
+      this.customWeights[axis] = Number(value);
+      clearTimeout(this.customTimer);
+      this.customTimer = setTimeout(() => this.reload(), 300);
+    },
+
     params(offset) {
       const p = new URLSearchParams({
         view: this.apiView,
@@ -181,6 +207,11 @@ createApp({
       if (this.semantic && this.q) p.set('semantic', '1');
       if (this.dupes) p.set('dupes', '1');
       if (this.enrichedOnly) p.set('status', 'enriched');
+      if (this.sort === 'custom') {
+        for (const [axis, value] of Object.entries(this.customWeights)) {
+          if (value != null) p.set(`w_${axis}`, String(value));
+        }
+      }
       return p;
     },
 
@@ -316,7 +347,7 @@ createApp({
 
     applyRoute(hash, { replace = false } = {}) {
       const route = hash.replace(/^#\//, '');
-      const routes = ['interesting', 'unread', 'explore', 'triage', 'topics', 'feeds'];
+      const routes = ["interesting", "unread", "explore", "custom", "triage", "topics", "feeds"];
       const article = route.match(/^article\/(\d+)$/);
       if (article) {
         // permalink: the normal full-page reader view from any mode — it
@@ -330,13 +361,13 @@ createApp({
       }
       if (route === this.currentRoute()) return;
       if (['triage', 'topics', 'feeds'].includes(route)) this.openPanel(route);
-      else if (['interesting', 'unread', 'explore'].includes(route)) this.setView(route);
+      else if ([`interesting`, `unread`, `explore`, `custom`].includes(route)) this.setView(route);
     },
 
     setView(v) {
       this.panel = null;
       this.view = v;
-      this.sort = v === 'interesting' ? 'hot' : v === 'explore' ? 'novelty' : 'date';
+      this.sort = v === 'interesting' ? 'hot' : v === 'explore' ? 'novelty' : v === 'custom' ? 'custom' : 'date';
       this.syncHash();
       this.reload();
     },
