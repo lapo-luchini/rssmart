@@ -21,23 +21,36 @@ day-one spec was retired for exactly that reason; it's in git history).
   signal uses an embedding of the article's own text, which keeps register
   and genre.
 - **The two embedding jobs may use two different models.** Benchmarked
-  head-to-head on this deployment's archive (2026-08: ~26k articles, 518
+  head-to-head on this deployment's archive (2026-08-09: ~26k articles, 518
   voted, 3.5k labeled duplicate pairs — `scripts/bench-embed.js`,
-  `scripts/bench-embed-mrl.js`): `leoipulsar/harrier-0.6b` clusters the
-  votes better (same-sign vs opposite-sign kNN AUC 0.64 vs 0.55) but is
-  worse at duplicate detection (recall 53% vs 73% at matched
-  false-positive rate) and — its docs claim no MRL, unlike
-  qwen3-embedding — degrades sharply when truncated to the 64 dims dedup
-  used before 2026-08-30 (measured live on a real false-duplicate cluster:
-  five different performance-war-story posts collapsed to 0.865-0.961 at
-  64 dims while the one true cross-language duplicate stayed 0.919 at 256
-  — dedup dims raised to 256, where every false pair drops below the
-  threshold and the true one stays above). So the config keeps `qwen3-embedding:0.6b` for dedup
+  `scripts/bench-embed-mrl.js`; re-grid on the 2026-09 archive, 2026-09-18:
+  ~58k articles, 8.4k links, `scripts/bench-dedupspace.mjs`):
+  `leoipulsar/harrier-0.6b` clusters the votes better (same-sign vs
+  opposite-sign kNN AUC 0.64 vs 0.55) but is worse at duplicate detection
+  at every dedup-relevant dims (2026-09 grid, two models re-embedded
+  like-for-like at 64/128/256: harrier AUC 0.932-0.943 with FPR-matched
+  recall against its own best config topping at 59.6% @256; qwen3
+  0.943-0.944 with 68-72% recall at matched FPR, best at 64 dims).
+  Harrier also degrades sharply when truncated — its native 1024 was the
+  earlier laddered measurement, and the deployed config raised dedup dims
+  from 64 to 256 after a real false-duplicate cluster collapse showed
+  five different performance-war-story posts at 0.865-0.961 in the then
+  truncated space. So the config keeps `qwen3-embedding:0.6b` for dedup
   via the optional `ollama.dedupEmbedModel` (defaults to `embedModel`)
   and uses harrier for the text/taste/search vectors, where its win is
   real and holds at both native and truncated dims. MTEB leaderboard
   scores don't transfer to this setup: they measure native dims, not
   64/512-dim truncations, and neither this corpus nor this threshold.
+  **A constructor bug (2026-09-17 fixed) routed dedup embeddings to the
+  text model anyway** — llm.js read the key `embedModelDedup` while the
+  config carries `dedupEmbedModel`, so the dedup property stayed
+  undefined and every `{dedup:true}` call silently used harrier while
+  meta.embed_model_dedup claimed qwen3 (space keying read the config,
+  not the runtime property). The whole "256 sweet spot" narrative
+  originally measured harrier truncations for this reason. After the
+  fix, the dedup column must be wiped once (vectors mislabeled in the
+  old space) and re-embedded + re-validated (`repair-dedup.js --fix`)
+  to actually run the config's model.
 - **No LLM in the preference loop.** Scores derive from votes at recompute
   time — Laplace-smoothed ratios and a kNN over voted articles. Transparent,
   inspectable (`/api/topics`, the score popover), retrains "for free" on
@@ -247,6 +260,16 @@ day-one spec was retired for exactly that reason; it's in git history).
   commit, restoring NORMAL immediately after, so a recorded vote pays
   exactly one fsync and survives a power loss — reader priorities put
   the durability of a cast vote above re-doing re-embeddable work.
+  The host itself turned out to be FreeBSD + ZFS — where every
+  fsync-bearing commit waits for the next transaction-group sync
+  (default ~5s cadence): the stall rhythm the logs showed
+  (200ms-2.7s bursts in pairs ~5s apart, regardless of the chunk
+  budget — production measured 100ms chunks slower than 150ms, so the
+  150ms default is back). Linux PSI numbers are absent from the stall
+  lines on that host by platform, not code. On such a dataset,
+  `zfs set sync=disabled` trades the stall cadence for last-txg commit
+  loss, and an SSD SLOG gets ms sync writes without weakening
+  durability — both below the app.
 - **Log lines carry an ISO8601 timestamp (`src/log.js`), `--help` usage
   text doesn't.** `log()`/`logError()` wrap `console.log`/`console.error`
   with `new Date().toISOString()` prepended, and every real log call site
