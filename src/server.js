@@ -39,6 +39,7 @@ const ARTICLE_COLUMNS = `
   a.id, a.feed_id, a.url, a.title, a.author, a.published_at, a.summary,
   a.status, a.duplicate_of, a.score, a.vote, a.read_at, a.created_at,
   a.depth, a.score_topics, a.score_embedding, a.score_depth, a.score_feed, a.score_bonus,
+  a.score_novelty,
   a.enrich_note,
   f.title AS feed_title,
   (SELECT group_concat(t.name, '|') FROM article_topics at
@@ -123,6 +124,93 @@ const FEED_LATEST_JOIN = `
 `;
 
 /**
+ * Keyset pagination: columns+cursor values per sort mode. All sorts are
+ * DESC, so "rows after the cursor" = row-value tuples strictly smaller
+ * than the cursor's (SQLite supports row-value comparison with mixed
+ * expressions, 3.15+). A final a.id tiebreak in every orderBy makes the
+ * sort a total order — without it, equal-key rows can shuffle between
+ * pages even when values are stable, so cursors alone wouldn't be
+ * skip-free. NULL score_novelty sorts last under DESC; the 1e9 sentinel
+ * (novelty lives in ~[0,1]) encodes it in both the keyset predicate and
+ * the cursor, keeping rows at a NULL boundary contiguous.
+ *
+ * The hot/custom expressions embed their wall-clock term (julianday('now'))
+ * inline: between two pages of one session it drifts by seconds, i.e. by
+ * ~1e-7 of a day-unit at production decay rates — a row could flip
+ * ordering across a page boundary in that window, but the drift is far
+ * below the score differences that would matter for a triage list.
+ * 'date-rr' (per-feed ROW_NUMBER is only stable within one query) and
+ * semantic search (JS-computed cosine list) stay on OFFSET: date-rr is
+ * triage-only and re-walks from offset 0 per session with its own seen-set.
+ */
+const CURSOR_SENTINEL = 1e9;
+const dateKey = 'COALESCE(a.published_at, a.created_at)';
+const hotExpr = (decayPerDay) => `a.score - ${decayPerDay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at)))`;
+
+function cursorKeyExprs(w, hotDecayPerDay, customExprBody) {
+  // every tuple ends with a.id, the total-order tiebreak appended to each
+  // orderBy — the cursor always records it last
+  return {
+    date: {
+      sql: '(COALESCE(a.published_at, a.created_at), a.id)',
+      vals: ['published_at'],
+    },
+    score: {
+      sql: '(COALESCE(a.score, 0), COALESCE(a.published_at, a.created_at), a.id)',
+      vals: ['score', 'published_at'],
+    },
+    novelty: {
+      sql: `(COALESCE(a.score_novelty, ${CURSOR_SENTINEL}), COALESCE(a.published_at, a.created_at), a.id)`,
+      vals: ['score_novelty', 'published_at'],
+    },
+    hot: {
+      sql: `(${hotExpr(hotDecayPerDay)}, COALESCE(a.published_at, a.created_at), a.id)`,
+      vals: ['hotScore', 'published_at'],
+    },
+    custom: {
+      sql: `((${customExprBody}) - ${w?.decay ?? 0} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))), COALESCE(a.published_at, a.created_at), a.id)`,
+      vals: ['custom', 'published_at'],
+    },
+  };
+}
+
+/** The cursor-encoded value for one row & key name. */
+function cursorValueFor(name, row, { w, hotDecayPerDay, customExprBody }) {
+  const jd = (t) => {
+    if (t === null || t === undefined) return jd(new Date().toISOString().slice(0, 19) + 'Z');
+    return Date.parse(t) / 86400000 + 2440587.5;
+  };
+  switch (name) {
+    case 'score': return row.score ?? 0;
+    case 'score_novelty': return row.score_novelty ?? CURSOR_SENTINEL;
+    case 'published_at': return row.published_at ?? row.created_at;
+    case 'hotScore': return (row.score ?? 0) - hotDecayPerDay * (jd(new Date()) - jd(row.published_at ?? row.created_at));
+    case 'custom': {
+      const base = (row.score_topics ?? 0) * w.topics + (row.score_embedding ?? 0) * w.embedding +
+        (row.score_depth ?? 0) * w.depth + (row.score_feed ?? 0) * w.feed + (row.score_bonus ?? 0) * w.bonus;
+      return base - w.decay * (jd(new Date()) - jd(row.published_at ?? row.created_at));
+    }
+    default: return null;
+  }
+}
+
+function decodeCursor(raw, sortKey, cursorDefs) {
+  let tuple;
+  try {
+    tuple = JSON.parse(Buffer.from(String(raw), 'base64url').toString('utf8'));
+  } catch {
+    return { error: 'bad cursor' };
+  }
+  const def = cursorDefs[sortKey];
+  if (!Array.isArray(tuple) || tuple.length !== def.vals.length + 1 ||
+      !tuple.every((v) => v === null || ['number', 'string'].includes(typeof v)) ||
+      !Number.isInteger(tuple[tuple.length - 1])) {
+    return { error: 'cursor does not match this sort' };
+  }
+  return { tuple };
+}
+
+/**
  * Translate list-endpoint query params into SQL; returns {error} on bad
  * input. skipTextFilter omits the title/summary LIKE clause — used for
  * semantic search, which ranks by meaning instead and would otherwise
@@ -131,7 +219,7 @@ const FEED_LATEST_JOIN = `
 function articleQuery(query, config, { skipTextFilter = false } = {}) {
   const {
     view = 'interesting', topic, feed_id: feedId, q, sort, status,
-    dupes = '0', limit = '50', offset = '0',
+    dupes = '0', limit = '50', offset = '0', cursor,
   } = query;
 
   const where = [];
@@ -188,7 +276,7 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
   const customExpr = sortKey === 'custom'
     ? `(${customExprBody}) - ${w.decay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))) DESC, `
     : '';
-  const orderBy = {
+  const orderByBuilt = {
     hot: 'a.score - ? * (julianday(\'now\') - julianday(COALESCE(a.published_at, a.created_at))) DESC, ' + BY_DATE,
     score: 'a.score DESC, ' + BY_DATE,
     date: BY_DATE,
@@ -208,6 +296,39 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
     : 'a.score DESC, (a.duplicate_of IS NULL) DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC';
   const orderParams = sortKey === 'hot' ? [config.scoring.hotDecayPerDay] : [];
 
+  // deterministic final tiebreak: an id makes each sort a total order so a
+  // row can never appear on two pages, nor vanish between — a prerequisite
+  // for skip-free pagination
+  const orderBy = orderByBuilt + ', a.id DESC';
+
+  // Keyset pagination replaces OFFSET on the sort modes whose key set is a
+  // comparable tuple (cursorKeyExprs above). date-rr's per-feed ROW_NUMBER
+  // is only stable within one query and semantic search ranks in JS — both
+  // stay on OFFSET (date-rr is triage-only and re-walks from offset 0 per
+  // session with its own seen-set as the guard).
+  const cursorMode = ['date', 'score', 'novelty', 'hot', 'custom'].includes(sortKey);
+  let keyWhere = null; // { sql, params }
+  if (cursorMode && cursor !== undefined && cursor !== null && cursor !== '') {
+    const cursorDefs = cursorKeyExprs(w, config.scoring.hotDecayPerDay, customExprBody);
+    const dec = decodeCursor(cursor, sortKey, cursorDefs);
+    if (dec.error) return { error: dec.error };
+    if (sortKey === 'novelty' && dec.tuple[0] === CURSOR_SENTINEL) {
+      // the cursor row sat on the NULL shelf (nothing novel yet); rows after
+      // it stay there, ordered by date — non-position rows have already
+      // been passed, and a plain sentinel tuple would wrongly include them
+      keyWhere = {
+        sql: '(a.score_novelty IS NULL AND (COALESCE(a.published_at, a.created_at), a.id) < (?, ?))',
+        params: [dec.tuple[1], dec.tuple[2]],
+      };
+    } else {
+      const tuple = [...dec.tuple.slice(0, -1), dec.tuple[dec.tuple.length - 1]];
+      keyWhere = {
+        sql: `${cursorDefs[sortKey].sql} < (${tuple.map(() => '?').join(', ')})`,
+        params: tuple,
+      };
+    }
+  }
+
   return {
     whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '',
     params,
@@ -218,6 +339,10 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
     lim: Math.min(Math.max(Number(limit) || 50, 1), 200),
     rankOrderBy,
     off: Math.max(Number(offset) || 0, 0),
+    cursorMode,
+    keyWhere,
+    cursorKeyVals: cursorMode ? cursorKeyExprs(w, config.scoring.hotDecayPerDay, customExprBody)[sortKey].vals : null,
+    cursorCtx: cursorMode ? { w, hotDecayPerDay: config.scoring.hotDecayPerDay, customExprBody } : null,
   };
 }
 
@@ -314,7 +439,11 @@ export function createApp(db, config, commitHash, describe = '') {
 
     const parsed = articleQuery(query, config, { skipTextFilter: isSemantic });
     if (parsed.error) return c.json({ error: parsed.error }, 400);
-    const { whereSql, params, orderParams, grouped, extraJoin, orderBy, lim, off } = parsed;
+    const { whereSql, params, orderParams, grouped, extraJoin, orderBy, lim, off,
+            keyWhere, cursorMode, cursorKeyVals } = parsed;
+    const keysetJoin = keyWhere ? (whereSql ? ' AND ' : 'WHERE ') + keyWhere.sql : '';
+    const keysetParams = keyWhere ? keyWhere.params : [];
+    const pageSql = keyWhere ? 'LIMIT ?' : 'LIMIT ? OFFSET ?';
 
     if (isSemantic) {
       let ranked;
@@ -348,11 +477,14 @@ export function createApp(db, config, commitHash, describe = '') {
                   ) AS rn
            FROM articles a ${whereSql}
          )
-         SELECT id FROM ranked a ${extraJoin} WHERE a.rn = 1
-         ORDER BY ${orderBy} LIMIT ? OFFSET ?`
-      : `SELECT a.id FROM articles a ${extraJoin} ${whereSql}
-         ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
+         SELECT id FROM ranked a ${extraJoin} WHERE a.rn = 1${keyWhere ? ` AND ${keyWhere.sql}` : ''}
+         ORDER BY ${orderBy} ${pageSql}`
+      : `SELECT a.id FROM articles a ${extraJoin} ${whereSql}${keysetJoin}
+         ORDER BY ${orderBy} ${pageSql}`;
 
+    // bindings follow the text: WHERE params, then the keyset predicate's
+    // placeholders (it sits between the WHERE and the ORDER BY), then the
+    // ORDER BY's own params (hot's decay), then LIMIT/OFFSET
     const rows = db.prepare(`
       WITH winners AS (${winnersSql})
       SELECT ${ARTICLE_COLUMNS}, ${VERSIONS_COL}
@@ -361,7 +493,7 @@ export function createApp(db, config, commitHash, describe = '') {
       JOIN feeds f ON f.id = a.feed_id
       ${extraJoin}
       ORDER BY ${orderBy}
-    `).all(...params, ...orderParams, lim, off, ...orderParams);
+    `).all(...params, ...keysetParams, ...orderParams, lim, ...(keyWhere ? [] : [off]), ...orderParams);
 
     const { total } = db.prepare(grouped
       ? `SELECT COUNT(*) AS total FROM (
@@ -370,7 +502,16 @@ export function createApp(db, config, commitHash, describe = '') {
       : `SELECT COUNT(*) AS total FROM articles a ${whereSql}`
     ).get(...params);
 
-    return c.json({ total, articles: rows.map(rowToArticle) });
+    // Next-page cursor for keyset modes: the last row's sort-tuple + id —
+    // opaque to the client, validated against the requested sort on replay
+    let nextCursor = null;
+    if (cursorMode && cursorKeyVals && rows.length) {
+      const last = rows.at(-1);
+      const vals = cursorKeyVals.map((name) => cursorValueFor(name, last, parsed.cursorCtx));
+      nextCursor = Buffer.from(JSON.stringify([...vals, last.id])).toString('base64url');
+    }
+
+    return c.json({ total, articles: rows.map(rowToArticle), nextCursor });
   });
 
   app.get('/api/articles/:id/versions', (c) => {

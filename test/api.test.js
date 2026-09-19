@@ -751,3 +751,72 @@ test('merge applies immediately and rejects bad input', async () => {
   `).all(ids.sporty).map((r) => r.name);
   assert.deepEqual(sportyTopics, ['tech'], 'the affected article was retagged');
 });
+
+test('cursor pagination is skip-free when rows leave the window between pages', async () => {
+  // Own db/app: the walk asserts the EXACT unread set, which the shared
+  // seed (feed 1's always-unread rows) would pollute.
+  const walkDb = tempDb();
+  walkDb.prepare("INSERT INTO feeds (id, url, title) VALUES (1, 'http://f', 'Feed One')").run();
+  const insArt = walkDb.prepare(`
+    INSERT INTO articles (feed_id, guid, title, content, summary, status, published_at)
+    VALUES (1, ?, ?, ?, ?, 'enriched', ?)
+  `);
+  const titles = [];
+  walkDb.transaction(() => {
+    for (let i = 0; i < 12; i++) {
+      const title = `Cursor page story ${i}`;
+      titles.push(Number(insArt.run(
+        `cur-${i}`, title, compressText('body'), 'sum',
+        `2026-08-${String(10 + i).padStart(2, '0')}T00:00:00Z`,
+      ).lastInsertRowid));
+    }
+  })();
+
+  const cfg = testConfig();
+  const app = createApp(walkDb, cfg);
+  const server = await startApp(app);
+  const base = server.url;
+  try {
+    const get2 = async (path) => (await fetch(base + path)).json();
+    const seen = [];
+    let cursor = null;
+    for (;;) {
+      const p = new URLSearchParams({ view: 'unread', sort: 'date', limit: '5' });
+      if (cursor) p.set('cursor', cursor);
+      const { articles, nextCursor } = await (await fetch(base + '/api/articles?' + p)).json();
+      for (const a of articles) {
+        seen.push(a.title);
+        // churn between pages: marks the article read, dropping it from
+        // the unread window — with a static OFFSET this would shift the
+        // window and skip the rows right behind it
+        await fetch(base + `/api/articles/${a.id}/read`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ read: true }),
+        });
+      }
+      if (!nextCursor || !articles.length) break;
+      cursor = nextCursor;
+    }
+    assert.equal(seen.length, 12, 'every unread article was seen exactly once');
+    assert.equal(new Set(seen).size, 12, 'no rows appear twice');
+    for (let i = 0; i < 12; i++) {
+      assert.ok(seen.includes(`Cursor page story ${i}`), `story ${i} not missed`);
+    }
+
+    // grouped mode + a computed-decay sort: the cursor tuple is the
+    // ranking expression's value, recomputed on replay
+    const scoreSeen = [];
+    let scoreCursor = null;
+    for (;;) {
+      const p = new URLSearchParams({ view: 'all', sort: 'score', limit: '5' });
+      if (scoreCursor) p.set('cursor', scoreCursor);
+      const { articles, nextCursor } = await (await fetch(base + '/api/articles?' + p)).json();
+      scoreSeen.push(...articles.map((a) => a.id));
+      if (!nextCursor || !articles.length) break;
+      scoreCursor = nextCursor;
+    }
+    assert.equal(new Set(scoreSeen).size, scoreSeen.length, 'grouped score walk: no dupes');
+  } finally {
+    await server.close();
+  }
+});

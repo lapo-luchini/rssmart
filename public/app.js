@@ -46,6 +46,7 @@ createApp({
       includeRead: false,
       articles: [],
       total: 0,
+      cursor: null, // opaque keyset continuation from the last /api/articles page
       topics: [],
       feeds: [],
       feedsDetailed: [],
@@ -199,8 +200,15 @@ createApp({
         view: this.apiView,
         sort: this.sort,
         limit: LIMIT,
-        offset,
       });
+      // keyset pagination (server's `cursor` fix): the opaque nextCursor
+      // from the previous page instead of a static OFFSET, so articles
+      // that got read/voted between pages (leaving the unread WHERE and
+      // the OFFSET window) can't be skipped. Unsupported modes
+      // (semantic, date-rr) fall back to offset.
+      const cursorMode = !this.semantic && this.sort !== 'date-rr';
+      if (cursorMode && this.cursor) p.set('cursor', this.cursor);
+      else p.set('offset', offset);
       if (this.topic) p.set('topic', this.topic);
       if (this.feedId) p.set('feed_id', this.feedId);
       if (this.q) p.set('q', this.q);
@@ -276,10 +284,12 @@ createApp({
       this.selectedVersion = {};
       this.shownVersion = {};
       this.shownOriginal = {};
+      this.cursor = null; // a reload is page 1: a continuation left over from the previous filter/sort state would pin the wrong window
       try {
         const data = await this.api(`/api/articles?${this.params(0)}`);
         this.articles = data.articles;
         this.total = data.total;
+        this.cursor = data.nextCursor ?? null; // keyset continuation
       } catch (err) {
         this.error = `Cannot load articles: ${err.message}`;
       } finally {
@@ -293,6 +303,7 @@ createApp({
         const data = await this.api(`/api/articles?${this.params(this.articles.length)}`);
         this.articles.push(...data.articles);
         this.total = data.total;
+        this.cursor = data.nextCursor ?? null;
       } catch (err) {
         this.error = `Cannot load articles: ${err.message}`;
       } finally {
@@ -411,6 +422,10 @@ createApp({
     triageParams(offset) {
       if (this.triageScope === 'filtered') {
         const p = this.params(offset);
+        // triage re-walks from offset 0 per batch with its own seen-set;
+        // it needs the OFFSET scrollbar, not the main list's page cursor
+        p.delete('cursor');
+        p.set('offset', offset);
         p.set('limit', TRIAGE_BATCH);
         return p;
       }
