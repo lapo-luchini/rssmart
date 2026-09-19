@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stripHtml, sanitizeHtml } from '../src/html.js';
+import { stripHtml, sanitizeHtml, truncate } from '../src/html.js';
 
 test('stripHtml turns <img alt> into text so image-only posts keep their content', () => {
   assert.equal(stripHtml('<img src="x.png" alt="The joke">'), '[image: The joke]');
@@ -41,3 +41,25 @@ test('stripHtml keeps one marker per image and leaves non-image markup alone', (
   // stored HTML is untouched: placeholders only exist in the text extraction
   assert.equal(sanitizeHtml('<img src="x.png" alt="kept">'), '<img src="x.png" alt="kept">');
 });
+
+test('truncate cuts at code points, never inside a surrogate pair', () => {
+  const emoji = '🙂'; // one code point, two UTF-16 code units (a surrogate pair)
+  const text = 'ab' + emoji + 'cd';
+  // a naive slice(0, 3) ends with the lone high surrogate -> U+FFFD garbage,
+  // and JSON.stringify emits an invalid escape for it
+  const cut = truncate(text, 3);
+  assert.equal(cut, 'ab');
+  assert.ok(!JSON.stringify(cut).match(/\\uD[89A-F]/), 'no lone surrogates in JSON');
+  // untouched when short enough or ending exactly on a pair boundary
+  assert.equal(truncate(text, 4), 'ab' + emoji);
+  assert.equal(truncate('abc', 10), 'abc');
+  assert.equal(truncate(text, 2), 'ab', 'no high surrogate to trim, plain slice');
+  // astral emoji + zwj sequences also end cleanly (dropping a trailing lone
+  // surrogate is the requirement; cutting between ZWJ members is allowed)
+  const family = '👩‍👩‍👧‍👦'; // several joined code points, all astral
+  const cut2 = truncate('xx' + family, 3);
+  assert.equal(cut2, 'xx', 'a pair at the cut is dropped whole');
+  const cut3 = truncate('x' + family, 1 + family.length);
+  assert.equal(cut3, 'x' + family, 'a boundary inside the sequence keeps it whole');
+});
+

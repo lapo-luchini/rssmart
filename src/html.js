@@ -18,6 +18,21 @@ export function sanitizeHtml(html) {
     .replace(JS_URLS, ' $1=""');
 }
 
+/**
+ * Truncate by code points, not UTF-16 code units: a plain slice() can cut
+ * a string in the middle of a surrogate pair (e.g. emoji at the cut), the
+ * remainder becoming lone surrogates that render as � and, worse, emit
+ * invalid JSON when the text reaches an LLM prompt. Long count = max code
+ * units minus one when the cut lands between a high and its low surrogate.
+ */
+export function truncate(str, max) {
+  if (typeof str !== 'string' || str.length <= max) return str;
+  let cut = str.slice(0, max);
+  const last = cut.codePointAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut;
+}
+
 /** Reduce HTML to plain text (for LLM prompts and embeddings). */
 export function stripHtml(html) {
   if (!html) return '';
@@ -63,7 +78,7 @@ function imgText(tag) {
   };
   const alt = attr('alt');
   const title = attr('title');
-  const desc = (alt || title).slice(0, MAX_IMG_TEXT);
+  const desc = truncate(alt || title, MAX_IMG_TEXT);
   if (!desc) return '[image]';
   let out = `[image: ${desc}]`;
   // Feeds almost always set at most one of the two (measured on this
@@ -72,7 +87,7 @@ function imgText(tag) {
   // different text (Oglaf: alt = caption, title = a separate gag), it is
   // real extra signal — keep it.
   if (alt && title && title.toLowerCase() !== alt.toLowerCase()) {
-    out += ` [image title: ${title.slice(0, MAX_IMG_TEXT)}]`;
+    out += ` [image title: ${truncate(title, MAX_IMG_TEXT)}]`;
   }
   return out;
 }

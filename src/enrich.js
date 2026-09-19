@@ -1,4 +1,4 @@
-import { stripHtml } from './html.js';
+import { stripHtml, truncate } from './html.js';
 import { fetchArticleText } from './fetchpage.js';
 import { compressText, decompressText } from './compress.js';
 
@@ -111,9 +111,12 @@ Answer with JSON: {"topics": ["..."], "summary": "...", "depth": 3}`;
  */
 export function sampleText(text, budget) {
   if (text.length <= budget) return text;
-  const head = Math.floor(budget * 0.6);
-  const tail = budget - head;
-  return `${text.slice(0, head)}\n[... middle of the article omitted ...]\n${text.slice(-tail)}`;
+  const head = truncate(text, Math.floor(budget * 0.6));
+  const tail = text.slice(-(budget - Math.floor(budget * 0.6)));
+  // a code-unit cut can also start mid-pair: a low surrogate can helm the tail
+  const start = tail.charCodeAt(0);
+  const trimmedTail = (start >= 0xdc00 && start <= 0xdfff) ? tail.slice(1) : tail;
+  return `${head}\n[... middle of the article omitted ...]\n${truncate(trimmedTail, tail.length)}`;
 }
 
 /**
@@ -564,7 +567,7 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
   // a hard backstop independent of the model actually following the "at
   // most 50 words" instruction, e.g. under a prompt-injection attempt
   // from the article's own (untrusted) text.
-  let summary = typeof reply.summary === 'string' ? reply.summary.trim().slice(0, 500) : '';
+  let summary = typeof reply.summary === 'string' ? truncate(reply.summary.trim(), 500) : '';
   if (!summary) {
     summary = text.split(/\s+/).slice(0, 45).join(' ') || article.title;
   }

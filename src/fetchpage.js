@@ -2,7 +2,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { Window } from 'happy-dom';
 import { Readability } from '@mozilla/readability';
-import { sanitizeHtml } from './html.js';
+import { sanitizeHtml, truncate } from './html.js';
 import { charsetFromContentType, decodeBytes } from './charset.js';
 
 const MAX_REDIRECTS = 5;
@@ -301,8 +301,8 @@ export async function fetchArticleText(
         const text = article.textContent.replace(/\s+/g, ' ').trim();
         return {
           title: article.title?.trim() || null,
-          html: maxChars && html.length > maxChars ? html.slice(0, maxChars) : html,
-          text: maxChars && text.length > maxChars ? text.slice(0, maxChars) : text,
+          html: maxChars && html.length > maxChars ? truncate(html, maxChars) : html,
+          text: maxChars && text.length > maxChars ? truncate(text, maxChars) : text,
         };
       }, timeoutMs);
     } finally {

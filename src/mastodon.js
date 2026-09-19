@@ -6,7 +6,7 @@
  * Friendica's Mastodon-compatible API is also supported via Basic Auth.
  */
 
-import { stripHtml } from './html.js';
+import { stripHtml, truncate } from './html.js';
 
 const TIMEOUT_MS = 30_000;
 const PAGE_LIMIT = 40;
@@ -112,7 +112,7 @@ export function normalize(status, instanceUrl) {
     id: status.id,
     guid: `mastodon:${status.id}`,
     url: post.url || post.uri || status.url || `${instanceUrl}/@${acct}/${status.id}`,
-    title: plain.slice(0, 120) || '(no content)',
+    title: truncate(plain, 120) || '(no content)',
     content: html || plain,
     author: post.account?.display_name || acct,
     publishedAt: post.created_at,
