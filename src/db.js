@@ -213,6 +213,21 @@ const MIGRATIONS = [
   // embedding comparison. NULL (not 0) until there's a real
   // basis to compute it — no embedding yet, or nothing voted on at all.
   "ALTER TABLE articles ADD COLUMN score_novelty REAL;",
+  // v21 — the duplicate-group lookups match on the normalized group root
+  // COALESCE(duplicate_of, id): /api/articles' per-row `versions` count is a
+  // CORRELATED scalar subquery with that exact predicate (src/server.js,
+  // VERSIONS_COL, plus the group-merge sorting at lines ~346/~369). Without
+  // an index SQLite scans every row for each looked-up root — measured on a
+  // 40k-row synthetic (20% dupes, production-like): the 50-row list query
+  // ran ~300ms before, 0.1ms after ("SEARCH d USING COVERING INDEX
+  // idx_articles_group (<expr>=?)"), because the expression index is
+  // coverable (only id, duplicate_of — no BLOB columns ride along). The
+  // GROUP BY COALESCE in repairDuplicateGroups also drops its TEMP B-TREE.
+  // SQLite supports expression indexes natively (better-sqlite3 and
+  // bun:sqlite both build on the same engine); exact-expression matching
+  // means only queries that spell COALESCE(duplicate_of, id) use it —
+  // which is precisely the shape those hot paths already use.
+  "CREATE INDEX idx_articles_group ON articles(COALESCE(duplicate_of, id));",
 ];
 
 /**
