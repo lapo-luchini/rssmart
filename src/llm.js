@@ -19,7 +19,7 @@ export function parseJsonReply(content) {
 
 /** Thin client for a (possibly remote) Ollama instance. */
 export class Ollama {
-  constructor({ url, chatModel, embedModel, embedModelDedup, embedPrefixes, embedDimensions, timeoutMs = 60_000, apiKey }) {
+  constructor({ url, chatModel, embedModel, dedupEmbedModel, embedPrefixes, embedDimensions, timeoutMs = 60_000, apiKey }) {
     this.url = url.replace(/\/+$/, '');
     this.chatModel = chatModel;
     this.embedModel = embedModel;
@@ -27,7 +27,7 @@ export class Ollama {
     // (`embedding` column), when a different model scores better there
     // than the text/taste one — see the 2026-08 benchmark in DESIGN.md.
     // Null = use embedModel for everything (the historical behavior).
-    this.embedModelDedup = embedModelDedup || null;
+    this.dedupEmbedModel = dedupEmbedModel || null;
     // Retrieval-tuned models use task prefixes (asymmetric: documents vs
     // queries) — model-specific, so they ride in the config.
     this.embedPrefixes = { document: '', query: '', ...embedPrefixes };
@@ -97,7 +97,7 @@ export class Ollama {
     // ":latest", same as `ollama run` / the API itself would resolve it.
     const installed = new Set((data.models ?? []).map((m) => m.name ?? m.model).filter(Boolean));
     const hasModel = (wanted) => installed.has(wanted) || installed.has(`${wanted}:latest`);
-    const missing = [...new Set([this.chatModel, this.embedModel, this.embedModelDedup].filter(Boolean))]
+    const missing = [...new Set([this.chatModel, this.embedModel, this.dedupEmbedModel].filter(Boolean))]
       .filter((name) => !hasModel(name));
 
     if (missing.length) {
@@ -175,11 +175,11 @@ export class Ollama {
    * hand-rolled bit manipulation.
    * dimensions overrides the instance default for this call.
    * opts.dedup selects the optional summary/dedup embedding model
-   * (embedModelDedup) instead of the text/taste one.
+   * (dedupEmbedModel) instead of the text/taste one.
    */
   async embed(text, kind = 'document', dimensions, { dedup = false } = {}) {
     const body = {
-      model: dedup ? (this.embedModelDedup ?? this.embedModel) : this.embedModel,
+      model: dedup ? (this.dedupEmbedModel ?? this.embedModel) : this.embedModel,
       input: (this.embedPrefixes[kind] ?? '') + text,
     };
     body.dimensions = dimensions ?? this.embedDimensions;

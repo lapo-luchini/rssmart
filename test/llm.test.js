@@ -186,3 +186,44 @@ test('checkModels: a non-2xx response (e.g. bad auth) fails clearly', async () =
     await new Promise((r) => server.close(r));
   }
 });
+
+
+test('checkModels verifies the dedup embedding model when configured', async () => {
+  const stub = await startTagsStub(['gemma4:26b-mlx', 'harrier:latest']);
+  try {
+    const llm = new Ollama({ url: stub.url, chatModel: 'gemma4:26b-mlx', embedModel: 'harrier', dedupEmbedModel: 'qwen3-embedding:0.6b' });
+    const result = await llm.checkModels();
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /qwen3-embedding:0\.6b/, 'a configured dedup model is checked too');
+    // reason = "model(s) not installed on URL: <missing> (installed: ...)" —
+    // harrier must appear only in the installed list, not the missing one
+    const missingPart = result.reason.split('(installed:')[0];
+    assert.doesNotMatch(missingPart, /harrier/, 'the installed text model is not reported missing');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('embed routes to the dedup model on the opts.dedup flag', async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      seen.push(JSON.parse(body));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ embeddings: [[1, 0]] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const llm = new Ollama({ url, chatModel: 'c', embedModel: 'text-model', dedupEmbedModel: 'dedup-model' });
+    await llm.embed('x', 'document', null, { dedup: true });
+    await llm.embed('y', 'document', null);
+    assert.equal(seen[0].model, 'dedup-model', 'dedup embed routes to dedupEmbedModel');
+    assert.equal(seen[1].model, 'text-model', 'plain embed routes to embedModel');
+  } finally {
+    server.close();
+  }
+});
