@@ -94,6 +94,19 @@ export function fixAdjacentCdata(xml) {
   return xml.replace(/\]\]>\s*<!\[CDATA\[/g, ']]> <![CDATA[');
 }
 
+/**
+ * Cap a parsed publish date at "now": feeds (and Mastodon posts) with
+ * clocks in the future would otherwise let the score decay treat those
+ * articles as eternally fresh and super-charge their ranking. Unparseable
+ * dates pass through unchanged (stored as NULL later if so).
+ */
+export function clampFutureDate(iso) {
+  if (!iso) return iso;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  return t > Date.now() ? new Date().toISOString() : iso;
+}
+
 /** Fetch one feed and insert its new items. Returns the new-article count. */
 export async function ingestFeed(db, feed, parser) {
   const parsed = await parser.parseString(fixAdjacentCdata(await fetchFeedXml(feed.url)));
@@ -122,7 +135,7 @@ export async function ingestFeed(db, feed, parser) {
         httpUrl(item.link),
         title.trim(),
         item.creator ?? item.author ?? null,
-        item.isoDate ?? null,
+        clampFutureDate(item.isoDate),
         compressText(sanitizeHtml(content)),
       );
       added += changes;
@@ -171,7 +184,7 @@ export async function ingestMastodonFeed(db, feed, mastodon) {
         post.url,
         post.title,
         post.author,
-        post.publishedAt,
+        clampFutureDate(post.publishedAt),
         compressText(sanitizeHtml(post.content)),
       );
       added += changes;

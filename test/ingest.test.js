@@ -150,3 +150,35 @@ test('a title split across two adjacent CDATA sections keeps its word boundary (
     await rss.close();
   }
 });
+
+test('future publish dates are capped at now (no decay super-charge)', async () => {
+  const db = tempDb();
+  const rss = await startRssServer();
+  rss.routes.set('/feed.xml', rssXml({
+    title: 'Time Traveler',
+    items: [
+      { title: 'From the future', pubDate: 'Wed, 01 Jan 2100 00:00:00 GMT' },
+      { title: 'Broken clock', pubDate: 'not-a-date' },
+      { title: 'Normal old post', pubDate: 'Sat, 04 Jul 2026 10:00:00 GMT' },
+    ],
+  }));
+
+  try {
+    syncFeeds(db, [{ url: `${rss.url}/feed.xml` }]);
+    const r = await ingestAll(db, testConfig());
+    assert.equal(r.added, 3);
+
+    const future = db.prepare("SELECT published_at FROM articles WHERE title = 'From the future'").get();
+    assert.ok(future.published_at, 'future date stored as now, not dropped');
+    assert.ok(Date.parse(future.published_at) <= Date.now(), 'capped at now');
+
+    const broken = db.prepare("SELECT published_at FROM articles WHERE title = 'Broken clock'").get();
+    // unparseable dates pass through; rss-parser yields no isoDate -> NULL
+    assert.ok(broken.published_at === null || Number.isNaN(Date.parse(broken.published_at)));
+
+    const normal = db.prepare("SELECT published_at FROM articles WHERE title = 'Normal old post'").get();
+    assert.equal(Date.parse(normal.published_at), Date.parse('2026-07-04T10:00:00Z'), 'past dates untouched');
+  } finally {
+    await rss.close();
+  }
+});
