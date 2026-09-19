@@ -59,7 +59,7 @@
           <input type="range" min="0" max="2" step="0.05" :value="customWeights[axis.key] ?? axis.defaults"
                  :title="axis.title" @input="setCustomWeight(axis.key, $event.target.value)">{{ axis.label }}
         </label>
-        <button class="mark" title="reset the sliders to the configured scoring weights and decay">reset</button>
+        <button class="mark" title="reset the sliders to the configured scoring weights and decay" @click="resetCustomWeights">reset</button>
       </div>
       <em v-else class="feed-notice">sorted by relevance</em>
       <input type="search" v-model="q" placeholder="search…" aria-label="Search articles">

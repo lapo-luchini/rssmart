@@ -880,7 +880,20 @@ export function createApp(db, config, commitHash, describe = '') {
   });
 
   app.get('/api/version', (c) => {
-    return c.json({ commit: commitHash || 'unknown', describe: describe || undefined });
+    return c.json({
+      commit: commitHash || 'unknown',
+      describe: describe || undefined,
+      // The weight profile the custom-sort sliders reset to (the same
+      // fallback the server applies when the w_* params are absent): the
+      // sliders must DISPLAY these actual numbers, not a fixed 1.0 —
+      // otherwise entering custom mode with untouched sliders reorders the
+      // list while they claim "1.0 everywhere".
+      weightProfile: {
+        ...config.scoring.weights,
+        bonus: 1,
+        decay: config.scoring.hotDecayPerDay,
+      },
+    });
   });
 
   // Not under /api — Prometheus's default scrape_config expects /metrics

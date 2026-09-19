@@ -169,8 +169,23 @@ createApp({
     this.reload();
     this.loadSidebarData();
     // Log the running version for debugging (git describe when available,
-    // commit hash otherwise — see /api/version)
-    this.api('/api/version').then((v) => console.log('rssmart', v.describe || v.commit)).catch(() => {});
+    // commit hash otherwise — see /api/version), and seed the custom-sort
+    // sliders with the server's REAL effective weight profile so entering
+    // custom mode shows what's actually applied (before this, sliders
+    // displayed "1.0" while the server ranked with the configured profile)
+    this.api('/api/version').then((v) => {
+      console.log('rssmart', v.describe || v.commit);
+      if (v.weightProfile) {
+        for (const axis of this.customAxes) {
+          const w = v.weightProfile[axis.key];
+          if (w == null) continue;
+          // both the displayed value and the "reset" target follow the
+          // profile (uniform 1.0 is NOT the server's fallback)
+          if (this.customWeights[axis.key] == null) this.customWeights[axis.key] = w;
+          axis.defaults = w;
+        }
+      }
+    }).catch(() => {});
 
     // Retry queued triage votes/skips (see outbox.js) whenever there's a
     // reasonable signal connectivity might be back: on load (in case they
@@ -193,6 +208,15 @@ createApp({
       this.customWeights[axis] = Number(value);
       clearTimeout(this.customTimer);
       this.customTimer = setTimeout(() => this.reload(), 300);
+    },
+
+    // Slider "reset": back to the server's configured profile — what the
+    // sliders showed on entering custom mode — not a blind uniform 1.0.
+    resetCustomWeights() {
+      for (const axis of this.customAxes) {
+        this.customWeights[axis.key] = axis.defaults;
+      }
+      this.reload();
     },
 
     params(offset) {
