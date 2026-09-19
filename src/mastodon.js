@@ -10,6 +10,7 @@ import { stripHtml } from './html.js';
 
 const TIMEOUT_MS = 30_000;
 const PAGE_LIMIT = 40;
+const DEFAULT_MAX_PAGES = 10;
 
 export class Mastodon {
   constructor({ url, token, username, password } = {}) {
@@ -45,15 +46,46 @@ export class Mastodon {
     return res.json();
   }
 
+  /** One raw page of the home timeline (wire order: newest first). */
   /**
-   * Fetch the home timeline, oldest-first for backfill.
-   * Pass sinceId to get only posts newer than that ID.
+   * One raw page of the home timeline (wire order: newest first). Only one
+   * of sinceId/min_id may be passed: Mastodon gives since_id precedence,
+   * so a walk that should continue upward must not set both.
    */
-  async homeTimeline(sinceId) {
+  async homeTimelinePage(sinceId, minId) {
     const params = { limit: PAGE_LIMIT };
-    if (sinceId) params.since_id = sinceId;
-    const posts = await this.#get('/api/v1/timelines/home', params);
-    return posts.map((s) => normalize(s, this.url)).reverse();
+    if (minId) params.min_id = minId;
+    else if (sinceId) params.since_id = sinceId;
+    return this.#get('/api/v1/timelines/home', params);
+  }
+
+  /**
+   * Fetch the home timeline walking forward page by page (min_id) until we
+   * have everything newer than sinceId. A single 40-post page would
+   * silently drop the oldest of >40 posts created between runs — and they
+   * would be lost permanently, since the next run's since_id derives from
+   * the stored guid. maxPages bounds a single run; the next run continues
+   * from the stored watermark, so even a maxPages-exhausted run loses
+   * nothing permanently. Returns posts oldest-first.
+   */
+  async homeTimeline(sinceId, { maxPages = DEFAULT_MAX_PAGES } = {}) {
+    const statuses = []; // accumulated raw statuses, deduped by id
+    const byId = new Map();
+    let minId = sinceId ?? null; // null: no filter, plain newest page
+    for (let page = 0; page < maxPages; page++) {
+      const batch = await this.homeTimelinePage(null, minId);
+      if (!batch.length) break;
+      for (const s of batch) if (!byId.has(s.id)) { byId.set(s.id, s); statuses.push(s); }
+      if (batch.length < PAGE_LIMIT) break;
+      // min_id walks upward: the next page covers posts newer than the
+      // newest of this batch (Mastodon ids are snowflakes). The walk stops
+      // once it reaches the watermark; the whole run stays bounded.
+      minId = statuses.reduce((m, s) => Math.max(m, Number(s.id)), minId ? Number(minId) : 0);
+      if (sinceId && Number(minId) <= Number(sinceId)) break; // watermark reached defensively
+    }
+    // oldest-first for the ingest loop; already-stored posts then dedupe
+    // via INSERT OR IGNORE guid
+    return statuses.sort((a, b) => Number(a.id) - Number(b.id)).map((s) => normalize(s, this.url)).reverse();
   }
 }
 
