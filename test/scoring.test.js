@@ -352,6 +352,46 @@ test('scheduleRecompute + recomputeIfDue: debounced, and survives a process rest
   db.close();
 });
 
+test('a vote landing mid-sweep keeps its own debounce marker (sweep-end clear consumes only what it ran for)', { skip: false }, async (t) => {
+  const db = tempDb();
+  const config = testConfig();
+  seed(db, [
+    { title: 'a', topics: ['tech'] }, { title: 'b', topics: ['news'] },
+    { title: 'c', topics: ['tech'] }, { title: 'd', topics: ['news'] },
+    { title: 'e', topics: ['tech'] }, { title: 'f', topics: ['news'] },
+  ]);
+  const OVERDUE = '2000-01-01T00:00:00Z';
+  db.prepare(
+    "INSERT INTO meta (key, value) VALUES ('score_recompute_due_at', ?)",
+  ).run(OVERDUE);
+
+  // Mid-sweep: a changed vote schedules its own ripple marker. With
+  // yieldEveryMs forced to 0 the sweep yields after every row, so this
+  // reliably fires inside the await window.
+  const midSweepVote = setTimeout(() => {
+    db.prepare("UPDATE articles SET vote = 2 WHERE title = 'a'").run();
+    scheduleRecompute(db, 3600);
+  }, 0);
+
+  const swept = await recomputeIfDue(db, config, { yieldEveryMs: 0 });
+  clearTimeout(midSweepVote);
+  assert.ok(swept, 'the due sweep ran');
+
+  const marker = db.prepare(
+    "SELECT value FROM meta WHERE key = 'score_recompute_due_at'",
+  ).get();
+  assert.ok(marker && marker.value !== OVERDUE,
+    "the mid-sweep vote's debounce marker survives the sweep-end clearing");
+
+  // and the ripple still fires once that marker is due
+  db.prepare(
+    "UPDATE meta SET value = '2000-01-01T00:00:00Z' WHERE key = 'score_recompute_due_at'",
+  ).run();
+  const again = await recomputeIfDue(db, config, { yieldEveryMs: 0 });
+  assert.ok(again, 'the deferred ripple for the mid-sweep vote still runs');
+  assert.equal(again.count, 6, 'it scored the whole corpus, not just the voted row');
+});
+
 test('recomputeScores yields to the event loop between chunks, never blocking it for the full run', async () => {
   const db = tempDb();
   // Enough rows that, with yieldEveryMs forced to 0 (yield after every

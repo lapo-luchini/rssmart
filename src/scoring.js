@@ -646,18 +646,32 @@ export function scheduleRecompute(db, delaySec) {
  */
 export async function recomputeIfDue(db, config, opts) {
   const due = db.prepare(`
-    SELECT 1 FROM meta
+    SELECT value FROM meta
     WHERE key = '${RECOMPUTE_DUE_KEY}' AND value <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
   `).get();
   if (!due) return false;
   const result = await recomputeScores(db, config, opts);
-  clearScheduledRecompute(db);
+  // Snapshot equality: a marker scheduled after the sweep began (e.g. a vote
+  // in-flight) must survive — only the marker this run actually consumed is
+  // dropped. Same-second writes produce an identical value: the marker's own
+  // due time (now+delay, second precision) is a superset window, so dropping
+  // it there loses only an overdue-by-seconds case that the next
+  // recomputeIfDue would have covered anyway.
+  clearScheduledRecompute(db, due.value);
   return result;
 }
 
 /** Drop any pending debounce marker — e.g. after a full recompute already
  *  ran for another reason (cron's post-classification sweep), which
  *  satisfies whatever a pending vote-debounce was waiting for. */
-export function clearScheduledRecompute(db) {
-  db.prepare('DELETE FROM meta WHERE key = ?').run(RECOMPUTE_DUE_KEY);
+export function clearScheduledRecompute(db, expectedValue) {
+  if (expectedValue === undefined) {
+    db.prepare('DELETE FROM meta WHERE key = ?').run(RECOMPUTE_DUE_KEY);
+    return;
+  }
+  // Delete only the marker an in-flight recompute actually consumed: a vote
+  // landing mid-sweep schedules its own marker (change the vote → scheduleRecompute
+  // fires in the request path) — blindly clearing after the sweep would cancel
+  // that vote's corpus ripple, and it would never fire until another vote.
+  db.prepare('DELETE FROM meta WHERE key = ? AND value = ?').run(RECOMPUTE_DUE_KEY, expectedValue);
 }
