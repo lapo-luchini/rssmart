@@ -31,7 +31,7 @@ createApp({
       // sort=custom experiment sliders: relative multipliers over the
       // stored per-signal score components (1.0 = the configured weight).
       // The server's defaults are the configured profile; the client keeps
-      // its own copies lazily-set from /api/version's weight profile.
+      // its own copies lazily-set from /api/info's weight profile.
       customWeights: { topics: null, embedding: null, depth: null, feed: null, bonus: null, decay: null },
       customAxes: [
         { key: 'topics', label: 'topics', defaults: 1 },
@@ -169,11 +169,11 @@ createApp({
     this.reload();
     this.loadSidebarData();
     // Log the running version for debugging (git describe when available,
-    // commit hash otherwise — see /api/version), and seed the custom-sort
+    // commit hash otherwise — see /api/info), and seed the custom-sort
     // sliders with the server's REAL effective weight profile so entering
     // custom mode shows what's actually applied (before this, sliders
     // displayed "1.0" while the server ranked with the configured profile)
-    this.api('/api/version').then((v) => {
+    this.api('/api/info').then((v) => {
       console.log('rssmart', v.describe || v.commit);
       if (v.weightProfile) {
         for (const axis of this.customAxes) {

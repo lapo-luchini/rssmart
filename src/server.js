@@ -879,7 +879,7 @@ export function createApp(db, config, commitHash, describe = '') {
     `).get());
   });
 
-  app.get('/api/version', (c) => {
+  app.get('/api/info', (c) => {
     return c.json({
       commit: commitHash || 'unknown',
       describe: describe || undefined,
