@@ -435,6 +435,7 @@ const SAVE_SCORE = `
  */
 export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD_MS } = {}) {
   const start = performance.now();
+  const snapshotTime = Date.now();
   // Annotates (never silences) any watchdog stall log line that fires
   // during this sweep -- including the unchunked setup below, still a
   // real single-block cost -- so a reader sees it's the known, bounded
@@ -534,6 +535,9 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
     _sweepStats.totalMs += ms;
     _sweepStats.totalSweeps += 1;
     _sweepStats.totalArticles += rows.length;
+    db.prepare(`INSERT INTO meta (key, value) VALUES ('score_decay_snapshot', ?)
+      ON CONFLICT (key) DO UPDATE SET value = excluded.value`)
+      .run(JSON.stringify({ at: snapshotTime, halflife: halflife || null }));
     return { count: rows.length, ms };
   } finally {
     clearExpectedStall();
@@ -635,6 +639,21 @@ export function scheduleRecompute(db, delaySec) {
  * result if it ran.
  */
 export async function recomputeIfDue(db, config, opts) {
+  // Stored rankings need a clock-driven refresh too: otherwise correctly
+  // decaying predictions are never requested during long periods without
+  // feedback. Do not postpone or replace an already scheduled mutation.
+  db.transaction(() => {
+    if (db.prepare('SELECT 1 FROM meta WHERE key = ?').get(RECOMPUTE_DUE_KEY)) return;
+    let snapshot = null;
+    try { snapshot = JSON.parse(db.prepare("SELECT value FROM meta WHERE key = 'score_decay_snapshot'").get()?.value ?? 'null'); } catch {}
+    const halflife = config.scoring.voteDecayHalflifeYears || null;
+    const profileChanged = snapshot && snapshot.halflife !== halflife;
+    // Daily at most for multi-year decay; short experimental half-lives
+    // refresh at one percent of the half-life (bounded by caller ticks).
+    const interval = halflife ? Math.min(86400000, halflife * 365.25 * 86400000 / 100) : Infinity;
+    const expired = halflife && (!snapshot || !Number.isFinite(snapshot.at) || Date.now() - snapshot.at >= interval);
+    if (profileChanged || expired) scheduleRecompute(db, 0);
+  })();
   const due = db.prepare(`
     SELECT value, COALESCE((SELECT value FROM meta WHERE key = ?), '0') AS revision
     FROM meta WHERE key = ? AND value <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')

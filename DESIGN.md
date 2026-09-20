@@ -1285,6 +1285,19 @@ may finish displaying its response, but cannot repopulate content cleared
 by a newer classification request. Deterministic two-connection fixtures
 exercise all three interleavings, including a max-attempts-one failure.
 
+## Clock-driven ranking refresh — 2026-09-20
+
+Each completed full sweep records its start time and vote-decay half-life
+in `meta.score_decay_snapshot`. `recomputeIfDue`, already called by serve
+and cron, requests fresh scores without needing another vote: at most
+24 hours between requested refreshes for multi-year half-lives, or one
+percent of a shorter half-life. Execution remains bounded by scheduler
+ticks/cron invocation and the normal asynchronous sweep. Half-life changes,
+including disabling decay, refresh an existing profile once. An existing
+debounce request is left intact. This defines a refresh policy for stored
+scores; it does not change the decay formula or make every score continuously
+current between sweeps.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).

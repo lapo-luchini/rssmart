@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb } from '../src/db.js';
 import { databaseVersion } from '../src/dbVersion.js';
-import { recomputeScores, recomputeOneScore, topicPrefs } from '../src/scoring.js';
+import { recomputeScores, recomputeOneScore, recomputeIfDue, scheduleRecompute, topicPrefs } from '../src/scoring.js';
 import { tempDb, testConfig } from './helpers.js';
 
 const blob = (values) => Buffer.from(Float16Array.from(values).buffer);
@@ -134,4 +134,37 @@ test('vote decay advances by one half-life with a warm vector cache', async (t) 
   assert.ok(Math.abs(score(db, 2) - 0.25) < 1e-12);
   recomputeOneScore(db, config, 2);
   assert.ok(Math.abs(score(db, 2) - 0.25) < 1e-12);
+});
+
+test('stored scores refresh after elapsed time with no new writes or votes', async (t) => {
+  const db = closeAfter(t), config = embeddingConfig();
+  config.scoring.voteDecayHalflifeYears = 1;
+  seed(db, { vote: 1 }); seed(db, { id: 2 });
+  let now = Date.parse('2026-01-01T00:00:00Z');
+  t.mock.method(Date, 'now', () => now);
+  assert.ok(await recomputeIfDue(db, config), 'first decayed snapshot is established');
+  assert.equal(score(db, 2), .5);
+  now += 3600000;
+  assert.equal(await recomputeIfDue(db, config), false, 'no unnecessary hourly sweep');
+  now += 365.25 * 86400000;
+  assert.ok(await recomputeIfDue(db, config));
+  assert.ok(score(db, 2) < .25 && score(db, 2) > .249);
+  assert.equal(await recomputeIfDue(db, config), false);
+});
+
+test('clock refresh preserves an existing debounce and observes half-life changes', async (t) => {
+  const db = closeAfter(t), config = embeddingConfig();
+  seed(db, { vote: 1 }); seed(db, { id: 2 });
+  await recomputeScores(db, config);
+  config.scoring.voteDecayHalflifeYears = 1;
+  scheduleRecompute(db, 120);
+  const before = db.prepare("SELECT key,value FROM meta WHERE key LIKE 'score_recompute_%' ORDER BY key").all();
+  assert.equal(await recomputeIfDue(db, config), false);
+  assert.deepEqual(db.prepare("SELECT key,value FROM meta WHERE key LIKE 'score_recompute_%' ORDER BY key").all(), before);
+  db.prepare("DELETE FROM meta WHERE key='score_recompute_due_at'").run();
+  assert.ok(await recomputeIfDue(db, config), 'changing the half-life invalidates the time profile');
+  config.scoring.voteDecayHalflifeYears = null;
+  assert.ok(await recomputeIfDue(db, config), 'disabling decay refreshes old decayed scores once');
+  assert.equal(score(db, 2), .5);
+  assert.equal(await recomputeIfDue(db, config), false);
 });
