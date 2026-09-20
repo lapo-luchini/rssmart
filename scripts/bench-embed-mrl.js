@@ -9,11 +9,11 @@
 // Pair sets are seeded identically to bench-embed.js/bench-embed-threshold.js
 // so results are directly comparable with the earlier runs.
 import { loadConfig } from '../src/config.js';
-import { openDb } from '../src/db.js';
+import { openReadOnlyDb } from '../src/db.js';
 import { Ollama } from '../src/llm.js';
 
 const config = loadConfig();
-const db = openDb(config.db);
+const db = openReadOnlyDb(config.db);
 let rngState = 7;
 const rand = () => (rngState = (rngState * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
 const dupPairs = db.prepare('SELECT a.id AS dup_id, a.duplicate_of AS root_id FROM articles a WHERE a.duplicate_of IS NOT NULL').all();

@@ -8,11 +8,11 @@
 // (harrier) at the dedup dims.
 
 import { loadConfig } from '../src/config.js';
-import { openDb } from '../src/db.js';
+import { openReadOnlyDb } from '../src/db.js';
 import { Ollama } from '../src/llm.js';
 
 const config = loadConfig();
-const db = openDb(config.db, { readonly: true });
+const db = openReadOnlyDb(config.db);
 let rngState = 7;
 const rand = () => (rngState = (rngState * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
 

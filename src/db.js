@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { compressText } from './compress.js';
 
@@ -402,4 +402,27 @@ export function openDb(path) {
     })();
   }
   return db;
+}
+
+/** Open an existing, compatible database for inspection without migrating it.
+ * Unlike openDb, this cannot create a database or change its journal mode.
+ * Use a consistent SQLite backup for repeatable benchmarks: readonly does
+ * not freeze another process's writes, and a live WAL may have sidecars.
+ */
+export function openReadOnlyDb(path) {
+  if (!statSync(path).isFile()) throw new Error(`not a database file: ${path}`);
+  const db = new Database(path, typeof Bun !== 'undefined'
+    ? { readonly: true, create: false }
+    : { readonly: true, fileMustExist: true });
+  try {
+    instrumentQueryTiming(db);
+    const version = pragma(db, 'user_version').user_version;
+    if (version !== MIGRATIONS.length) {
+      throw new Error(`read-only benchmark requires database schema ${MIGRATIONS.length}; found ${version}. Migrate a separate copy with this application version first.`);
+    }
+    return db;
+  } catch (err) {
+    db.close();
+    throw err;
+  }
 }

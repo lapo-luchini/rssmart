@@ -1111,6 +1111,19 @@ old workers when deploying a changed model configuration. Mutable model
 tags still require operational pinning; this metadata does not discover a
 remote model replacement hidden behind an unchanged tag/digest-less name.
 
+## Read-only benchmark databases (2026-09-20)
+
+Database-backed `bench-*` scripts use `openReadOnlyDb`, which opens an
+existing file with the driver's readonly flag and never creates a database,
+changes journal mode or runs migrations. Incompatible schema versions fail
+before any model request, with an instruction to migrate a separate copy.
+The serving/migration path remains `openDb`. Readonly prevents benchmark
+writes; it does not freeze concurrent writes by a running application.
+Use a consistent SQLite backup for repeatable measurements, including its
+committed WAL state. A live read may use SQLite's WAL sidecars. Tests check
+failed writes, byte-for-byte preservation, missing files and the entry
+points of all six database benchmarks against an incompatible fixture.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).

@@ -21,7 +21,7 @@
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { openDb } from '../src/db.js';
+import { openReadOnlyDb } from '../src/db.js';
 import { decompressText } from '../src/compress.js';
 import { stripHtml } from '../src/html.js';
 import { existingTopicNames, classifyPrompt, contextTokens, SYSTEM } from '../src/enrich.js';
@@ -36,7 +36,7 @@ if (models.length === 0) {
 }
 
 const config = loadConfig();
-const db = openDb(config.db);
+const db = openReadOnlyDb(config.db);
 
 function articleText(row) {
   const raw = decompressText(row.full_content) ?? decompressText(row.content) ?? '';
