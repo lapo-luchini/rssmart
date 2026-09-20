@@ -1182,6 +1182,34 @@ or incomplete history; the test does not claim to parse packfiles. Git
 does not need to be installed to run these fixtures. The version reader
 itself and its documented best-effort production behavior are unchanged.
 
+## Duplicate cache and group structure — 2026-09-20
+
+The recent-vector cache uses the same connection change token as scoring.
+An existing article may receive a vector long after its creation time,
+including from another process. Creation-time watermarks cannot detect
+that write, a same-sized replacement or a deletion. Any detected write now
+reloads the eligible window; calls with no writes reuse it, with time-based
+pruning. Enrichment checks again after its network awaits before deciding
+the duplicate match. This is conservative cache invalidation, not an
+incremental vector-change log.
+
+There is a measured CPU cost. A synthetic in-memory fixture with 48,487
+articles, 8,000 dedup vectors at 256 dimensions and batches of 12 articles
+(mocked Ollama, one worker) had warm-batch median 141.6 ms before and
+356.8 ms after these changes: about 17.9 ms extra per article. These are
+local fixture timings, not production throughput measurements. A dedicated
+vector-write revision could avoid unrelated-write reloads later, but must
+cover every writer and retain external-connection detection. The current
+implementation deliberately favors correct vectors over stale matches.
+
+Rechecking and reclassification share one transactional group move. When
+a root matches another root, all its descendants move to the destination;
+matching its own child keeps it a root. Root resolution walks chains with
+cycle detection, and the descendant update also flattens legacy nested
+members. This preserves the single-level grouping invariant used by API
+queries. It is a structural guarantee, not evidence that all stories in a
+cosine-connected group describe the same event.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).

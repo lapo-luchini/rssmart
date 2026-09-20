@@ -2,6 +2,7 @@ import { stripHtml, truncate } from './html.js';
 import { fetchArticleText } from './fetchpage.js';
 import { compressText, decompressText } from './compress.js';
 import { scheduleRecompute, recomputeOneScore } from './scoring.js';
+import { databaseVersion } from './dbVersion.js';
 
 // Cumulative wall-clock time (ms) spent per enrichment phase, since process
 // start — exposed as rssmart_enrich_seconds_total (see metrics.js). This is
@@ -168,11 +169,11 @@ function findDuplicate(vec, articleId, recent, threshold) {
  * enrichEveryMs), even though only a handful of articles get classified per
  * batch. With a fast-growing feed set the window can hold thousands of
  * vectors, making that reload the dominant source of Float16Array churn in
- * the process. Now loaded once per db, then kept in sync incrementally:
- * each call only fetches rows newer than the last sync and prunes entries
- * that have aged out of the window.
+ * the process. Reload after local writes or external commits, not after a
+ * creation-time watermark: existing rows can acquire replacement vectors.
+ * Calls without writes reuse the decoded window and prune aged entries.
  */
-const _recentCaches = new WeakMap(); // db -> { cache: Map<id, {id, vec, createdAt}>, syncedAt }
+const _recentCaches = new WeakMap(); // db -> { cache, version, windowDays }
 
 const enrichmentRevisionKey = (id) => `enrich_request:${id}`;
 const enrichmentRevision = (db, id) => db.prepare('SELECT value FROM meta WHERE key = ?')
@@ -213,26 +214,28 @@ function syncRecentCache(db, dupWindowDays) {
   const cutoff = new Date(Date.now() - dupWindowDays * 24 * 60 * 60 * 1000).toISOString();
   let state = _recentCaches.get(db);
   if (!state) {
-    state = { cache: new Map(), syncedAt: null };
+    state = { cache: new Map(), version: null, windowDays: null };
     _recentCaches.set(db, state);
   }
-  const rows = state.syncedAt
-    ? db.prepare('SELECT id, embedding, created_at FROM articles WHERE embedding IS NOT NULL AND created_at > ?').all(state.syncedAt)
-    : db.prepare('SELECT id, embedding, created_at FROM articles WHERE embedding IS NOT NULL AND created_at >= ?').all(cutoff);
-  for (const r of rows) {
-    state.cache.set(r.id, { id: r.id, vec: bufToVec(r.embedding), createdAt: r.created_at });
-    if (!state.syncedAt || r.created_at > state.syncedAt) state.syncedAt = r.created_at;
-  }
-  const prune = db.prepare('UPDATE articles SET embedding = NULL WHERE id = ?');
+  const prune = db.prepare('UPDATE articles SET embedding = NULL WHERE id = ? AND created_at < ? AND embedding IS NOT NULL');
   for (const [id, entry] of state.cache) {
     if (entry.createdAt < cutoff) {
       // The vector just aged out of the dedup window: dedup only ever
       // compares against in-window vectors, so drop it from storage too
       // (keeps the column at ~one window of data instead of growing with
       // the archive). reembedMissing deliberately does not refill these.
-      prune.run(id);
+      prune.run(id, cutoff);
       state.cache.delete(id);
     }
+  }
+  const version = databaseVersion(db);
+  if (state.version !== version || state.windowDays !== dupWindowDays) {
+    const rows = db.prepare('SELECT id, embedding, created_at FROM articles WHERE embedding IS NOT NULL AND created_at >= ?').all(cutoff);
+    // Keep the map identity for concurrent enrichment workers using it.
+    state.cache.clear();
+    for (const r of rows) state.cache.set(r.id, { id: r.id, vec: bufToVec(r.embedding), createdAt: r.created_at });
+    state.version = version;
+    state.windowDays = dupWindowDays;
   }
   return state.cache;
 }
@@ -261,8 +264,7 @@ export function recheckDuplicates(db, config, articleId, vec = null) {
   const recent = syncRecentCache(db, config.enrich.dupWindowDays);
   const matched = findDuplicate(vec, articleId, recent, config.enrich.dupThreshold);
   if (!matched) return { duplicateOf: null };
-  const root = resolveGroupRoot(db, matched, articleId);
-  db.prepare('UPDATE articles SET duplicate_of = ? WHERE id = ?').run(root, articleId);
+  const root = attachDuplicateGroup(db, articleId, matched);
   return { duplicateOf: root };
 }
 
@@ -529,11 +531,35 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
  * own repeats), it stays a root.
  */
 function resolveGroupRoot(db, matchedId, articleId) {
-  if (!matchedId) return null;
-  const { root } = db
-    .prepare('SELECT COALESCE(duplicate_of, id) AS root FROM articles WHERE id = ?')
-    .get(matchedId);
-  return root === articleId ? null : root;
+  const seen = new Set([articleId]);
+  const parent = db.prepare('SELECT id, duplicate_of FROM articles WHERE id = ?');
+  let id = matchedId;
+  while (id != null) {
+    if (seen.has(id)) return null;
+    seen.add(id);
+    const row = parent.get(id);
+    if (!row) return null;
+    if (row.duplicate_of == null) return row.id;
+    id = row.duplicate_of;
+  }
+  return null;
+}
+
+// Moving a root moves its descendants too, keeping COALESCE(duplicate_of,
+// id) a complete group identifier. UNION also bounds legacy cycles.
+function attachDuplicateGroup(db, articleId, matchedId) {
+  return db.transaction(() => {
+    const root = resolveGroupRoot(db, matchedId, articleId);
+    if (root == null) {
+      db.prepare('UPDATE articles SET duplicate_of = NULL WHERE id = ?').run(articleId);
+    } else {
+      db.prepare(`WITH RECURSIVE members(id) AS (
+        SELECT ? UNION SELECT a.id FROM articles a JOIN members m ON a.duplicate_of = m.id
+      ) UPDATE articles SET duplicate_of = ? WHERE id IN (SELECT id FROM members)`)
+        .run(articleId, root);
+    }
+    return root;
+  })();
 }
 
 /**
@@ -652,11 +678,10 @@ async function enrichOne(db, llm, article, recent, enrichCfg, config) {
   timings.embed += performance.now() - t;
 
   t = performance.now();
-  const duplicateOf = resolveGroupRoot(
-    db,
-    findDuplicate(vec, article.id, recent, enrichCfg.dupThreshold),
-    article.id,
-  );
+  // Another worker or connection can replace vectors while Ollama runs.
+  recent = syncRecentCache(db, enrichCfg.dupWindowDays);
+  const matched = findDuplicate(vec, article.id, recent, enrichCfg.dupThreshold);
+  let duplicateOf = null;
   timings.dedup += performance.now() - t;
 
   const linkTopic = db.prepare(
@@ -675,16 +700,16 @@ async function enrichOne(db, llm, article, recent, enrichCfg, config) {
     db.prepare(`
       UPDATE articles
       SET summary = ?, embedding = ?, text_embedding = ?, depth = ?,
-          duplicate_of = ?, status = 'enriched', enrich_priority = 0
+          status = 'enriched', enrich_priority = 0
       WHERE id = ?
     `).run(
       summary,
       Buffer.from(vec.buffer),
       Buffer.from(textVec.buffer),
       depth,
-      duplicateOf,
       article.id,
     );
+    duplicateOf = attachDuplicateGroup(db, article.id, matched);
     // Reclassification can change an already-voted training example.
     // Persist the ripple request atomically with its replacement features.
     if (db.prepare('SELECT vote FROM articles WHERE id = ?').get(article.id)?.vote) {
@@ -695,8 +720,8 @@ async function enrichOne(db, llm, article, recent, enrichCfg, config) {
   timings.db += performance.now() - t;
   if (!saved) return { superseded: true, timings };
 
-  // Window pruning happens once per batch in syncRecentCache, not per
-  // article here — dupWindowDays is measured in days, a batch in seconds.
+  // Other workers can reuse this entry immediately; the next version
+  // check still detects any concurrent or otherwise untracked writes.
   recent.set(article.id, { id: article.id, vec, createdAt: article.created_at });
   addPhaseMs(timings);
   return { topics, summary, depth, duplicateOf, vec, timings };
