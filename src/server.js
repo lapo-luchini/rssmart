@@ -11,7 +11,7 @@ import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
 import { semanticSearch } from './search.js';
 import { decompressText } from './compress.js';
-import { pragma } from './db.js';
+import { applyFeedback } from './feedback.js';
 import { proposeTopicMerges, applyTopicMerge } from './topicMerge.js';
 import { renderMetrics } from './metrics.js';
 import { getDbQueryMs } from './db.js';
@@ -520,39 +520,32 @@ export function createApp(db, config, commitHash, describe = '') {
 
   app.post('/api/articles/:id/vote', async (c) => {
     const id = c.req.param('id');
-    const vote = (await jsonBody(c))?.vote;
+    const body = await jsonBody(c);
+    const vote = body?.vote;
     if (!Number.isInteger(vote) || vote < -2 || vote > 2) {
       return c.json({ error: 'vote must be an integer from -2 to 2' }, 400);
     }
     // Casting a real vote (not retracting one) implies the article was
     // read — you can't rate what you haven't seen. Retraction (vote = 0)
     // leaves read_at alone: it doesn't mean you un-read it.
-    // Durability: synchronous runs NORMAL process-wide (see db.js) for
-    // cheap background commits, but a recorded vote is worth one fsync —
-    // raise to FULL around the vote's own commit and restore immediately.
-    // better-sqlite3 commits synchronously inside .run(), so nothing can
-    // interleave between the flip and the restore.
-    pragma(db, 'synchronous = FULL');
-    let results;
-    try {
-      results = db.prepare(`
+    // Article, retry receipt and pending score work commit together.
+    const result = applyFeedback(db, id, 'vote', vote, body.mutation, () => {
+      db.prepare(`
         UPDATE articles
         SET vote = ?,
             read_at = CASE WHEN ? != 0 THEN COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ELSE read_at END,
             voted_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
         WHERE id = ?
       `).run(vote, vote, id);
-    } finally {
-      pragma(db, 'synchronous = NORMAL');
-    }
-    if (!results.changes) return c.json({ error: 'not found' }, 404);
+      scheduleRecompute(db, config.scoring.recomputeDebounceSec);
+    });
+    if (result.error) return c.json(result, result.status);
     // Instant, cheap: this article's own score only. The full-corpus
     // ripple (this vote can shift any other article's kNN term) is
     // debounced — see DESIGN.md — rather than blocking this response.
     // The scoring cache notices the changed voted set via its own
     // freshness check — no manual invalidation needed here.
-    recomputeOneScore(db, config, id);
-    scheduleRecompute(db, config.scoring.recomputeDebounceSec);
+    if (result.applied) recomputeOneScore(db, config, id);
     const row = db.prepare(`
       SELECT id, vote, read_at, voted_at, score,
              score_topics, score_embedding, score_depth, score_feed, score_bonus
@@ -652,16 +645,19 @@ export function createApp(db, config, commitHash, describe = '') {
 
   app.post('/api/articles/:id/read', async (c) => {
     const id = c.req.param('id');
-    const read = (await jsonBody(c))?.read;
+    const body = await jsonBody(c);
+    const read = body?.read;
     if (typeof read !== 'boolean') {
       return c.json({ error: 'read must be a boolean' }, 400);
     }
-    const { changes } = db.prepare(`
-      UPDATE articles
-      SET read_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END
-      WHERE id = ?
-    `).run(read ? 1 : 0, id);
-    if (!changes) return c.json({ error: 'not found' }, 404);
+    const result = applyFeedback(db, id, 'read', read ? 1 : 0, body.mutation, () => {
+      db.prepare(`
+        UPDATE articles
+        SET read_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END
+        WHERE id = ?
+      `).run(read ? 1 : 0, id);
+    });
+    if (result.error) return c.json(result, result.status);
     const row = db
       .prepare('SELECT id, read_at FROM articles WHERE id = ?')
       .get(id);

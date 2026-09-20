@@ -22,6 +22,55 @@ day-one spec was retired for exactly that reason; it's in git history).
   Upstream policy documentation lives in the maintained Apostrophe monorepo:
   https://github.com/apostrophecms/apostrophe/tree/main/packages/sanitize-html.
 
+- **2026-09-20: persist and order every vote/read intent, including online writes.**
+  List, reader and triage feedback all use the same outbox. Persistence must
+  succeed before the optimistic UI changes; a storage/quota error leaves
+  the article unchanged. FIFO is deliberate, not a missing optimization:
+  vote(+1), vote(0) implies read, whereas sending only vote(0) does not.
+  Vote/read therefore share a contiguous per-article sequence and no SET
+  is coalesced away. Later acknowledgements are projected through pending
+  intentions and cannot replace a newer local vote. GET responses also
+  preserve fields acknowledged since the request began, even after the
+  corresponding queue entry has been removed.
+  Each persisted body carries `mutation: { clientId, sequence }`. Migration
+  22 adds `feedback_receipts`, keyed by client/article/sequence, storing the
+  operation and value. The server atomically writes feedback, its receipt
+  and the pending scoring marker at FULL durability. It accepts only the
+  next sequence; an exact replay returns current state without re-dating,
+  recomputing or rescheduling. A gap or reused identity with different
+  content returns 409. Receipts persist across server restarts and are not
+  expired: this is retry bookkeeping, not a complete history of older API
+  writes. Other clients/devices have separate sequences; their new writes
+  follow server receipt order, not a claimed ordering of offline intentions.
+  Two tabs coordinate storage read/modify/write and flushing with separate
+  Web Locks, so an in-flight request does not block persisting a newer
+  intent. Without Web Locks, use one tab; the pending-sync notice says so.
+  The lock queue defines the order of simultaneous tab writes; wall clocks
+  do not decide winners. Independent browser profiles/devices and old tabs
+  do not participate in those locks. Close older app tabs when upgrading.
+  Legacy outbox arrays are converted in order and saved with stable IDs
+  before transmission. Already committed legacy requests cannot acquire
+  retroactive idempotency. API calls without `mutation` remain compatible
+  but have no receipt/order guarantee.
+  A 401 retains and pauses feedback until successful authenticated API
+  activity or explicit retry. 429 respects Retry-After (seconds or HTTP
+  date), including after reload; network, 408, 425 and 5xx failures back off
+  for 20 seconds by default. Requests time out after 15 seconds; receipt
+  identity handles the possibility that the server nevertheless committed.
+  Unreadable acknowledgements stay queued. Permanent rejections remain
+  visible and block later operations on that article, while independent
+  articles can sync. Retry never renumbers a rejected operation or bypasses
+  server sequence checks. Pending state and a retry action are visible in
+  all views; successful entries alone are removed, by exact identity.
+  A restored/replaced server DB can have older receipts than the browser:
+  the resulting 409 is intentionally retained, not retried in a loop or
+  converted into a new identity. Recovery requires reconciling both states:
+  first preserve the complete `localStorage.rssmart_outbox` value externally,
+  stop sending from every tab, then restore matching server receipts or
+  manually reconcile the saved intentions against the restored articles.
+  There is no automatic destructive queue reset. Clearing browser storage
+  loses locally pending intentions; server receipts do not back them up.
+
 - **2026-09-20: custom sliders multiply stored contributions.** The stored
   score components already contain their configured weights. Neutral custom
   multipliers and reset values are therefore 1, while freshness remains the
@@ -683,30 +732,9 @@ day-one spec was retired for exactly that reason; it's in git history).
   the exact same slot for free: `apiView` maps it to `unread` (or `all`,
   same as any other tab, when `includeRead` is checked) since the
   backend has no "explore" concept of its own, only the sort differs.
-- **Triage votes/skips survive a flaky mobile connection via a small
-  persisted retry queue (`public/outbox.js`), not a blocking retry.** A
-  failed vote used to leave the card in place until you noticed the error
-  and manually retried — fine on a desk, bad mid-triage on a phone in a
-  tunnel or elevator. Now: on a network failure or 5xx (not a real 4xx
-  rejection — that still surfaces as an error immediately, retrying won't
-  fix a bad request), the vote is applied to the local article object
-  right away, triage advances immediately, and the request is queued to
-  `localStorage` for replay. Safe to replay blindly, no dedup/conflict
-  logic needed: `/vote` and `/read` are both plain idempotent `SET`s
-  server-side, not toggles — the client already resolves "toggle" to an
-  explicit target value before sending, so resending the identical
-  request is a no-op either way. Retried on load (a previous session's
-  queue), on the browser's `online` event, on a 20s fallback poll (the
-  `online` event reflects network-interface state, not actual
-  reachability, so it can misfire either direction), and piggybacked on
-  any other successful API call. A small "N pending sync" badge in the
-  triage panel is the only new UI. Deliberately scoped to triage's
-  vote/skip only, not every write action in the app (feed edits,
-  guidelines, reclassify) — those are rarer, less time-pressured actions
-  where today's "show an error, let them retry" is an acceptable
-  experience — and does not extend to `loadTriageBatch` fetching the next
-  *batch* of articles (a read, not a queued write); that still fails
-  visibly on a dead connection.
+- **The original triage-only retry queue has been superseded.** See the
+  2026-09-20 feedback decision above: idempotent SET values alone did not
+  protect ordering, timestamps or non-triage votes.
 - **Feed titles are user-editable** (`PATCH /api/feeds/:id` now also
   accepts `title`, alongside its existing `active`). A blank title clears
   the override back to `NULL` rather than rejecting the request — `NULL`

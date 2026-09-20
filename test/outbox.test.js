@@ -2,112 +2,166 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createOutbox } from '../public/outbox.js';
 
-function fakeStorage(initial) {
-  const store = new Map(initial ? [['rssmart_outbox', JSON.stringify(initial)]] : []);
-  return {
-    getItem: (k) => (store.has(k) ? store.get(k) : null),
-    setItem: (k, v) => store.set(k, v),
-  };
+function storage(initial = null) {
+  let value = initial;
+  return { getItem: () => value, setItem: (_, next) => { value = next; } };
+}
+const options = (field, value) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ [field]: value }) });
+const enqueue = (box, value = 1, id = 1, field = 'vote') => box.enqueue(`/api/articles/${id}/${field}`, options(field, value));
+const ok = id => new Response(JSON.stringify({ id: Number(id) }), { status: 200 });
+const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+function locks() {
+  const tails = new Map();
+  return { request(name, fn) {
+    const next = (tails.get(name) ?? Promise.resolve()).then(fn);
+    tails.set(name, next.catch(() => {}));
+    return next;
+  } };
 }
 
-function fakeRequest(responses) {
+test('persists before sending, including per-article sequences shared by vote and read', async () => {
+  const disk = storage(); let calls = 0;
+  const box = createOutbox({ storage: disk, request: async () => { calls++; return ok(1); } });
+  const vote = await enqueue(box);
+  const read = await enqueue(box, false, 1, 'read');
+  const other = await enqueue(box, -1, 2);
+  assert.equal(calls, 0);
+  assert.deepEqual([vote.sequence, read.sequence, other.sequence], [1, 2, 1]);
+  assert.equal(JSON.parse(disk.getItem()).entries.length, 3);
+  assert.equal(JSON.parse(vote.options.body).mutation.sequence, 1);
+});
+
+test('401 suspends without dropping and resumes after authentication, even after restart', async () => {
+  const disk = storage(); let calls = 0;
+  const first = createOutbox({ storage: disk, request: async () => { calls++; return new Response('{}', { status: 401 }); } });
+  await enqueue(first); await first.flush(); await first.flush();
+  assert.equal(first.count, 1); assert.equal(first.issue.status, 401); assert.equal(calls, 1);
+  const next = createOutbox({ storage: disk, request: async () => ok(1) });
+  await next.flush({ retryAuth: true });
+  assert.equal(next.count, 0); assert.equal(next.issue, null);
+});
+
+test('429 Retry-After is respected by automatic and explicit retries', async () => {
+  let time = 100_000; let calls = 0;
+  const box = createOutbox({ storage: storage(), now: () => time, request: async () => ++calls === 1
+    ? new Response('{}', { status: 429, headers: { 'Retry-After': '60' } }) : ok(1) });
+  await enqueue(box); await box.flush();
+  time += 59_000; await box.flush({ retryErrors: true });
+  assert.equal(calls, 1); assert.equal(box.count, 1);
+  time += 1000; await box.flush(); assert.equal(calls, 2); assert.equal(box.count, 0);
+});
+
+test('Retry-After HTTP dates survive a reload', async () => {
+  let time = Date.parse('2026-09-20T00:00:00Z'); const disk = storage();
+  const first = createOutbox({ storage: disk, now: () => time, request: async () => new Response('{}', {
+    status: 429, headers: { 'Retry-After': 'Sun, 20 Sep 2026 00:01:00 GMT' },
+  }) });
+  await enqueue(first); await first.flush();
+  let calls = 0;
+  const next = createOutbox({ storage: disk, now: () => time, request: async () => { calls++; return ok(1); } });
+  await next.flush(); assert.equal(calls, 0);
+  time += 60_000; await next.flush(); assert.equal(next.count, 0);
+});
+
+for (const status of ['network', 408, 425, 503]) {
+  test(`${status} keeps all intents, backs off and resumes in FIFO order`, async () => {
+    let time = 0; const calls = [];
+    const box = createOutbox({ storage: storage(), now: () => time, request: async (path, opts) => {
+      calls.push(JSON.parse(opts.body));
+      if (calls.length === 1) {
+        if (status === 'network') throw new Error('offline');
+        return new Response('{}', { status });
+      }
+      return ok(1);
+    } });
+    await enqueue(box, 1); await box.flush();
+    await enqueue(box, -1); await box.flush();
+    assert.equal(box.count, 2); assert.equal(calls.length, 1);
+    time += 20_000; await box.flush();
+    assert.deepEqual(calls.map(body => body.vote), [1, 1, -1]);
+    assert.equal(box.count, 0);
+  });
+}
+
+for (const status of [400, 404, 409]) {
+  test(`${status} is retained visibly, never silently dropped or automatically renumbered`, async () => {
+    const calls = [];
+    const box = createOutbox({ storage: storage(), request: async (_, opts) => {
+      calls.push(opts.body); return new Response(JSON.stringify({ error: 'rejected' }), { status });
+    } });
+    await enqueue(box); await box.flush(); await box.flush();
+    assert.equal(box.count, 1); assert.equal(box.issue.permanent, true); assert.equal(calls.length, 1);
+    await box.flush({ retryErrors: true });
+    assert.equal(calls[1], calls[0]); assert.equal(box.count, 1);
+  });
+}
+
+test('an enqueue during an in-flight request is not removed with its predecessor', async () => {
+  const started = deferred(); const release = deferred(); const calls = [];
+  const box = createOutbox({ storage: storage(), request: async (_, opts) => {
+    calls.push(JSON.parse(opts.body));
+    if (calls.length === 1) { started.resolve(); await release.promise; }
+    return ok(1);
+  } });
+  await enqueue(box, 1); const flush = box.flush(); await started.promise;
+  await enqueue(box, -1); const concurrent = box.flush();
+  assert.equal(box.count, 2); release.resolve(); await Promise.all([flush, concurrent]);
+  assert.deepEqual(calls.map(body => body.vote), [1, -1]); assert.equal(box.count, 0);
+});
+
+test('a permanent rejection blocks that article without blocking unrelated feedback', async () => {
   const calls = [];
-  let i = 0;
-  const fn = async (path, options) => {
-    calls.push({ path, options });
-    const next = responses[Math.min(i, responses.length - 1)];
-    i++;
-    if (next === 'network-fail') throw new Error('network down');
-    return { ok: next < 400, status: next };
-  };
-  fn.calls = calls;
-  return fn;
-}
-
-test('enqueue persists to storage immediately, before any flush', () => {
-  const storage = fakeStorage();
-  const outbox = createOutbox({ storage, request: fakeRequest([200]) });
-  outbox.enqueue('/api/articles/1/vote', { method: 'POST' });
-  assert.equal(outbox.count, 1);
-  assert.deepEqual(JSON.parse(storage.getItem('rssmart_outbox')), [
-    { path: '/api/articles/1/vote', options: { method: 'POST' } },
-  ]);
+  const box = createOutbox({ storage: storage(), request: async (path, opts) => {
+    calls.push(JSON.parse(opts.body));
+    return path.includes('/1/') ? new Response('{}', { status: 404 }) : ok(2);
+  } });
+  await enqueue(box, 1, 1); await enqueue(box, -1, 1); await enqueue(box, 1, 2);
+  await box.flush();
+  assert.equal(box.count, 2); assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(body => body.mutation.sequence), [1, 1]);
 });
 
-test('flush drains the queue on success, in FIFO order', async () => {
-  const storage = fakeStorage();
-  const request = fakeRequest([200, 200, 200]);
-  const outbox = createOutbox({ storage, request });
-  outbox.enqueue('/api/articles/1/vote', {});
-  outbox.enqueue('/api/articles/2/vote', {});
-  outbox.enqueue('/api/articles/3/read', {});
-  await outbox.flush();
-  assert.equal(outbox.count, 0);
-  assert.deepEqual(request.calls.map((c) => c.path), [
-    '/api/articles/1/vote', '/api/articles/2/vote', '/api/articles/3/read',
-  ]);
-  assert.deepEqual(JSON.parse(storage.getItem('rssmart_outbox')), []);
+test('two tabs using Web Locks share storage and send each operation once', async () => {
+  const disk = storage(); const sharedLocks = locks(); const calls = [];
+  const request = async (_, opts) => { calls.push(JSON.parse(opts.body)); return ok(1); };
+  const a = createOutbox({ storage: disk, locks: sharedLocks, request });
+  const b = createOutbox({ storage: disk, locks: sharedLocks, request });
+  await Promise.all([enqueue(a, 1), enqueue(b, -1)]);
+  await Promise.all([a.flush(), b.flush()]);
+  assert.deepEqual(calls.map(body => body.mutation.sequence), [1, 2]);
+  assert.equal(calls[0].mutation.clientId, calls[1].mutation.clientId);
+  assert.equal(a.count, 0); assert.equal(b.count, 0);
 });
 
-test('flush stops at the first network failure, leaving the rest queued', async () => {
-  const storage = fakeStorage();
-  const request = fakeRequest([200, 'network-fail', 200]);
-  const outbox = createOutbox({ storage, request });
-  outbox.enqueue('/a', {});
-  outbox.enqueue('/b', {});
-  outbox.enqueue('/c', {});
-  await outbox.flush();
-  assert.equal(outbox.count, 2, 'the first entry drained, the failing one and everything after it stayed');
-  assert.equal(request.calls.length, 2, 'never even attempted the third entry');
+test('legacy queues get durable identities while preserving vote/read side effects', async () => {
+  const disk = storage(JSON.stringify([
+    { path: '/api/articles/1/vote', options: options('vote', 1) },
+    { path: '/api/articles/1/vote', options: options('vote', 0) },
+    { path: '/api/articles/1/read', options: options('read', false) },
+  ]));
+  const bodies = [];
+  const box = createOutbox({ storage: disk, request: async (_, opts) => {
+    bodies.push(JSON.parse(opts.body)); return ok(1);
+  } });
+  assert.deepEqual(box.project({ id: 1, vote: 0, read_at: null }), { id: 1, vote: 0, read_at: null });
+  await box.flush();
+  assert.deepEqual(bodies.map(body => body.mutation.sequence), [1, 2, 3]);
+  assert.deepEqual(bodies.map(body => body.vote ?? body.read), [1, 0, false]);
+  const reopened = createOutbox({ storage: disk });
+  assert.equal((await enqueue(reopened)).sequence, 4);
 });
 
-test('flush stops at a 5xx (transient server issue), same as a network failure', async () => {
-  const storage = fakeStorage();
-  const request = fakeRequest([503]);
-  const outbox = createOutbox({ storage, request });
-  outbox.enqueue('/a', {});
-  await outbox.flush();
-  assert.equal(outbox.count, 1);
+test('unreadable acknowledgements retain the exact mutation for safe replay', async () => {
+  const box = createOutbox({ storage: storage(), request: async () => new Response('not json') });
+  const entry = await enqueue(box); await box.flush();
+  assert.equal(box.count, 1); assert.equal(box.project({ id: 1, vote: 0 }).vote, 1);
+  assert.equal(JSON.parse(entry.options.body).mutation.sequence, 1);
 });
 
-test('flush drops a 4xx (a real rejection, not a connectivity problem) and continues', async () => {
-  const storage = fakeStorage();
-  const request = fakeRequest([404, 200]);
-  const outbox = createOutbox({ storage, request });
-  outbox.enqueue('/gone', {});
-  outbox.enqueue('/fine', {});
-  await outbox.flush();
-  assert.equal(outbox.count, 0, 'the 404 was dropped, not left stuck at the head of the queue forever');
-  assert.equal(request.calls.length, 2);
-});
-
-test('a queue persists across separate createOutbox instances sharing storage (survives an app restart)', async () => {
-  const storage = fakeStorage();
-  const first = createOutbox({ storage, request: fakeRequest(['network-fail']) });
-  first.enqueue('/api/articles/1/vote', { method: 'POST', body: '{"vote":1}' });
-  await first.flush(); // fails, stays queued
-  assert.equal(first.count, 1);
-
-  // simulate reopening the app: a fresh outbox instance reading the same storage
-  const second = createOutbox({ storage, request: fakeRequest([200]) });
-  assert.equal(second.count, 1, 'picked up the entry queued by a previous session');
-  await second.flush();
-  assert.equal(second.count, 0);
-});
-
-test('concurrent flush() calls do not double-send', async () => {
-  const storage = fakeStorage();
-  const request = fakeRequest([200, 200]);
-  const outbox = createOutbox({ storage, request });
-  outbox.enqueue('/a', {});
-  outbox.enqueue('/b', {});
-  await Promise.all([outbox.flush(), outbox.flush()]);
-  assert.equal(request.calls.length, 2, 'the second concurrent flush() was a no-op, not a duplicate pass');
-});
-
-test('a corrupt or missing storage value is treated as an empty queue, not a crash', () => {
-  const storage = fakeStorage();
-  storage.setItem('rssmart_outbox', 'not json');
-  const outbox = createOutbox({ storage, request: fakeRequest([200]) });
-  assert.equal(outbox.count, 0);
+test('storage errors do not report successful persistence or erase corrupt data', async () => {
+  const disk = storage('corrupt'); const box = createOutbox({ storage: disk });
+  await assert.rejects(enqueue(box)); await box.flush();
+  assert.equal(disk.getItem(), 'corrupt'); assert.match(box.issue.message, /Cannot access/);
+  const full = createOutbox({ storage: { getItem: () => null, setItem: () => { throw new Error('quota'); } } });
+  await assert.rejects(enqueue(full), /quota/);
 });

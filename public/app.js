@@ -59,6 +59,10 @@ createApp({
       triagePos: 0,
       triageProcessed: 0,
       outboxCount: outbox.count, // votes/skips queued locally, not yet synced
+      outboxIssue: outbox.issue,
+      outboxCoordinatedTabs: outbox.coordinatedTabs,
+      feedbackIntent: {},
+      feedbackApplied: {},
       triageLoading: false,
       triageBusy: false,
       triageExpanded: false,
@@ -191,8 +195,12 @@ createApp({
     // actual reachability, so it can both under- and over-fire), and a
     // periodic fallback poll so a missed/wrong online event doesn't leave
     // votes stuck until the next unrelated trigger.
-    this.flushOutbox();
+    this.flushOutbox({ retryAuth: true });
     window.addEventListener('online', () => this.flushOutbox());
+    window.addEventListener('storage', () => {
+      this.outboxCount = outbox.count;
+      this.outboxIssue = outbox.issue;
+    });
     setInterval(() => this.flushOutbox(), OUTBOX_POLL_MS);
   },
 
@@ -256,7 +264,7 @@ createApp({
 
     async api(path, options) {
       const res = await fetch(path, options);
-      this.flushOutbox(); // fire-and-forget: a response at all proves connectivity right now
+      if (res.ok) this.flushOutbox({ retryAuth: true });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `${res.status} ${res.statusText}`);
@@ -264,39 +272,37 @@ createApp({
       return res.json();
     },
 
-    async flushOutbox() {
-      await outbox.flush();
+    async flushOutbox(options) {
+      const results = await outbox.flush(options);
       this.outboxCount = outbox.count;
+      this.outboxIssue = outbox.issue;
+      for (const { entry, data } of results) {
+        if ((this.feedbackApplied[entry.articleId] ?? 0) > entry.sequence) continue;
+        this.feedbackApplied[entry.articleId] = entry.sequence;
+        const visible = [...this.articles, ...this.triageQueue, this.readerArticle];
+        for (const article of visible) {
+          if (article?.id === data.id) Object.assign(article, outbox.project({ ...article, ...data }));
+        }
+      }
+      return results;
     },
 
-    /**
-     * Attempt a write; on success, hand the parsed response to onSuccess.
-     * On a real rejection (4xx) throw, same as api() -- that's not a
-     * connectivity problem. On a network failure or 5xx, apply onQueued's
-     * optimistic local update and queue the request in the outbox (see
-     * outbox.js) to replay later instead of blocking/erroring the caller.
-     */
+    // Persist first for every feedback surface. Local updates are applied
+    // only once persistence succeeds; acknowledgements may arrive later.
     async attemptOrQueue(path, options, { onSuccess, onQueued }) {
-      let res;
-      try {
-        res = await fetch(path, options);
-      } catch {
-        res = null;
-      }
-      if (res && res.ok) {
-        onSuccess(await res.json());
-        this.flushOutbox();
-      } else if (res && res.status < 500) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `${res.status} ${res.statusText}`);
-      } else {
-        onQueued();
-        outbox.enqueue(path, options);
-        this.outboxCount = outbox.count;
-      }
+      const entry = await outbox.enqueue(path, options);
+      this.feedbackIntent[entry.articleId] = entry.id;
+      onQueued();
+      this.outboxCount = outbox.count;
+      this.flushOutbox().then(results => {
+        if (this.feedbackIntent[entry.articleId] !== entry.id) return;
+        const saved = results.find(item => item.entry.id === entry.id);
+        if (saved) onSuccess(outbox.project(saved.data));
+      });
     },
 
     async reload() {
+      const feedbackRevision = outbox.revision;
       this.loading = true;
       this.error = null;
       this.expandedId = null;
@@ -307,7 +313,7 @@ createApp({
       this.cursor = null; // a reload is page 1: a continuation left over from the previous filter/sort state would pin the wrong window
       try {
         const data = await this.api(`/api/articles?${this.params(0)}`);
-        this.articles = data.articles;
+        this.articles = data.articles.map(article => outbox.project(article, feedbackRevision));
         this.total = data.total;
         this.cursor = data.nextCursor ?? null; // keyset continuation
       } catch (err) {
@@ -318,10 +324,11 @@ createApp({
     },
 
     async loadMore() {
+      const feedbackRevision = outbox.revision;
       this.loading = true;
       try {
         const data = await this.api(`/api/articles?${this.params(this.articles.length)}`);
-        this.articles.push(...data.articles);
+        this.articles.push(...data.articles.map(article => outbox.project(article, feedbackRevision)));
         this.total = data.total;
         this.cursor = data.nextCursor ?? null;
       } catch (err) {
@@ -467,13 +474,14 @@ createApp({
     // session; the while loop below just keeps walking the offset forward
     // until it finds a batch with something new, or genuinely runs out.
     async loadTriageBatch() {
+      const feedbackRevision = outbox.revision;
       this.triageLoading = true;
       try {
         let offset = 0;
         let queue = [];
         for (;;) {
           const data = await this.api(`/api/articles?${this.triageParams(offset)}`);
-          queue = data.articles.filter((a) => !this.triageSeen.has(a.id));
+          queue = data.articles.filter((a) => !this.triageSeen.has(a.id)).map(article => outbox.project(article, feedbackRevision));
           if (queue.length > 0 || data.articles.length === 0) break;
           offset += data.articles.length;
         }
@@ -816,13 +824,17 @@ createApp({
 
     async vote(article, vote) {
       try {
-        const updated = await this.api(`/api/articles/${article.id}/vote`, {
+        await this.attemptOrQueue(`/api/articles/${article.id}/vote`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ vote }),
+        }, {
+          onSuccess: updated => { Object.assign(article, updated); this.loadSidebarData(); },
+          onQueued: () => {
+            article.vote = vote;
+            if (vote !== 0) article.read_at ??= new Date().toISOString();
+          },
         });
-        Object.assign(article, updated); // vote, score and its components
-        this.loadSidebarData();
       } catch (err) {
         this.error = `Vote failed: ${err.message}`;
       }
@@ -830,13 +842,15 @@ createApp({
 
     async toggleRead(article) {
       try {
-        const updated = await this.api(`/api/articles/${article.id}/read`, {
+        const read = !article.read_at;
+        await this.attemptOrQueue(`/api/articles/${article.id}/read`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ read: !article.read_at }),
+          body: JSON.stringify({ read }),
+        }, {
+          onSuccess: updated => { article.read_at = updated.read_at; this.loadSidebarData(); },
+          onQueued: () => { article.read_at = read ? new Date().toISOString() : null; },
         });
-        article.read_at = updated.read_at;
-        this.loadSidebarData();
       } catch (err) {
         this.error = `Update failed: ${err.message}`;
       }

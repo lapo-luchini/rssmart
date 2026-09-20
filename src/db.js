@@ -228,6 +228,16 @@ const MIGRATIONS = [
   // means only queries that spell COALESCE(duplicate_of, id) use it —
   // which is precisely the shape those hot paths already use.
   "CREATE INDEX idx_articles_group ON articles(COALESCE(duplicate_of, id));",
+  // v22 — durable receipts for ordered browser vote/read retries. These
+  // cover the mutation protocol, not a complete history of legacy writes.
+  `CREATE TABLE feedback_receipts (
+    client_id TEXT NOT NULL,
+    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    operation TEXT NOT NULL CHECK (operation IN ('vote', 'read')),
+    value INTEGER NOT NULL,
+    PRIMARY KEY (client_id, article_id, sequence)
+  );`,
 ];
 
 /**
