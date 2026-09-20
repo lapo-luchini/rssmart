@@ -1052,22 +1052,35 @@ another yielding sweep. Topic statistics with vote decay expire at the
 next one-second clock bucket, even if no rows changed. No scoring weights,
 neighbor selection, embedding dimensions or formulas are changed.
 
+## HTML rendering boundary — 2026-09-20
+
+Feed, reader and legacy stored HTML pass through `sanitize-html` 2.17.7,
+using an explicit allowlist. Scripts, handlers, styles, frames, forms,
+SVG/MathML and unsafe URL schemes are removed. Common feed formatting,
+code, tables, links and HTTP(S) images remain supported; styles, IDs and
+unsupported embeds do not. Link targets are restricted and external links
+receive `noopener noreferrer`. This introduces a maintained parser-based
+security dependency; keep its lockfile and security updates current.
+
+Sanitization also runs immediately before both article HTML API responses,
+so protection does not depend on rewriting every legacy database row.
+Malformed markup and encoded-URL regressions are parsed with happy-dom as
+a test oracle only; happy-dom is not the sanitizer and these fixtures do
+not constitute a cross-browser security proof. Review real feed formatting
+when deploying the stricter allowlist.
+
+## Feed statistics cache — 2026-09-20
+
+The feed list uses the same connection-local database version token as
+scoring and expires once per second. Equal-count vote changes, feed edits
+and commits from other connections are visible on the next request.
+The 28-day publishing rate compares Julian timestamps at that same clock
+bucket, including ISO dates with `T`, and expires without requiring a write.
+This removes the repeated whole-archive COUNT/SUM scan previously used as
+a cache key; a changed token conservatively refreshes the aggregate query.
+
 ## Deferred ideas
 
-- Harden `sanitizeHtml` (`src/html.js`): it's a regex blocklist, not a
-  parser-based allowlist, so it's more exposed to malformed/nested-markup
-  evasion than a real sanitizer library. Every `v-html` in the app relies
-  on this same write-time sanitization. Investigated: DOMPurify silently
-  passed *everything* through unsanitized against happy-dom (the DOM
-  implementation this project carries) while working correctly against
-  jsdom, and its `isSupported` self-check reports `true` for happy-dom
-  regardless — no detectable signal to fall back on, so DOMPurify is
-  ruled out unless jsdom comes back. `sanitize-html` (string-based,
-  verified live to strip every tested payload) is the real option; the
-  design cost is moving from blocklist to allowlist — real feed HTML
-  needs checking against the declared tags/attributes first so
-  legitimate formatting doesn't quietly get stripped. Deferred, not
-  implemented.
 - Non-RSS sources (the feeds table would grow a `kind` column).
 - Bookmarkable filter state in the URL hash (tabs already have routes).
 - "Promote this note to guidelines" one-click from a reclassify note.

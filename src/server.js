@@ -15,6 +15,7 @@ import { pragma } from './db.js';
 import { proposeTopicMerges, applyTopicMerge } from './topicMerge.js';
 import { renderMetrics } from './metrics.js';
 import { getDbQueryMs } from './db.js';
+import { databaseVersion } from './dbVersion.js';
 import { log } from './log.js';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySession, passwordMatches, ipAllowed } from './auth.js';
@@ -705,16 +706,10 @@ export function createApp(db, config, commitHash, describe = '') {
   let feedListKey = null;
   let feedListCache = null;
   const feedList = () => {
-    const state = db.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM feeds) AS feedCount,
-        COALESCE((SELECT SUM(active) FROM feeds), 0) AS activeSum,
-        (SELECT COUNT(*) FROM articles) AS articleCount,
-        COALESCE((SELECT SUM(vote != 0) FROM articles), 0) AS voteCount,
-        COALESCE((SELECT SUM(read_at IS NULL) FROM articles), 0) AS unreadCount,
-        COALESCE((SELECT SUM(ok_count + error_count) FROM feeds), 0) AS fetchTotal
-    `).get();
-    const key = `${state.feedCount}:${state.activeSum}:${state.articleCount}:${state.voteCount}:${state.unreadCount}:${state.fetchTotal}`;
+    // Counts do not detect vote sign changes, edits, or read-state swaps.
+    // The clock also matters: per_week changes when an article ages out.
+    const now = Math.floor(Date.now() / 1000);
+    const key = `${databaseVersion(db)}:${now}`;
     if (feedListKey === key) return feedListCache;
     feedListKey = key;
     feedListCache = db.prepare(`
@@ -725,12 +720,12 @@ export function createApp(db, config, commitHash, describe = '') {
              COUNT(CASE WHEN a.read_at IS NULL THEN a.id END) AS unread,
              AVG(CASE WHEN a.vote != 0 THEN a.vote END) AS avg_vote,
              COALESCE(SUM(a.vote != 0), 0) AS votes,
-             ROUND(COUNT(CASE WHEN COALESCE(a.published_at, a.created_at)
-                                   >= datetime('now', '-28 days') THEN 1 END) / 4.0, 1)
+             ROUND(COUNT(CASE WHEN julianday(COALESCE(a.published_at, a.created_at))
+                                   >= julianday(?, 'unixepoch', '-28 days') THEN 1 END) / 4.0, 1)
                AS per_week
       FROM feeds f LEFT JOIN articles a ON a.feed_id = f.id
       GROUP BY f.id ORDER BY f.active DESC, COALESCE(f.title, f.url)
-    `).all();
+    `).all(now);
     return feedListCache;
   };
 
@@ -786,12 +781,6 @@ export function createApp(db, config, commitHash, describe = '') {
       .prepare(`UPDATE feeds SET ${updates.join(', ')} WHERE id = ?`)
       .run(...params, id);
     if (!changes) return c.json({ error: 'not found' }, 404);
-    // feedList()'s cache key is derived from row counts (feed/vote/unread
-    // totals etc.) so it happens to invalidate on an active toggle (it
-    // shifts activeSum) but never would on a title-only edit -- nothing
-    // counted changes. Force a fresh read rather than teach the key about
-    // every mutable column.
-    feedListKey = null;
     return c.json(feedList().find((f) => f.id === Number(id)));
   });
 
