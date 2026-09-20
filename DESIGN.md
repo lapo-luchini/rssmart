@@ -1154,6 +1154,23 @@ worse semantic ranking. Neither energy nor prefix agreement proves MRL
 training or preserves task performance. Compare each dimensionality on
 the same independent dedup/search/preference examples before selecting it.
 
+## Numeric configuration domains (2026-09-20)
+
+Configuration loading rejects non-finite numbers and invalid domains before
+workers, kNN buffers or timers start. Counts use nonnegative/positive safe
+integers as appropriate, bounded by JavaScript's array-length limit;
+Ollama timeout milliseconds also obey the signed 32-bit timer limit. Workers,
+attempts, input/storage character limits and configured embedding dimensions
+must be positive. Cosine thresholds lie in [-1,1]; ports allow 0 through
+65535 (0 asks the runtime to assign one). Scheduler intervals are positive
+and ordered min <= max, with fractional minutes supported. Weights are
+finite and nonnegative, their sum must stay finite, and need not equal one.
+Zero still disables kNN, vote decay, hot decay and debounce, or the existing
+fetch/link/topic-limit options; nullable/omitted optional keys retain their
+fallback behavior. Invalid fields are named in the startup error. This
+checks representation and semantic domains, not whether a chosen workload
+fits the machine's memory or the model's supported dimensions.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).

@@ -66,6 +66,54 @@ const SCHEMA = {
   },
 };
 
+// Semantic domains are checked at startup, before allocating kNN arrays,
+// starting workers or scheduling timers. Zero retains its existing disable/
+// neutral meaning where supported; fractional durations in days/years and
+// intervals in minutes remain valid. Counts fit JavaScript array lengths;
+// millisecond timers also stay below the runtime's signed 32-bit limit.
+const count = (min = 0) => ({ integer: true, min, max: 0xffffffff });
+const timer = { integer: true, min: 1, max: 0x7fffffff };
+const nonnegative = { min: 0 };
+const NUMERIC_DOMAINS = {
+  'ollama.embedDimensions': count(1),
+  'ollama.dedupEmbedDimensions': count(1),
+  'ollama.timeoutMs': timer,
+  'ollama.topicMergeTimeoutMs': timer,
+  'enrich.workers': count(1),
+  'enrich.maxAttempts': count(1),
+  'enrich.dupThreshold': { min: -1, max: 1 },
+  'enrich.dupWindowDays': nonnegative,
+  'enrich.fetchMinChars': count(),
+  'enrich.maxInputChars': count(1),
+  'enrich.maxArticleChars': count(1),
+  'enrich.maxSuggestedTopics': count(),
+  'enrich.linkExpandMaxChars': count(),
+  'cron.maxRunMs': { integer: true, min: 0, max: Number.MAX_SAFE_INTEGER },
+  'scheduler.minIntervalMin': { min: 0, exclusiveMin: true },
+  'scheduler.maxIntervalMin': { min: 0, exclusiveMin: true },
+  'scoring.knn': count(),
+  'scoring.voteDecayHalflifeYears': nonnegative,
+  'scoring.weights.topics': nonnegative,
+  'scoring.weights.embedding': nonnegative,
+  'scoring.weights.depth': nonnegative,
+  'scoring.weights.feed': nonnegative,
+  'scoring.recomputeDebounceSec': nonnegative,
+  'scoring.hotDecayPerDay': nonnegative,
+  'triage.roundRobinWindowDays': nonnegative,
+  'server.port': { integer: true, min: 0, max: 65535 },
+};
+
+function numericError(value, domain) {
+  if (!Number.isFinite(value)) return 'must be finite';
+  if (!domain) return null;
+  if (domain.integer && !Number.isSafeInteger(value)) return 'must be a safe integer';
+  if (value < domain.min || (domain.exclusiveMin && value === domain.min) || value > (domain.max ?? Infinity)) {
+    return `must be ${domain.exclusiveMin ? '>' : '>='} ${domain.min}` +
+      (domain.max === undefined ? '' : ` and <= ${domain.max}`);
+  }
+  return null;
+}
+
 /**
  * Validate a config object against SCHEMA. All keys in the schema are
  * required (the user copies config.example.yaml as a starting point).
@@ -109,6 +157,9 @@ function validateConfig(config, schema = SCHEMA, path = 'config') {
         if (!nullable) errors.push(`${full}: expected ${expected}, got null`);
       } else if (typeof val !== expected) {
         errors.push(`${full}: expected ${expected}, got ${typeof val}`);
+      } else if (expected === 'number') {
+        const error = numericError(val, NUMERIC_DOMAINS[full.slice('config.'.length)]);
+        if (error) errors.push(`${full}: ${error}`);
       }
     }
   }
@@ -143,11 +194,20 @@ export function loadConfig(path) {
   } catch (err) {
     throw new Error(`config file "${file}" is not valid YAML: ${err.message}`);
   }
-  if (!config || typeof config !== 'object') {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error(`config file "${file}" must contain a YAML mapping`);
   }
 
   const [errors, warnings] = validateConfig(config);
+  if (Number.isFinite(config.scheduler?.minIntervalMin) && Number.isFinite(config.scheduler?.maxIntervalMin) &&
+      config.scheduler.minIntervalMin > config.scheduler.maxIntervalMin) {
+    errors.push('config.scheduler.minIntervalMin: must be <= config.scheduler.maxIntervalMin');
+  }
+  const weights = Object.keys(SCHEMA.scoring.weights).map((key) => config.scoring?.weights?.[key]);
+  if (weights.length && weights.every((value) => typeof value === 'number') &&
+      !Number.isFinite(weights.reduce((sum, value) => sum + value, 0))) {
+    errors.push('config.scoring.weights: the sum must be finite');
+  }
   for (const w of warnings) console.warn(`config: ${w}`);
   if (errors.length) {
     throw new Error(`config validation failed:\n  ${errors.join('\n  ')}`);
