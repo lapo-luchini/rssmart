@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
 import { getReaderContent, recheckDuplicates, bufToVec, sampleText } from './enrich.js';
 import { stripHtml } from './html.js';
@@ -123,91 +124,55 @@ const FEED_LATEST_JOIN = `
   ) fl ON fl.feed_id = a.feed_id
 `;
 
-/**
- * Keyset pagination: columns+cursor values per sort mode. All sorts are
- * DESC, so "rows after the cursor" = row-value tuples strictly smaller
- * than the cursor's (SQLite supports row-value comparison with mixed
- * expressions, 3.15+). A final a.id tiebreak in every orderBy makes the
- * sort a total order — without it, equal-key rows can shuffle between
- * pages even when values are stable, so cursors alone wouldn't be
- * skip-free. NULL score_novelty sorts last under DESC; the 1e9 sentinel
- * (novelty lives in ~[0,1]) encodes it in both the keyset predicate and
- * the cursor, keeping rows at a NULL boundary contiguous.
- *
- * The hot/custom expressions embed their wall-clock term (julianday('now'))
- * inline: between two pages of one session it drifts by seconds, i.e. by
- * ~1e-7 of a day-unit at production decay rates — a row could flip
- * ordering across a page boundary in that window, but the drift is far
- * below the score differences that would matter for a triage list.
- * 'date-rr' (per-feed ROW_NUMBER is only stable within one query) and
- * semantic search (JS-computed cosine list) stay on OFFSET: date-rr is
- * triage-only and re-walks from offset 0 per session with its own seen-set.
- */
-const CURSOR_SENTINEL = 1e9;
 const dateKey = 'COALESCE(a.published_at, a.created_at)';
-const hotExpr = (decayPerDay) => `a.score - ${decayPerDay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at)))`;
 
-function cursorKeyExprs(w, hotDecayPerDay, customExprBody) {
-  // every tuple ends with a.id, the total-order tiebreak appended to each
-  // orderBy — the cursor always records it last
+// For linear decay, -decay*now is common to every candidate. Removing it
+// keeps the order but makes the key independent of the request time. Days
+// since the Unix epoch avoid adding the much larger Julian-day constant
+// to the interest score. SQL calculates this key AND the returned cursor:
+// reconstructing it with Date.parse/new Date introduces rounding/clock
+// differences that can repeat even an exactly tied row on the next page.
+const freshnessKey = (scoreExpr, decay) =>
+  `(${scoreExpr}) + ${decay} * (julianday(${dateKey}) - 2440587.5)`;
+
+/**
+ * One SQL tuple defines ORDER BY, the keyset predicate and cursor values.
+ * All keys sort DESC and end with id, so rows after the cursor have a
+ * strictly smaller tuple. A separate presence flag puts missing values
+ * last without a sentinel that might conflict with a real score. The
+ * remaining values are non-NULL, including on that missing-value shelf.
+ * date-rr and semantic search keep their existing OFFSET contract.
+ */
+function cursorKeyExprs(sortKey, rankExpr) {
+  if (sortKey === 'date') return { exprs: [dateKey, 'a.id'], types: ['date', 'id'] };
   return {
-    date: {
-      sql: '(COALESCE(a.published_at, a.created_at), a.id)',
-      vals: ['published_at'],
-    },
-    score: {
-      sql: '(COALESCE(a.score, 0), COALESCE(a.published_at, a.created_at), a.id)',
-      vals: ['score', 'published_at'],
-    },
-    novelty: {
-      sql: `(COALESCE(a.score_novelty, ${CURSOR_SENTINEL}), COALESCE(a.published_at, a.created_at), a.id)`,
-      vals: ['score_novelty', 'published_at'],
-    },
-    hot: {
-      sql: `(${hotExpr(hotDecayPerDay)}, COALESCE(a.published_at, a.created_at), a.id)`,
-      vals: ['hotScore', 'published_at'],
-    },
-    custom: {
-      sql: `((${customExprBody}) - ${w?.decay ?? 0} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))), COALESCE(a.published_at, a.created_at), a.id)`,
-      vals: ['custom', 'published_at'],
-    },
+    exprs: [`((${rankExpr}) IS NOT NULL)`, `COALESCE((${rankExpr}), 0)`, dateKey, 'a.id'],
+    types: ['present', 'number', 'date', 'id'],
   };
 }
 
-/** The cursor-encoded value for one row & key name. */
-function cursorValueFor(name, row, { w, hotDecayPerDay, customExprBody }) {
-  const jd = (t) => {
-    if (t === null || t === undefined) return jd(new Date().toISOString().slice(0, 19) + 'Z');
-    return Date.parse(t) / 86400000 + 2440587.5;
-  };
-  switch (name) {
-    case 'score': return row.score ?? 0;
-    case 'score_novelty': return row.score_novelty ?? CURSOR_SENTINEL;
-    case 'published_at': return row.published_at ?? row.created_at;
-    case 'hotScore': return (row.score ?? 0) - hotDecayPerDay * (jd(new Date()) - jd(row.published_at ?? row.created_at));
-    case 'custom': {
-      const base = (row.score_topics ?? 0) * w.topics + (row.score_embedding ?? 0) * w.embedding +
-        (row.score_depth ?? 0) * w.depth + (row.score_feed ?? 0) * w.feed + (row.score_bonus ?? 0) * w.bonus;
-      return base - w.decay * (jd(new Date()) - jd(row.published_at ?? row.created_at));
-    }
-    default: return null;
-  }
-}
-
-function decodeCursor(raw, sortKey, cursorDefs) {
-  let tuple;
+function decodeCursor(raw, def, scope) {
+  const invalid = { error: 'invalid or incompatible cursor; restart from the first page' };
+  let decoded;
   try {
-    tuple = JSON.parse(Buffer.from(String(raw), 'base64url').toString('utf8'));
+    if (raw.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(raw)) return invalid;
+    decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
   } catch {
-    return { error: 'bad cursor' };
+    return invalid;
   }
-  const def = cursorDefs[sortKey];
-  if (!Array.isArray(tuple) || tuple.length !== def.vals.length + 1 ||
-      !tuple.every((v) => v === null || ['number', 'string'].includes(typeof v)) ||
-      !Number.isInteger(tuple[tuple.length - 1])) {
-    return { error: 'cursor does not match this sort' };
+  if (decoded?.v !== 1 || decoded.scope !== scope ||
+      !Array.isArray(decoded.key) || decoded.key.length !== def.types.length) return invalid;
+  for (let i = 0; i < def.types.length; i++) {
+    const value = decoded.key[i];
+    const valid = {
+      present: value === 0 || value === 1,
+      number: typeof value === 'number' && Number.isFinite(value),
+      date: typeof value === 'string' && value.length > 0,
+      id: Number.isSafeInteger(value) && value > 0,
+    }[def.types[i]];
+    if (!valid) return invalid;
   }
-  return { tuple };
+  return { tuple: decoded.key };
 }
 
 /**
@@ -268,72 +233,58 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
       ` + COALESCE(a.score_bonus, 0) * ${w.bonus}`
     : null;
 
-  // "hot" blends interest with freshness (à la Hacker News) so an old
-  // article can't outrank a fresh one on score alone; computed at query
-  // time from published_at, so it's always current with no stored/stale
-  // column. orderParams must be spliced in right after the WHERE params —
-  // it's the only sort with a bound value of its own.
-  const customExpr = sortKey === 'custom'
-    ? `(${customExprBody}) - ${w.decay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))) DESC, `
-    : '';
-  const orderByBuilt = {
-    hot: 'a.score - ? * (julianday(\'now\') - julianday(COALESCE(a.published_at, a.created_at))) DESC, ' + BY_DATE,
-    score: 'a.score DESC, ' + BY_DATE,
-    date: BY_DATE,
-    'date-rr': dateRoundRobinSql(config.triage.roundRobinWindowDays),
-    // How different from everything voted on so far (see score_novelty's
-    // migration comment, src/db.js). NULLs (no embedding yet, or nothing
-    // voted on at all) sort last under SQLite's default DESC ordering —
-    // exactly where "no basis to judge novelty" belongs.
-    novelty: 'a.score_novelty DESC, ' + BY_DATE,
-    custom: (customExpr ?? '') + BY_DATE,
+  const rankExpr = {
+    hot: freshnessKey('a.score', config.scoring.hotDecayPerDay),
+    score: 'a.score',
+    novelty: 'a.score_novelty',
+    custom: w ? freshnessKey(customExprBody, w.decay) : null,
   }[sortKey];
   // The grouped view's group representative is ranked by whichever
   // ordering the list itself uses: under sort=custom, that's the
   // experimental weighted expression (groups then order by that winner).
   const rankOrderBy = sortKey === 'custom'
-    ? `(${customExprBody}) - ${w.decay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))) DESC, (a.duplicate_of IS NULL) DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC`
+    ? `${rankExpr} DESC, (a.duplicate_of IS NULL) DESC, ${dateKey} DESC, a.id DESC`
     : 'a.score DESC, (a.duplicate_of IS NULL) DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC';
-  const orderParams = sortKey === 'hot' ? [config.scoring.hotDecayPerDay] : [];
-
-  // deterministic final tiebreak: an id makes each sort a total order so a
-  // row can never appear on two pages, nor vanish between — a prerequisite
-  // for skip-free pagination
-  const orderBy = orderByBuilt + ', a.id DESC';
 
   // Keyset pagination replaces OFFSET on the sort modes whose key set is a
   // comparable tuple (cursorKeyExprs above). date-rr's per-feed ROW_NUMBER
   // is only stable within one query and semantic search ranks in JS — both
   // stay on OFFSET (date-rr is triage-only and re-walks from offset 0 per
   // session with its own seen-set as the guard).
-  const cursorMode = ['date', 'score', 'novelty', 'hot', 'custom'].includes(sortKey);
+  const cursorMode = !skipTextFilter && ['date', 'score', 'novelty', 'hot', 'custom'].includes(sortKey);
+  const cursorDef = cursorMode ? cursorKeyExprs(sortKey, rankExpr) : null;
+  const orderBy = cursorDef
+    ? cursorDef.exprs.map((expr) => `${expr} DESC`).join(', ')
+    : (sortKey === 'date-rr' ? dateRoundRobinSql(config.triage.roundRobinWindowDays) : BY_DATE) + ', a.id DESC';
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const grouped = dupes !== '1';
+  // Bind a versioned cursor to the effective selection and ranking rules.
+  // The digest is a compatibility check, not an authentication token: the
+  // query still enforces its own filters. Page size can change mid-walk.
+  const cursorScope = cursorMode
+    ? createHash('sha256').update(JSON.stringify([
+      sortKey, whereSql, params, grouped, grouped ? rankOrderBy : null, cursorDef.exprs,
+    ])).digest('base64url')
+    : null;
+  const cursorCols = cursorDef ? cursorDef.exprs.map((_, i) => `_cursor${i}`) : [];
+  const cursorSelect = cursorDef
+    ? cursorDef.exprs.map((expr, i) => `, ${expr} AS ${cursorCols[i]}`).join('')
+    : '';
   let keyWhere = null; // { sql, params }
-  if (cursorMode && cursor !== undefined && cursor !== null && cursor !== '') {
-    const cursorDefs = cursorKeyExprs(w, config.scoring.hotDecayPerDay, customExprBody);
-    const dec = decodeCursor(cursor, sortKey, cursorDefs);
+  if (cursor !== undefined && cursor !== null && cursor !== '') {
+    if (!cursorMode) return { error: 'cursor is unsupported for this sort; restart from the first page' };
+    const dec = decodeCursor(cursor, cursorDef, cursorScope);
     if (dec.error) return { error: dec.error };
-    if (sortKey === 'novelty' && dec.tuple[0] === CURSOR_SENTINEL) {
-      // the cursor row sat on the NULL shelf (nothing novel yet); rows after
-      // it stay there, ordered by date — non-position rows have already
-      // been passed, and a plain sentinel tuple would wrongly include them
-      keyWhere = {
-        sql: '(a.score_novelty IS NULL AND (COALESCE(a.published_at, a.created_at), a.id) < (?, ?))',
-        params: [dec.tuple[1], dec.tuple[2]],
-      };
-    } else {
-      const tuple = [...dec.tuple.slice(0, -1), dec.tuple[dec.tuple.length - 1]];
-      keyWhere = {
-        sql: `${cursorDefs[sortKey].sql} < (${tuple.map(() => '?').join(', ')})`,
-        params: tuple,
-      };
-    }
+    keyWhere = {
+      sql: `(${cursorDef.exprs.join(', ')}) < (${dec.tuple.map(() => '?').join(', ')})`,
+      params: dec.tuple,
+    };
   }
 
   return {
-    whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '',
+    whereSql,
     params,
-    orderParams,
-    grouped: dupes !== '1', // default: bundle repeats, show best of each group
+    grouped, // default: bundle repeats, show best of each group
     extraJoin: sortKey === 'date-rr' ? FEED_LATEST_JOIN : '',
     orderBy,
     lim: Math.min(Math.max(Number(limit) || 50, 1), 200),
@@ -341,8 +292,9 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
     off: Math.max(Number(offset) || 0, 0),
     cursorMode,
     keyWhere,
-    cursorKeyVals: cursorMode ? cursorKeyExprs(w, config.scoring.hotDecayPerDay, customExprBody)[sortKey].vals : null,
-    cursorCtx: cursorMode ? { w, hotDecayPerDay: config.scoring.hotDecayPerDay, customExprBody } : null,
+    cursorCols,
+    cursorSelect,
+    cursorScope,
   };
 }
 
@@ -439,8 +391,8 @@ export function createApp(db, config, commitHash, describe = '') {
 
     const parsed = articleQuery(query, config, { skipTextFilter: isSemantic });
     if (parsed.error) return c.json({ error: parsed.error }, 400);
-    const { whereSql, params, orderParams, grouped, extraJoin, orderBy, lim, off,
-            keyWhere, cursorMode, cursorKeyVals } = parsed;
+    const { whereSql, params, grouped, extraJoin, orderBy, lim, off,
+            keyWhere, cursorMode, cursorCols, cursorSelect, cursorScope } = parsed;
     const keysetJoin = keyWhere ? (whereSql ? ' AND ' : 'WHERE ') + keyWhere.sql : '';
     const keysetParams = keyWhere ? keyWhere.params : [];
     const pageSql = keyWhere ? 'LIMIT ?' : 'LIMIT ? OFFSET ?';
@@ -482,18 +434,16 @@ export function createApp(db, config, commitHash, describe = '') {
       : `SELECT a.id FROM articles a ${extraJoin} ${whereSql}${keysetJoin}
          ORDER BY ${orderBy} ${pageSql}`;
 
-    // bindings follow the text: WHERE params, then the keyset predicate's
-    // placeholders (it sits between the WHERE and the ORDER BY), then the
-    // ORDER BY's own params (hot's decay), then LIMIT/OFFSET
+    // Bindings follow the text: WHERE params, keyset predicate, LIMIT/OFFSET.
     const rows = db.prepare(`
       WITH winners AS (${winnersSql})
-      SELECT ${ARTICLE_COLUMNS}, ${VERSIONS_COL}
+      SELECT ${ARTICLE_COLUMNS}, ${VERSIONS_COL}${cursorSelect}
       FROM winners
       JOIN articles a ON a.id = winners.id
       JOIN feeds f ON f.id = a.feed_id
       ${extraJoin}
       ORDER BY ${orderBy}
-    `).all(...params, ...keysetParams, ...orderParams, lim, ...(keyWhere ? [] : [off]), ...orderParams);
+    `).all(...params, ...keysetParams, lim, ...(keyWhere ? [] : [off]));
 
     const { total } = db.prepare(grouped
       ? `SELECT COUNT(*) AS total FROM (
@@ -502,16 +452,21 @@ export function createApp(db, config, commitHash, describe = '') {
       : `SELECT COUNT(*) AS total FROM articles a ${whereSql}`
     ).get(...params);
 
-    // Next-page cursor for keyset modes: the last row's sort-tuple + id —
-    // opaque to the client, validated against the requested sort on replay
+    // Preserve the SQL values exactly; do not recreate their arithmetic or
+    // date conversion in JavaScript. Scores remain live across requests:
+    // a vote/recompute can still move rows; this is not a ranking snapshot.
     let nextCursor = null;
-    if (cursorMode && cursorKeyVals && rows.length) {
+    if (cursorMode && rows.length) {
       const last = rows.at(-1);
-      const vals = cursorKeyVals.map((name) => cursorValueFor(name, last, parsed.cursorCtx));
-      nextCursor = Buffer.from(JSON.stringify([...vals, last.id])).toString('base64url');
+      const key = cursorCols.map((name) => last[name]);
+      nextCursor = Buffer.from(JSON.stringify({ v: 1, scope: cursorScope, key })).toString('base64url');
     }
 
-    return c.json({ total, articles: rows.map(rowToArticle), nextCursor });
+    const articles = rows.map((row) => {
+      for (const name of cursorCols) delete row[name];
+      return rowToArticle(row);
+    });
+    return c.json({ total, articles, nextCursor });
   });
 
   app.get('/api/articles/:id/versions', (c) => {

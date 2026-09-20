@@ -25,6 +25,33 @@ day-one spec was retired for exactly that reason; it's in git history).
   counter stays after completion, so an explicit clear followed by another
   request cannot reuse the previous identity. Scoring remains asynchronous.
 
+- **List cursors use the exact SQL ordering tuple (2026-09-20).** A single
+  tuple drives `ORDER BY`, the strictly-smaller keyset predicate and the
+  values returned in the opaque cursor. A presence flag before each
+  numeric rank puts NULLs last and makes the finite-to-NULL boundary
+  traversable; replacing a missing novelty score with `+1e9` previously
+  contradicted DESC's NULL-last order. Date and id break ties. Hot/custom
+  use `score + decay * publicationDay`: linear decay's `-decay * now` is
+  common to every candidate and cannot affect the intended ordering.
+  Publication days are counted from the Unix epoch to avoid the large
+  Julian-day offset, and the cursor copies SQLite's computed values rather
+  than rebuilding them with a later JavaScript clock. This preserves
+  exact ties across page requests and clock changes. Group representatives
+  keep their existing selection rule (custom ranking for custom, score
+  otherwise), with the cursor predicate applied after representative
+  selection. Versioned cursors bind to the effective sort, filters,
+  grouping rule and weights, so changes require a new first page; the page
+  size can change. Legacy tuple cursors and malformed/incompatible cursors
+  return HTTP 400 with a restart instruction. The scope digest is a
+  compatibility check, not a signature or authorization mechanism.
+  **This remains a live list**, not a ranking snapshot: a vote, enrichment,
+  recompute or changed group representative can move an article across
+  an existing cursor. Marking already-returned articles read does not
+  shift the remaining stable keys, unlike OFFSET. Date round-robin and
+  semantic search keep OFFSET and reject keyset cursors. No schema change
+  is needed. `test/pagination.test.js` covers missing keys, ties, clock
+  changes, read churn, group representatives and incompatible cursors.
+
 - **Duplicate detection uses embeddings, not a generative prompt.** Cosine
   similarity of summary embeddings is cheap, deterministic, and needs no
   prompt engineering. The summary embedding is deliberately built from *our
