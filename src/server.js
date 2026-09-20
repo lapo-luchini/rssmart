@@ -4,7 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
-import { getReaderContent, recheckDuplicates, bufToVec, sampleText } from './enrich.js';
+import { getReaderContent, recheckDuplicates, bufToVec, sampleText, requestReclassification } from './enrich.js';
 import { stripHtml, sanitizeHtml } from './html.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
@@ -621,13 +621,7 @@ export function createApp(db, config, commitHash, describe = '') {
     }
     // full_content is cleared so the source text is re-fetched and
     // re-judged too — reclassify doubles as "try this article again".
-    const { changes } = db.prepare(`
-      UPDATE articles
-      SET status = 'pending', enrich_attempts = 0, enrich_priority = 1,
-          full_content = NULL,
-          enrich_note = COALESCE(NULLIF(TRIM(?), ''), enrich_note)
-      WHERE id = ?
-    `).run(note ?? '', id);
+    const { changes } = requestReclassification(db, id, note ?? '');
     if (!changes) return c.json({ error: 'not found' }, 404);
     const row = db
       .prepare('SELECT id, status, enrich_note FROM articles WHERE id = ?')
