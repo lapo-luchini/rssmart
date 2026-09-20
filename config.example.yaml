@@ -7,25 +7,23 @@ ollama:
   url: http://localhost:11434   # your network-local Ollama instance
   chatModel: gemma4:26b-mlx  # any instruct model, for topics + summaries
   embedModel: leoipulsar/harrier-0.6b  # text embeddings: taste kNN + search
-  # Changing embedModel (or embedDimensions below) is safe: the change is
-  # detected on the next run, stored vectors are cleared and articles are
-  # re-embedded automatically.
+  # Changing the model, dimensions or document prefix invalidates the
+  # affected vectors on the next run. They refill through the normal queue;
+  # this is a gradual rebuild, so keep a backup and check queue completion.
   # Retrieval models use task prefixes; set them per your model's card
   # (qwen3: plain documents, instructed queries; nomic v1.5 would want
   # document: "search_document: " and query: "search_query: ").
-  embedDimensions: 512  # optional Matryoshka truncation — halves storage
-                        # on top of float16, little accuracy loss, only
-                        # if your model supports it (qwen3-embedding does;
-                        # harrier-0.6b documents no MRL, but measured live
-                        # its 512-dim taste-kNN quality matches its native
-                        # 1024; check any other model's card before assuming)
+  embedDimensions: 512  # optional dimensionality reduction; halves vector
+                        # storage versus 1024 dims at the same precision.
+                        # Check the encoder contract and compare temporal
+                        # ranking on the intended task. Prefix agreement
+                        # and vote clustering do not establish that result.
   dedupEmbedModel: qwen3-embedding:0.6b # optional second embedding model for
-                          # the summary/dedup vectors only. Benchmarked live
-                          # (DESIGN.md, 2026-08): harrier clusters your votes
-                          # better (kNN AUC 0.64 vs 0.55) but is worse at
-                          # duplicate detection, and — lacking MRL — degrades
-                          # further when truncated; qwen3-embedding is the
-                          # better dedup model. Omit to use embedModel for
+                          # the summary/dedup vectors only. Historical
+                          # measurements in DESIGN.md motivated separate
+                          # spaces; rerun with audited pair labels and the
+                          # corrected sampler before drawing new quality
+                          # conclusions. Omit to use embedModel for
                           # everything. NOTE: it needs ~2x the per-vector
                           # bytes only if its dims differ (see
                           # dedupEmbedDimensions below).
