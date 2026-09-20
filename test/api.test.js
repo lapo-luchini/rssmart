@@ -697,9 +697,21 @@ test('topics, feeds and stats endpoints', async () => {
   assert.equal(feeds.body.find((f) => f.id === 1).articles, 6);
 
   const stats = await get('/api/stats');
+  // read is stateful (earlier tests' votes/read toggles leave read_at set:
+  // retracting a vote deliberately does not un-read) — pinned against the
+  // db instead of a hard number
+  const expectedRead = db.prepare('SELECT COUNT(*) c FROM articles WHERE read_at IS NOT NULL').get().c;
+  const expectedVoted = db.prepare('SELECT COUNT(*) c FROM articles WHERE vote != 0').get().c;
+  const expectedUp = db.prepare('SELECT COUNT(*) c FROM articles WHERE vote > 0').get().c;
+  const expectedDown = db.prepare('SELECT COUNT(*) c FROM articles WHERE vote < 0').get().c;
   assert.deepEqual(
-    { total: stats.body.total, duplicates: stats.body.duplicates, pending: stats.body.pending },
-    { total: 6, duplicates: 1, pending: 1 },
+    {
+      total: stats.body.total, duplicates: stats.body.duplicates, pending: stats.body.pending,
+      read: stats.body.read, voted: stats.body.voted,
+      votesUp: stats.body.votesUp, votesDown: stats.body.votesDown,
+    },
+    { total: 6, duplicates: 1, pending: 1, read: expectedRead, voted: expectedVoted,
+      votesUp: expectedUp, votesDown: expectedDown },
   );
 });
 

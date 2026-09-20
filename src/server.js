@@ -872,6 +872,10 @@ export function createApp(db, config, commitHash, describe = '') {
     return c.json(db.prepare(`
       SELECT COUNT(*) AS total,
              COALESCE(SUM(read_at IS NULL), 0) AS unread,
+             COALESCE(SUM(read_at IS NOT NULL), 0) AS read,
+             COALESCE(SUM(vote != 0), 0) AS voted,
+             COALESCE(SUM(vote > 0), 0) AS votesUp,
+             COALESCE(SUM(vote < 0), 0) AS votesDown,
              COALESCE(SUM(status = 'pending'), 0) AS pending,
              COALESCE(SUM(status = 'error'), 0) AS errors,
              COALESCE(SUM(duplicate_of IS NOT NULL), 0) AS duplicates

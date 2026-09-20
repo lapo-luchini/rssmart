@@ -81,6 +81,45 @@ body {
 }
 .wire-stats:hover { color: var(--ink); }
 
+/* Full-stats popup (click on the header line): compact card, keeps the
+   header line itself short for small screens */
+.stats-pop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: start center;
+  padding: 4rem 1rem;
+  background: rgba(0, 0, 0, 0.25);
+}
+.stats-card {
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+  padding: 0.8rem 1rem 1rem;
+  min-width: 16rem;
+  max-width: 90vw;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+.stats-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.stats-head .spacer { flex: 1; }
+.stats-grid {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+.stats-grid dt { color: var(--muted); }
+.stats-grid dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.stats-grid .muted { color: var(--muted); }
+
 /* ---- toolbar ----------------------------------------------------------- */
 
 .toolbar {

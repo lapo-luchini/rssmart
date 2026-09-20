@@ -79,6 +79,7 @@ createApp({
       manualMerge: { from: '', to: '' },
       manualMergeNotice: '',
       stats: null,
+      showStats: false, // the full-stats popup (click on the wire-stats line)
       expandedId: null,
       expandedVersions: {},
       selectedVersion: {},
@@ -637,6 +638,13 @@ createApp({
         } else if ((e.key === 'o' || e.key === 'O') && this.readerArticle.url) {
           e.preventDefault();
           window.open(this.readerArticle.url, '_blank', 'noopener');
+        }
+        return;
+      }
+      if (this.showStats) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          this.showStats = false;
         }
         return;
       }
