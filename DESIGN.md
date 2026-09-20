@@ -952,6 +952,44 @@ Two paths, with very different scaling:
   the fused JS pass - the next ladder rung if this ever matters is
   batching or moving those, not more kernel tuning.
 
+## Mastodon forward cursors — 2026-09-20
+
+Status IDs stay opaque strings, including when they exceed JavaScript's
+integer precision. The home timeline is returned in server order,
+newest-first; each page is reversed for ingestion, and its first wire ID
+is the next `min_id`. No client-side ID ordering is assumed. See the
+[Mastodon ID and pagination guidelines](https://docs.joinmastodon.org/api/guidelines/)
+and [home timeline API](https://docs.joinmastodon.org/methods/timelines/).
+This uses the public status IDs of the home endpoint, not cursors derived
+from a different endpoint's related entities.
+
+With an existing cursor, fetch at most ten pages per run, continuing after
+short pages (a server may filter results or impose a smaller limit). Stop
+on an empty page; fail on a repeated cursor instead of looping or claiming
+success. Return deduplicated posts oldest-first. Without a cursor, ingest
+one latest page, up to 40 posts; initial synchronization deliberately does
+not backfill historical posts. Further runs walk forward from that seed.
+
+`meta.mastodon_watermark:<feed id>` stores the exact last returned ID in
+the same transaction as the articles and feed success counters. It does
+not depend on local article IDs or retention. Fetch or insert failure
+leaves that checkpoint unchanged. Concurrent fetches compare the saved
+checkpoint again inside the write transaction; a stale fetch fails and
+retries on the next scheduled run, rather than replacing a newer marker.
+This adds no schema migration. Existing feeds without a marker use their
+last inserted Mastodon GUID once, as before, safely replaying duplicates.
+It cannot reconstruct posts already skipped before that legacy cursor;
+historical gap repair needs an explicit earlier cursor/backfill policy.
+Compatibility still requires the server to implement forward `min_id`
+and newest-first page order; IDs themselves need not be numeric.
+
+The regression fixture uses 100 new IDs around `115000000000000001` and
+one-page ingestion budgets: additions are `[40, 40, 20, 0]`, with every ID
+stored once. Other fixtures cover opaque IDs, bounded resume, overlapping
+and short pages, initial/empty sync, legacy replay, retention, no-progress
+responses, transaction rollback and competing fetches. They use mocked
+HTTP and in-memory SQLite; no live timeline is part of the test gate.
+
 ## Deferred ideas
 
 - Harden `sanitizeHtml` (`src/html.js`): it's a regex blocklist, not a

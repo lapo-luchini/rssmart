@@ -160,12 +160,17 @@ export async function ingestFeed(db, feed, parser) {
  * with the poster's display name as author.
  */
 export async function ingestMastodonFeed(db, feed, mastodon) {
+  const cursorKey = `mastodon_watermark:${feed.id}`;
+  const readCursor = db.prepare('SELECT value FROM meta WHERE key = ?');
+  const savedCursor = readCursor.get(cursorKey)?.value ?? null;
+  // One-time fallback for databases predating explicit watermarks. The
+  // last inserted GUID can replay some posts; INSERT OR IGNORE handles it.
   const sinceRow = db.prepare(`
     SELECT guid FROM articles WHERE feed_id = ? ORDER BY id DESC LIMIT 1
   `).get(feed.id);
-  const sinceId = sinceRow?.guid?.startsWith('mastodon:')
+  const sinceId = savedCursor ?? (sinceRow?.guid?.startsWith('mastodon:')
     ? sinceRow.guid.slice(9)
-    : null;
+    : null);
 
   const insert = db.prepare(`
     INSERT OR IGNORE INTO articles
@@ -177,6 +182,11 @@ export async function ingestMastodonFeed(db, feed, mastodon) {
   let added = 0;
 
   db.transaction(() => {
+    // Another fetch may have completed while this one awaited the network.
+    // Opaque IDs cannot be compared to merge cursors: retry from its marker.
+    if ((readCursor.get(cursorKey)?.value ?? null) !== savedCursor) {
+      throw new Error('Mastodon watermark changed during fetch; retry');
+    }
     for (const post of posts) {
       const { changes } = insert.run(
         feed.id,
@@ -188,6 +198,13 @@ export async function ingestMastodonFeed(db, feed, mastodon) {
         compressText(sanitizeHtml(post.content)),
       );
       added += changes;
+    }
+    const nextId = posts.at(-1)?.id ?? sinceId;
+    if (nextId != null) {
+      db.prepare(`
+        INSERT INTO meta (key, value) VALUES (?, ?)
+        ON CONFLICT (key) DO UPDATE SET value = excluded.value
+      `).run(cursorKey, nextId);
     }
     db.prepare(`
       UPDATE feeds SET
