@@ -1305,6 +1305,90 @@ debounce request is left intact. This defines a refresh policy for stored
 scores; it does not change the decay formula or make every score continuously
 current between sweeps.
 
+## Experimental local kernel shadow scorer — 2026-09-20
+
+`src/kernelScore.js` and `scripts/score-kernel-shadow.js` provide an isolated
+experiment using the existing text embeddings and observed votes. They do
+not change production scoring, configuration defaults, APIs or the weights
+of the existing scoring axes. There is no training step, model call,
+logistic regression or automatic parameter optimization. The method is a
+local, regularized average of neighboring votes, not a recommendation to
+deploy a new ranker.
+
+For each candidate, omit its own article ID and select the `k` most similar
+training articles by clipped dot product, before applying vote decay. Ties
+preserve the training input order; the CLI uses article ID ascending.
+For similarity `s`, vote `v`, vote age in years `a` and half-life `h`:
+
+```
+kernel = max(0, (s - tau) / (1 - tau)) ** exponent
+weight = kernel * 2 ** (-max(0, a) / h)
+score  = sum(weight * v/2) / (lambda + sum(weight))
+```
+
+The prior has value zero and mass `lambda`. Votes are signed integers
+`-2, -1, 1, 2`. Missing vote time falls back to creation time; future times
+have age zero. A year is 365.25 days. Half-life zero/null disables decay.
+`lambda` and exponent must be positive; `k=0` returns the zero prior.
+The pure batch API takes an explicit Unix `now` in seconds:
+
+```
+scoreKernel(
+  [{ id, vote, vector, voteTime, createdTime }, ...],
+  [{ id, vector }, ...],
+  { now, tau: .2, k: 15, exponent: 1, lambda: 1, halfLifeYears: 1.5 }
+)
+```
+
+Those five parameter values are frozen experimental defaults, independent
+of production settings. All are emitted in the JSON, along with the exact
+evaluation time. A repeatable small run on a consistent database backup is:
+
+```sh
+node scripts/score-kernel-shadow.js --config config.yaml \
+  --now 2026-09-20T00:00:00Z --tau .2 --k 15 --exponent 1 \
+  --lambda 1 --half-life 1.5 --limit 100 > kernel-shadow.json
+```
+
+The default selection is the latest 100 unvoted articles having text
+embeddings, ordered by `created_at DESC, id DESC`. Use `--all` for all such
+articles or repeat `--candidate-id ID` for a specific unvoted set. These
+selection modes are exclusive. The JSON retains selection order, rather
+than implying a production feed order. CPU cost is approximately
+`candidates * training * dimensions`, plus a neighborhood sort per
+candidate; `--all` may be expensive. No score is persisted.
+
+The CLI opens only through `openReadOnlyDb`, rejects incompatible schemas,
+and copies metadata/training/candidates within one read transaction before
+closing the database. It never migrates or calls a model. Voted articles
+without vectors stop the experiment; unvoted articles without vectors are
+counted as excluded candidates. Every used vector must have one common
+dimension, finite values and squared norm within .02 of one, allowing
+float16 rounding. Vectors are not renormalized. Unselected vectors are not
+validated. Unknown or mismatched text-space metadata stops execution.
+Legacy `model::dimensions::f16` metadata is explicitly labelled as legacy:
+it cannot verify past prefixes/preprocessing. Matching version-2 metadata
+also records an assertion, not per-row proof or an immutable model digest.
+
+Output contains article IDs, signed scores, support and neighbor
+contributions; it omits titles, bodies, credentials and stored scores. A
+SHA-256 fingerprint covers the selected raw vectors, votes, timestamps,
+IDs and space metadata, not the whole database. Support includes weight
+mass and `effectiveNeighbors = sum(w)^2 / sum(w^2)`, computed with rescaling
+to avoid tiny-weight underflow. These describe evidence concentration,
+not confidence intervals or probabilities. No-support zero and conflicting-
+evidence zero are distinguishable through these fields. Each neighbor's
+`scoreContribution` sums to the final score.
+
+Tests include both useful and adverse examples. A close positive and distant
+negative retain different influence instead of cancelling through separate
+sign normalization. Conversely, many moderately similar positives can
+overwhelm one very close negative. Event duplicates, selection/exposure
+bias and correlated votes are not corrected. The tool does not establish
+superiority: that requires a frozen prospective/temporal evaluation with
+the same training history, candidates and freshly recomputed baseline,
+including checks for duplicate/event leakage and new-user or topic shifts.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).
