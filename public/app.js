@@ -95,6 +95,11 @@ createApp({
       readerSource: null,
       readerLoading: false,
       loading: false,
+      listRequestId: 0,
+      listController: null,
+      listLoadedKey: null,
+      triageRequestId: 0,
+      triageController: null,
       error: null,
       prefByTopic: {},
       articlesByTopic: {},
@@ -154,6 +159,7 @@ createApp({
 
   watch: {
     q() {
+      this.invalidateList();
       clearTimeout(this.searchTimer);
       clearTimeout(this.customTimer);
       this.searchTimer = setTimeout(() => this.reload(), 300);
@@ -211,6 +217,7 @@ createApp({
     // over the stored per-signal components (1.0 = the configured weight).
     setCustomWeight(axis, value) {
       this.customWeights[axis] = Number(value);
+      this.invalidateList();
       clearTimeout(this.customTimer);
       this.customTimer = setTimeout(() => this.reload(), 300);
     },
@@ -301,8 +308,26 @@ createApp({
       });
     },
 
+    invalidateList() {
+      this.listRequestId++;
+      this.listController?.abort();
+      this.loading = false;
+    },
+
+    listQueryKey() {
+      const params = this.params(0);
+      params.delete('cursor');
+      params.delete('offset');
+      return `${this.panel ?? ''}:${params}`;
+    },
+
     async reload() {
       const feedbackRevision = outbox.revision;
+      this.invalidateList();
+      const requestId = this.listRequestId;
+      const query = this.listQueryKey();
+      const current = () => requestId === this.listRequestId && query === this.listQueryKey();
+      const controller = this.listController = new AbortController();
       this.loading = true;
       this.error = null;
       this.expandedId = null;
@@ -312,29 +337,38 @@ createApp({
       this.shownOriginal = {};
       this.cursor = null; // a reload is page 1: a continuation left over from the previous filter/sort state would pin the wrong window
       try {
-        const data = await this.api(`/api/articles?${this.params(0)}`);
+        const data = await this.api(`/api/articles?${this.params(0)}`, { signal: controller.signal });
+        if (!current()) return;
         this.articles = data.articles.map(article => outbox.project(article, feedbackRevision));
         this.total = data.total;
         this.cursor = data.nextCursor ?? null; // keyset continuation
+        this.listLoadedKey = query;
       } catch (err) {
-        this.error = `Cannot load articles: ${err.message}`;
+        if (current() && err.name !== 'AbortError') this.error = `Cannot load articles: ${err.message}`;
       } finally {
-        this.loading = false;
+        if (current()) this.loading = false;
       }
     },
 
     async loadMore() {
       const feedbackRevision = outbox.revision;
+      if (this.loading) return;
+      const query = this.listQueryKey();
+      if (query !== this.listLoadedKey) return this.reload();
+      const requestId = ++this.listRequestId;
+      const controller = this.listController = new AbortController();
+      const current = () => requestId === this.listRequestId && query === this.listQueryKey();
       this.loading = true;
       try {
-        const data = await this.api(`/api/articles?${this.params(this.articles.length)}`);
+        const data = await this.api(`/api/articles?${this.params(this.articles.length)}`, { signal: controller.signal });
+        if (!current()) return;
         this.articles.push(...data.articles.map(article => outbox.project(article, feedbackRevision)));
         this.total = data.total;
         this.cursor = data.nextCursor ?? null;
       } catch (err) {
-        this.error = `Cannot load articles: ${err.message}`;
+        if (current() && err.name !== 'AbortError') this.error = `Cannot load articles: ${err.message}`;
       } finally {
-        this.loading = false;
+        if (current()) this.loading = false;
       }
     },
 
@@ -403,6 +437,8 @@ createApp({
     },
 
     setView(v) {
+      this.triageRequestId++;
+      this.triageController?.abort();
       this.panel = null;
       this.view = v;
       this.sort = v === 'interesting' ? 'hot' : v === 'explore' ? 'novelty' : v === 'custom' ? 'custom' : 'date';
@@ -411,6 +447,9 @@ createApp({
     },
 
     openPanel(name) {
+      this.invalidateList();
+      this.triageRequestId++;
+      this.triageController?.abort();
       this.panel = name;
       this.feedNotice = '';
       this.guidelinesNotice = '';
@@ -432,8 +471,9 @@ createApp({
     // (esc) returns to this same filtered view, since starting it never
     // touches view/topic/feedId/etc. themselves, only which panel is shown.
     triageThisView() {
-      this.startTriage('filtered');
+      this.invalidateList();
       this.panel = 'triage';
+      this.startTriage('filtered');
       this.feedNotice = '';
       this.guidelinesNotice = '';
       this.syncHash();
@@ -475,12 +515,20 @@ createApp({
     // until it finds a batch with something new, or genuinely runs out.
     async loadTriageBatch() {
       const feedbackRevision = outbox.revision;
+      const requestId = ++this.triageRequestId;
+      this.triageController?.abort();
+      const controller = this.triageController = new AbortController();
+      const panel = this.panel;
+      const query = `${this.triageScope}:${this.triageParams(0)}`;
+      const current = () => requestId === this.triageRequestId && panel === this.panel &&
+        query === `${this.triageScope}:${this.triageParams(0)}`;
       this.triageLoading = true;
       try {
         let offset = 0;
         let queue = [];
         for (;;) {
-          const data = await this.api(`/api/articles?${this.triageParams(offset)}`);
+          const data = await this.api(`/api/articles?${this.triageParams(offset)}`, { signal: controller.signal });
+          if (!current()) return;
           queue = data.articles.filter((a) => !this.triageSeen.has(a.id)).map(article => outbox.project(article, feedbackRevision));
           if (queue.length > 0 || data.articles.length === 0) break;
           offset += data.articles.length;
@@ -489,9 +537,9 @@ createApp({
         this.triagePos = 0;
         this.collapseTriageContent();
       } catch (err) {
-        this.error = `Cannot load triage queue: ${err.message}`;
+        if (current() && err.name !== 'AbortError') this.error = `Cannot load triage queue: ${err.message}`;
       } finally {
-        this.triageLoading = false;
+        if (current()) this.triageLoading = false;
       }
     },
 

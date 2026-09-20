@@ -71,6 +71,14 @@ day-one spec was retired for exactly that reason; it's in git history).
   There is no automatic destructive queue reset. Clearing browser storage
   loses locally pending intentions; server receipts do not back them up.
 
+- **2026-09-20: only the current query can update list state.** Reload,
+  pagination and triage batches capture a generation and query identity;
+  result, error, cursor and loading changes are conditional on that identity.
+  AbortController also cancels superseded work but is not the correctness
+  guard. Search/slider edits invalidate at the start of the debounce period,
+  and a page continuation is accepted only for the query that loaded its
+  first page. Overlapping loadMore calls share no pagination window.
+
 - **2026-09-20: custom sliders multiply stored contributions.** The stored
   score components already contain their configured weights. Neutral custom
   multipliers and reset values are therefore 1, while freshness remains the
