@@ -12,6 +12,7 @@
 import { bufToVec, existingTopicNames } from './enrich.js';
 import { createDotBatcher } from './wasmDot.js';
 import { markExpectedStall, clearExpectedStall } from './lagWatchdog.js';
+import { databaseVersion } from './dbVersion.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -74,21 +75,15 @@ function makePrefExpr(halflifeYears) {
  * anyway and `normalizeTopics` has no restriction - `suggested: false` just
  * means it isn't *offered* as a suggestion, not that it's unusable.
  */
-// Cache for topicPrefs — version key detects vote, enrichment, and
-// merge changes so the aggregation query only runs when needed.
-let _topicPrefsKey = null;
-let _topicPrefsCache = null;
+// Isolated by connection, invalidated by local/remote writes. Decayed
+// statistics also expire each second even when no database row changed.
+const _topicPrefsCaches = new WeakMap();
 
 export function topicPrefs(db, maxSuggested, halflifeYears) {
-  const state = db.prepare(`
-    SELECT COALESCE(SUM(vote != 0), 0) AS voteCount,
-           COALESCE(SUM(status = 'enriched'), 0) AS enrichedCount,
-           (SELECT COUNT(*) FROM topic_aliases) AS aliasCount
-    FROM articles
-  `).get();
-  const key = `${state.voteCount}:${state.enrichedCount}:${state.aliasCount}:${maxSuggested ?? ''}:${halflifeYears ?? ''}`;
-
-  if (_topicPrefsKey === key) return _topicPrefsCache;
+  const timeKey = halflifeYears ? Math.floor(Date.now() / 1000) : '';
+  const key = `${databaseVersion(db)}:${maxSuggested ?? ''}:${halflifeYears ?? ''}:${timeKey}`;
+  const cached = _topicPrefsCaches.get(db);
+  if (cached?.key === key) return cached.rows;
 
   const decayedVote = decayedVoteExpr('a', halflifeYears);
   const rows = db.prepare(`
@@ -116,8 +111,7 @@ export function topicPrefs(db, maxSuggested, halflifeYears) {
         return rows.map((r) => ({ ...r, suggested: suggested.has(r.name) }));
       })();
 
-  _topicPrefsKey = key;
-  _topicPrefsCache = result;
+  _topicPrefsCaches.set(db, { key, rows: result });
   return result;
 }
 
@@ -223,23 +217,29 @@ function knnTerms(pairSims, voted, rowId, k, scratches, rowTopics, topicMap) {
   };
 }
 
-function votedArticles(db, halflifeYears) {
+function votedArticles(db) {
   const rows = db.prepare(`
     SELECT id, vote, text_embedding, COALESCE(voted_at, created_at) AS vote_time
     FROM articles
     WHERE vote != 0 AND text_embedding IS NOT NULL
   `).all();
 
-  if (!halflifeYears) {
-    return rows.map((r) => ({ id: r.id, vote: r.vote, vec: bufToVec(r.text_embedding) }));
-  }
+  return rows.map((r) => ({
+    id: r.id, vote: r.vote, voteTime: Date.parse(r.vote_time), vec: bufToVec(r.text_embedding),
+  }));
+}
 
+// Vectors are expensive to decode/upload; decay is cheap and belongs to
+// the prediction time, not to the last cache rebuild. Never mutate a
+// cached vote: a yielding sweep may still own its older snapshot.
+function decayVoted(voted, halflifeYears) {
+  if (!halflifeYears) return voted;
   const now = Date.now();
   const ln2OverHalflifeMs = Math.LN2 / (halflifeYears * 365.25 * 86400000);
-  return rows.map((r) => {
-    const age = now - new Date(r.vote_time).getTime();
+  return voted.map((r) => {
+    const age = now - r.voteTime;
     const decay = age > 0 ? Math.exp(-ln2OverHalflifeMs * age) : 1;
-    return { id: r.id, vote: r.vote * decay, vec: bufToVec(r.text_embedding) };
+    return { ...r, vote: r.vote * decay };
   });
 }
 
@@ -280,23 +280,14 @@ function makeVotedBatcher(voted, reuse) {
 // candidate buffer behind the batcher is large (voted x dims floats of WASM
 // linear memory) and decoding every voted article's embedding blob isn't
 // free either, so the snapshot is kept alive across uses and its freshness
-// is validated against a cheap aggregate over the exact rows votedArticles
-// selects: membership (COUNT), raw vote values (SUM(vote)), latest vote time
-// (MAX over COALESCE(voted_at, created_at)), and total embedding bytes
-// (SUM(LENGTH(text_embedding)), which changes when vectors are written or
-// cleared — including by another process, e.g. cron re-embedding against a
-// live serve's db). Any change triggers a rebuild that hands the old batcher
+// is validated against SQLite's local-write/remote-commit counters. Any
+// change triggers a rebuild that hands the old batcher
 // to createDotBatcher as `reuse`, recycling the still-live buffer instead of
 // freeing and reallocating it.
 //
-// Known blind spots, both self-correcting on any later change and no worse
-// than the status quo this replaces (the single-score cache's dirty flag was
-// only set by same-process votes): two articles swapping exact vote values
-// between checks (COUNT, SUM and MAX all unchanged), and a voted article
-// whose embedding is re-written to different values of the same byte length
-// (the reclassify + re-enrich path). Vote decay is computed once per
-// rebuild — drift while the key stays equal is bounded by the debounce
-// window against multi-year halflives, i.e. negligible.
+// This conservatively rebuilds after unrelated writes too, but cannot miss
+// same-sized vector replacements or vote swaps with unchanged aggregates.
+// Only raw votes/vectors are cached; decay is evaluated for each prediction.
 //
 // `sweepActive` leases the cache to a full sweep: a sweep spans awaits, so a
 // vote (and its recomputeOneScore) can land mid-sweep and must not read the
@@ -306,21 +297,13 @@ function makeVotedBatcher(voted, reuse) {
 const _votedCaches = new WeakMap(); // db -> { voted, batcher, halflife, key, sweepActive }
 
 function votedSetKey(db) {
-  const k = db.prepare(`
-    SELECT COUNT(*) AS c,
-           COALESCE(SUM(vote), 0) AS sv,
-           COALESCE(MAX(COALESCE(voted_at, created_at)), '') AS mt,
-           COALESCE(SUM(LENGTH(text_embedding)), 0) AS sl
-    FROM articles
-    WHERE vote != 0 AND text_embedding IS NOT NULL
-  `).get();
-  return `${k.c}:${k.sv}:${k.mt}:${k.sl}`;
+  return databaseVersion(db);
 }
 
 function rebuildVotedState(state, db, halflifeYears, key) {
   // Build fully before assigning: a throw mid-rebuild (e.g. closed db, or a
   // dims mismatch in createDotBatcher) must leave the old state intact.
-  const voted = votedArticles(db, halflifeYears);
+  const voted = votedArticles(db);
   const batcher = makeVotedBatcher(voted, state.batcher);
   state.voted = voted;
   state.batcher = batcher;
@@ -356,8 +339,8 @@ function releaseSweepVoted(state) {
 function getSharedVoted(db, halflifeYears) {
   let state = _votedCaches.get(db);
   if (state && state.sweepActive) {
-    const voted = votedArticles(db, halflifeYears);
-    return { voted, batcher: makeVotedBatcher(voted), ephemeral: true };
+    const voted = votedArticles(db);
+    return { voted: decayVoted(voted, halflifeYears), batcher: makeVotedBatcher(voted), ephemeral: true };
   }
   if (!state) {
     // First scoring activity on this db happens to be a single-article
@@ -369,7 +352,7 @@ function getSharedVoted(db, halflifeYears) {
   if (state.voted === null || state.halflife !== halflifeYears || state.key !== key) {
     rebuildVotedState(state, db, halflifeYears, key);
   }
-  return { voted: state.voted, batcher: state.batcher, ephemeral: false };
+  return { voted: decayVoted(state.voted, halflifeYears), batcher: state.batcher, ephemeral: false };
 }
 
 function scoreParts(row, topicPref, feedPref, authorPref, voted, weights, knn, scratches, batcher, topicMap) {
@@ -509,12 +492,12 @@ export async function recomputeScores(db, config, { yieldEveryMs = DEFAULT_YIELD
     const lease = acquireSweepVoted(db, halflife);
     let voted, batcher, privateBatcher = null;
     if (lease) {
-      voted = lease.voted;
+      voted = decayVoted(lease.voted, halflife);
       batcher = lease.batcher;
     } else {
       // Another sweep holds the lease: a private snapshot keeps both sweeps
       // self-consistent, freed when this one ends.
-      voted = votedArticles(db, halflife);
+      voted = decayVoted(votedArticles(db), halflife);
       batcher = privateBatcher = makeVotedBatcher(voted);
     }
 

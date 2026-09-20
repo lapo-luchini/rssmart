@@ -1032,6 +1032,26 @@ and short pages, initial/empty sync, legacy replay, retention, no-progress
 responses, transaction rollback and competing fetches. They use mocked
 HTTP and in-memory SQLite; no live timeline is part of the test gate.
 
+## Cache freshness and vote time — 2026-09-20
+
+Scoring caches use a token from SQLite `data_version` (other connections'
+commits) and `total_changes()` (this connection's writes). Tokens are only
+compared within one connection, and caches/statements are held in WeakMaps.
+This detects equal-size embedding replacements, vote swaps whose sums do
+not change, and topic edits without relying on article counts or timestamp
+precision. See [data_version](https://www.sqlite.org/pragma.html#pragma_data_version)
+and [total_changes](https://www.sqlite.org/c3ref/total_changes.html).
+Unrelated writes conservatively invalidate too; this favors correctness
+over a growing list of invalidation hooks. The token is not a durable
+application revision, a cross-connection ordering, or a replacement for a
+transaction. Score scheduling retains its separate persistent revision.
+
+The voted-vector cache stores raw votes and times. Each prediction/sweep
+computes decay at its current time without mutating a snapshot leased by
+another yielding sweep. Topic statistics with vote decay expire at the
+next one-second clock bucket, even if no rows changed. No scoring weights,
+neighbor selection, embedding dimensions or formulas are changed.
+
 ## Deferred ideas
 
 - Harden `sanitizeHtml` (`src/html.js`): it's a regex blocklist, not a
