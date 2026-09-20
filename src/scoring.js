@@ -624,6 +624,7 @@ export function recomputeOneScore(db, config, articleId) {
 }
 
 const RECOMPUTE_DUE_KEY = 'score_recompute_due_at';
+const RECOMPUTE_REVISION_KEY = 'score_recompute_revision';
 
 /**
  * Debounce a full recompute: push its due time `delaySec` into the future.
@@ -632,11 +633,17 @@ const RECOMPUTE_DUE_KEY = 'score_recompute_due_at';
  * just runs immediately instead of being silently lost.
  */
 export function scheduleRecompute(db, delaySec) {
-  db.prepare(`
-    INSERT INTO meta (key, value) VALUES ('${RECOMPUTE_DUE_KEY}',
-      strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+' || ? || ' seconds'))
-    ON CONFLICT (key) DO UPDATE SET value = excluded.value
-  `).run(delaySec);
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO meta (key, value) VALUES (?, '1')
+      ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+    `).run(RECOMPUTE_REVISION_KEY);
+    db.prepare(`
+      INSERT INTO meta (key, value) VALUES (?,
+        strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+' || ? || ' seconds'))
+      ON CONFLICT (key) DO UPDATE SET value = excluded.value
+    `).run(RECOMPUTE_DUE_KEY, delaySec);
+  })();
 }
 
 /**
@@ -646,27 +653,29 @@ export function scheduleRecompute(db, delaySec) {
  */
 export async function recomputeIfDue(db, config, opts) {
   const due = db.prepare(`
-    SELECT value FROM meta
-    WHERE key = '${RECOMPUTE_DUE_KEY}' AND value <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-  `).get();
+    SELECT value, COALESCE((SELECT value FROM meta WHERE key = ?), '0') AS revision
+    FROM meta WHERE key = ? AND value <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+  `).get(RECOMPUTE_REVISION_KEY, RECOMPUTE_DUE_KEY);
   if (!due) return false;
   const result = await recomputeScores(db, config, opts);
-  // Snapshot equality: a marker scheduled after the sweep began (e.g. a vote
-  // in-flight) must survive — only the marker this run actually consumed is
-  // dropped. Same-second writes produce an identical value: the marker's own
-  // due time (now+delay, second precision) is a superset window, so dropping
-  // it there loses only an overdue-by-seconds case that the next
-  // recomputeIfDue would have covered anyway.
-  clearScheduledRecompute(db, due.value);
+  // The revision identifies the mutation, even when two requests have the
+  // same due timestamp. Keep work scheduled while this sweep was yielding.
+  clearScheduledRecompute(db, due.value, due.revision);
   return result;
 }
 
 /** Drop any pending debounce marker — e.g. after a full recompute already
  *  ran for another reason (cron's post-classification sweep), which
  *  satisfies whatever a pending vote-debounce was waiting for. */
-export function clearScheduledRecompute(db, expectedValue) {
+export function clearScheduledRecompute(db, expectedValue, expectedRevision) {
   if (expectedValue === undefined) {
     db.prepare('DELETE FROM meta WHERE key = ?').run(RECOMPUTE_DUE_KEY);
+    return;
+  }
+  if (expectedRevision !== undefined) {
+    db.prepare(`DELETE FROM meta WHERE key = ? AND value = ?
+      AND COALESCE((SELECT value FROM meta WHERE key = ?), '0') = ?`)
+      .run(RECOMPUTE_DUE_KEY, expectedValue, RECOMPUTE_REVISION_KEY, expectedRevision);
     return;
   }
   // Delete only the marker an in-flight recompute actually consumed: a vote

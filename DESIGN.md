@@ -7,6 +7,15 @@ day-one spec was retired for exactly that reason; it's in git history).
 
 ## Decisions and their reasons
 
+- **2026-09-20: identify pending score work by revision as well as due time.**
+  A zero-delay vote can arrive while a chunked sweep is running and schedule
+  exactly the same second-resolution timestamp. Clearing by timestamp alone
+  loses that update. Scheduling now increments a persistent revision in the
+  same transaction as the due marker; completion acknowledges only the
+  captured revision. Old markers without a revision remain consumable. The
+  counter stays after completion, so an explicit clear followed by another
+  request cannot reuse the previous identity. Scoring remains asynchronous.
+
 - **Duplicate detection uses embeddings, not a generative prompt.** Cosine
   similarity of summary embeddings is cheap, deterministic, and needs no
   prompt engineering. The summary embedding is deliberately built from *our
