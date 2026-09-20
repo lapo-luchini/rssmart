@@ -1100,6 +1100,13 @@ security dependency; keep its lockfile and security updates current.
 
 Sanitization also runs immediately before both article HTML API responses,
 so protection does not depend on rewriting every legacy database row.
+Article navigation URLs and feed website URLs are separate from the HTML
+fragment. API responses expose only absolute HTTP(S) navigation targets;
+unsupported targets become null, including in legacy rows and version lists.
+Stored source URLs remain available for inspection and are not rewritten.
+This closes an independent navigation boundary; no browser exploit through
+that field was demonstrated by the review.
+
 Malformed markup and encoded-URL regressions are parsed with happy-dom as
 a test oracle only; happy-dom is not the sanitizer and these fixtures do
 not constitute a cross-browser security proof. Review real feed formatting

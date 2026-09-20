@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
 import { getReaderContent, recheckDuplicates, bufToVec, sampleText, requestReclassification } from './enrich.js';
-import { stripHtml, sanitizeHtml } from './html.js';
+import { stripHtml, sanitizeHtml, webNavigationUrl } from './html.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
@@ -51,7 +51,7 @@ const ARTICLE_COLUMNS = `
 `;
 
 function rowToArticle(row) {
-  return { ...row, topics: row.topics ? row.topics.split('|') : [] };
+  return { ...row, url: webNavigationUrl(row.url), topics: row.topics ? row.topics.split('|') : [] };
 }
 
 // Hono's c.req.json() throws on an empty/invalid body; every route here
@@ -715,7 +715,7 @@ export function createApp(db, config, commitHash, describe = '') {
                AS per_week
       FROM feeds f LEFT JOIN articles a ON a.feed_id = f.id
       GROUP BY f.id ORDER BY f.active DESC, COALESCE(f.title, f.url)
-    `).all(now);
+    `).all(now).map(row => ({ ...row, html_url: webNavigationUrl(row.html_url) }));
     return feedListCache;
   };
 

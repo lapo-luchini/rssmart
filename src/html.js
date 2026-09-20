@@ -32,6 +32,16 @@ export function sanitizeHtml(html) {
   return cleanHtml(String(html), HTML_POLICY);
 }
 
+// Navigation URLs are separate from article HTML. Only absolute web URLs
+// belong in the reader's "open original" and feed website controls.
+export function webNavigationUrl(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+  } catch { return null; }
+}
+
 /**
  * Truncate by code points, not UTF-16 code units: a plain slice() can cut
  * a string in the middle of a surrogate pair (e.g. emoji at the cut), the
