@@ -1,30 +1,22 @@
-// MRL hypothesis test: harrier's docs don't claim Matryoshka support, while
-// rssmart truncates via Ollama's `dimensions` param (64 dims for dedup
-// summaries, 512 for text). If harrier isn't MRL-trained, its first-k dims
-// are not trained to be self-sufficient and truncation itself is the damage
-// — predictions:
-//   1. harrier dedup @ native 1024 >> harrier @ 64/128 (recovers vs qwen3@64)
-//   2. direction agreement cos(native, truncated) much lower for harrier
-//   3. harrier text kNN @ 1024 >= @ 512
-// Pair sets are seeded identically to bench-embed.js/bench-embed-threshold.js
-// so results are directly comparable with the earlier runs.
+// Compare dimensionalities on fixed, recorded pair sets. Prefix-energy and
+// prefix-direction diagnostics do not prove MRL training or task quality.
+// Dedup metrics use automatic link proxies; vote-sign pair clustering is
+// not a temporal preference/ranking evaluation. RUN=knn remains an alias
+// for that historical diagnostic, not a claim that this runs the ranker.
+import { selectDedupPairs, writePairManifest, requireDedupPairs, prefixDiagnostics } from './bench-utils.js';
+import { dirname } from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { openReadOnlyDb } from '../src/db.js';
 import { Ollama } from '../src/llm.js';
 
 const config = loadConfig();
 const db = openReadOnlyDb(config.db);
-let rngState = 7;
-const rand = () => (rngState = (rngState * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-const dupPairs = db.prepare('SELECT a.id AS dup_id, a.duplicate_of AS root_id FROM articles a WHERE a.duplicate_of IS NOT NULL').all();
-function sample(arr, n) {
-  const copy = [...arr], out = [];
-  while (out.length < n && copy.length > 0) out.push(copy.splice(Math.floor(rand() * copy.length), 1)[0]);
-  return out;
-}
-const dupSample = sample(dupPairs, 800);
-const ids = [...new Set(dupSample.flatMap((p) => [p.dup_id, p.root_id]))];
-const arts = db.prepare(`SELECT id, feed_id, title, summary, published_at FROM articles WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+const dedupSample = selectDedupPairs(db);
+const { positives: dupSample, negatives: negPairs, articles: arts } = dedupSample;
+const RUN = process.env.RUN ?? 'all';
+if (RUN === 'all' || RUN === 'dedup') requireDedupPairs(dedupSample);
+console.log(`Pair manifest: ${writePairManifest(dirname(config.db), dedupSample)}`);
+console.log('Dedup labels are stored links versus cross-group candidate negatives, not independent human judgments.');
 const voted = db.prepare(`
   SELECT id, title, vote, content, full_content FROM articles
   WHERE vote != 0 AND (full_content IS NOT NULL OR content IS NOT NULL)
@@ -34,18 +26,6 @@ const { decompressText } = await import('../src/compress.js');
 const { sampleText } = await import('../src/enrich.js');
 const text = (r) => { const raw = decompressText(r.full_content) ?? decompressText(r.content) ?? ''; return `${r.title}\n${sampleText(stripHtml(raw), 4000)}`; };
 
-const DAY = 86400000;
-const negPairs = [];
-let guard = 0;
-while (negPairs.length < 800 && guard++ < 30000) {
-  const a = arts[Math.floor(rand() * arts.length)];
-  const cands = arts.filter((b) =>
-    b.id !== a.id && b.feed_id === a.feed_id && a.published_at && b.published_at &&
-    Math.abs(new Date(a.published_at) - new Date(b.published_at)) <= 14 * DAY &&
-    (a.duplicate_of ?? a.id) !== (b.duplicate_of ?? b.id) &&
-    b.duplicate_of !== a.id && a.duplicate_of !== b.id);
-  if (cands.length) negPairs.push([a.id, cands[Math.floor(rand() * cands.length)].id]);
-}
 
 const cos = (a, b) => { const n = Math.min(a.length, b.length); let s = 0; for (let i = 0; i < n; i++) s += a[i] * b[i]; return s; };
 // Native-dim vectors can carry |v| > Float16 max (65504): llm.embed's
@@ -77,17 +57,18 @@ function auc(pos, neg) {
 const fprAt = (neg, t) => neg.filter((s) => s >= t).length / neg.length;
 const recallAt = (pos, t) => pos.filter((s) => s >= t).length / pos.length;
 
-// --- 1) truncation direction-damage probe (40 texts, native vs truncated)
-const RUN = process.env.RUN ?? 'all';
-console.log('== truncation damage: cos(native 1024, truncated), higher = truncation-safe');
+// --- 1) geometric prefix diagnostics (up to 40 texts)
+console.log('== prefix geometry: retained energy and prefix direction agreement (not task quality or MRL evidence)');
 if (RUN === 'all' || RUN === 'probe') {
 const probe = voted.slice(0, 40).map((r) => ({ key: r.id, input: text(r) }));
 for (const [model, dims] of [['qwen3-embedding:0.6b', 64], ['qwen3-embedding:0.6b', 512], ['leoipulsar/harrier-0.6b', 64], ['leoipulsar/harrier-0.6b', 512]]) {
   const llm = new Ollama({ ...config.ollama, embedModel: model });
   const nat = await embedSet(llm, probe, 1024, 'document');
   const trc = await embedSet(llm, probe, dims, 'document');
-  const ds = probe.map((p) => cos(nat.get(p.key), trc.get(p.key))).sort((a, b) => a - b);
-  console.log(`  ${model} @${dims}: p05 ${ds[2].toFixed(3)} p50 ${ds[20].toFixed(3)}`);
+  const diagnostics = probe.map((p) => prefixDiagnostics(nat.get(p.key), trc.get(p.key)));
+  const median = (key) => diagnostics.map((d) => d[key]).sort((a, b) => a - b)[Math.floor(diagnostics.length / 2)];
+  if (!diagnostics.length) throw new Error('prefix probe needs at least one voted article with text');
+  console.log(`  ${model} @${dims}: retained-energy p50 ${median('retainedEnergy').toFixed(3)}, prefix-cosine p50 ${median('prefixCosine').toFixed(3)}, padded-cosine p50 ${median('paddedCosine').toFixed(3)}`);
 }
 }
 
@@ -113,8 +94,8 @@ for (const [model, dims] of [
   }
 }
 
-// --- 3) taste kNN at native dims
-console.log('\n== taste kNN AUC (voted pairs)');
+// --- 3) vote-sign pair clustering at native dims; not a ranker replay
+console.log('\n== vote-sign pair clustering AUC (not preference-ranker accuracy)');
 if (RUN === 'all' || RUN === 'knn') {
   const votedInputs = voted.map((r) => ({ id: r.id, vote: r.vote, text: text(r) }));
   for (const [model, dims] of [

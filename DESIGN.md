@@ -1124,6 +1124,36 @@ committed WAL state. A live read may use SQLite's WAL sidecars. Tests check
 failed writes, byte-for-byte preservation, missing files and the entry
 points of all six database benchmarks against an incompatible fixture.
 
+## Benchmark labels and dimensionality diagnostics (2026-09-20)
+
+The four embedding/dedup comparison scripts share one sampler and write
+the exact article pairs, seed, window and selection version to a JSON
+manifest. Candidates explicitly carry their stored group root. Parent/
+child and sibling pairs are excluded from negatives, pairs are unordered
+and unique, and malformed non-flat groups fail without being repaired.
+Reservoir sampling covers the eligible same-feed, within-window pool with
+bounded memory; small pools return fewer pairs and missing classes fail
+before dedup metrics or embedding calls. All model comparisons in a run
+use the same pairs. **Stored links are proxy labels**: false groups can
+contaminate positives and missed links can contaminate negatives. Multiple
+pairs can share articles/events, so pair counts are not independent sample
+sizes. These corrected samples are not the historical benchmark samples.
+
+The historical "taste kNN AUC" measures same-sign versus opposite-sign
+vote-pair clustering. Output now names that diagnostic explicitly; it does
+not execute the production ranker, test future votes or measure top-list
+utility. Existing historical figures in this document refer to that pair
+diagnostic. Preference claims require a temporal replay with all learned
+aggregates rebuilt using past data, plus evaluation of the combined score.
+
+The MRL probe reports retained prefix energy and the cosine between the
+native prefix and the returned short embedding separately. The previous
+unequal-length dot/padded cosine equals the square root of retained energy
+when the short vector is a normalized prefix: a lower value need not mean
+worse semantic ranking. Neither energy nor prefix agreement proves MRL
+training or preserves task performance. Compare each dimensionality on
+the same independent dedup/search/preference examples before selecting it.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).
