@@ -1246,6 +1246,34 @@ members. This preserves the single-level grouping invariant used by API
 queries. It is a structural guarantee, not evidence that all stories in a
 cosine-connected group describe the same event.
 
+## Duplicate repair checks connected components — 2026-09-20
+
+`node scripts/repair-dedup.js --json` now reports connected components for
+each stored group, opening the database through `openReadOnlyDb`. No model
+calls or migrations run in inspection mode. A child with one similar
+sibling is insufficient: a root may still be isolated, or two internally
+coherent subgroups may have no edge between them. Comparisons cost the sum
+of squared group sizes, not all-pairs over the entire archive.
+
+Groups are `connected`, `disconnected` (complete comparable evidence), or
+`unmeasurable`. Missing/wrong-dimensional/nonfinite/non-unit vectors,
+invalid nesting and incompatible recorded model metadata prevent automatic
+repair. Missing vectors could bridge observed components, so their absence
+does not establish disconnection. Legacy metadata can establish only the
+recorded model tag/dimensions; the report names this provenance explicitly.
+Even complete cosine connectivity is not proof of one semantic event.
+
+Explicit `--fix` atomically separates only complete disconnected groups.
+The original root remains root of its component; each other component uses
+its smallest article ID as a deterministic root. It preserves article
+content, vectors, votes and read state, and does not immediately rerun
+dedup across the separated components. Repeating repair is idempotent.
+`--fix-legacy` and `--drop-old-dedup` retain their targeted vector-cleanup
+roles; dimension cleanup requires explicit configured dimensions. All
+modes reject incompatible schemas before migration. Review the JSON plan
+on a consistent backup before applying its component policy to that copy;
+semantic errors within a connected component still require review.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).
