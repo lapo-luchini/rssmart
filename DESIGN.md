@@ -7,6 +7,15 @@ day-one spec was retired for exactly that reason; it's in git history).
 
 ## Decisions and their reasons
 
+- **2026-09-20: custom sliders multiply stored contributions.** The stored
+  score components already contain their configured weights. Neutral custom
+  multipliers and reset values are therefore 1, while freshness remains the
+  configured score decay per day. Applying the configured weights again
+  squared their effect and changed the default order. The UI labels the
+  multipliers explicitly. This lens cannot restore a component whose
+  persisted contribution was zero; raw-feature reweighting is a different
+  contract and would require storing or recomputing those features.
+
 - **2026-09-20: identify pending score work by revision as well as due time.**
   A zero-delay vote can arrive while a chunked sweep is running and schedule
   exactly the same second-resolution timestamp. Clearing by timestamp alone

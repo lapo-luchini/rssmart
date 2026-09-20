@@ -248,17 +248,17 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
   // per-signal score components (score_topics etc. — the same numbers the
   // score tooltip shows). Read-time lens only: it never re-derives the
   // stored score, so experimentation can't feed back into scoring. Weights
-  // arrive as query params, fall back to the configured profile, and are
+  // arrive as query params, default to neutral multipliers, and are
   // clamped to sane ranges before they touch the SQL text.
   const clamp = (name, fallback, max = 2) => {
     const raw = Number(query[name]);
-    return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), max) : Math.min(Math.max(fallback, 0), fallback);
+    return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), max) : Math.min(Math.max(fallback, 0), max);
   };
   const w = sortKey === 'custom' ? {
-    topics: clamp('w_topics', config.scoring.weights.topics),
-    embedding: clamp('w_embedding', config.scoring.weights.embedding),
-    depth: clamp('w_depth', config.scoring.weights.depth),
-    feed: clamp('w_feed', config.scoring.weights.feed),
+    topics: clamp('w_topics', 1),
+    embedding: clamp('w_embedding', 1),
+    depth: clamp('w_depth', 1),
+    feed: clamp('w_feed', 1),
     bonus: clamp('w_bonus', 1),
     decay: clamp('w_decay', config.scoring.hotDecayPerDay, 2),
   } : null;
@@ -883,13 +883,13 @@ export function createApp(db, config, commitHash, describe = '') {
     return c.json({
       commit: commitHash || 'unknown',
       describe: describe || undefined,
-      // The weight profile the custom-sort sliders reset to (the same
-      // fallback the server applies when the w_* params are absent): the
-      // sliders must DISPLAY these actual numbers, not a fixed 1.0 —
-      // otherwise entering custom mode with untouched sliders reorders the
-      // list while they claim "1.0 everywhere".
+      // Stored components already include the configured scoring weights.
+      // Reset applies each once, with the same temporal decay as hot sort.
       weightProfile: {
-        ...config.scoring.weights,
+        topics: 1,
+        embedding: 1,
+        depth: 1,
+        feed: 1,
         bonus: 1,
         decay: config.scoring.hotDecayPerDay,
       },

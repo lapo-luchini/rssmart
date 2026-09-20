@@ -30,7 +30,7 @@ createApp({
       sort: 'hot',
       // sort=custom experiment sliders: relative multipliers over the
       // stored per-signal score components (1.0 = the configured weight).
-      // The server's defaults are the configured profile; the client keeps
+      // The server defaults to 1.0 multipliers plus configured decay; the client keeps
       // its own copies lazily-set from /api/info's weight profile.
       customWeights: { topics: null, embedding: null, depth: null, feed: null, bonus: null, decay: null },
       customAxes: [
@@ -170,17 +170,14 @@ createApp({
     this.loadSidebarData();
     // Log the running version for debugging (git describe when available,
     // commit hash otherwise — see /api/info), and seed the custom-sort
-    // sliders with the server's REAL effective weight profile so entering
-    // custom mode shows what's actually applied (before this, sliders
-    // displayed "1.0" while the server ranked with the configured profile)
+    // sliders with the server's multiplier profile and configured decay.
     this.api('/api/info').then((v) => {
       console.log('rssmart', v.describe || v.commit);
       if (v.weightProfile) {
         for (const axis of this.customAxes) {
           const w = v.weightProfile[axis.key];
           if (w == null) continue;
-          // both the displayed value and the "reset" target follow the
-          // profile (uniform 1.0 is NOT the server's fallback)
+          // The displayed value and reset target follow the same defaults.
           if (this.customWeights[axis.key] == null) this.customWeights[axis.key] = w;
           axis.defaults = w;
         }
@@ -210,8 +207,7 @@ createApp({
       this.customTimer = setTimeout(() => this.reload(), 300);
     },
 
-    // Slider "reset": back to the server's configured profile — what the
-    // sliders showed on entering custom mode — not a blind uniform 1.0.
+    // Reset the signal multipliers to 1.0 and freshness to configured decay.
     resetCustomWeights() {
       for (const axis of this.customAxes) {
         this.customWeights[axis.key] = axis.defaults;
