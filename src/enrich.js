@@ -1,6 +1,7 @@
 import { stripHtml, truncate } from './html.js';
 import { fetchArticleText } from './fetchpage.js';
 import { compressText, decompressText } from './compress.js';
+import { scheduleRecompute, recomputeOneScore } from './scoring.js';
 
 // Cumulative wall-clock time (ms) spent per enrichment phase, since process
 // start — exposed as rssmart_enrich_seconds_total (see metrics.js). This is
@@ -173,6 +174,37 @@ function findDuplicate(vec, articleId, recent, threshold) {
  */
 const _recentCaches = new WeakMap(); // db -> { cache: Map<id, {id, vec, createdAt}>, syncedAt }
 
+const enrichmentRevisionKey = (id) => `enrich_request:${id}`;
+const enrichmentRevision = (db, id) => db.prepare('SELECT value FROM meta WHERE key = ?')
+  .get(enrichmentRevisionKey(id))?.value ?? '0';
+
+/** Queue a reader request and identify it independently of wall-clock time. */
+export function requestReclassification(db, id, note = '') {
+  return db.transaction(() => {
+    const result = db.prepare(`
+      UPDATE articles
+      SET status = 'pending', enrich_attempts = 0, enrich_priority = 1,
+          full_content = NULL,
+          enrich_note = COALESCE(NULLIF(TRIM(?), ''), enrich_note)
+      WHERE id = ?
+    `).run(note ?? '', id);
+    if (result.changes) db.prepare(`
+      INSERT INTO meta (key, value) VALUES (?, '1')
+      ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+    `).run(enrichmentRevisionKey(id));
+    return result;
+  })();
+}
+
+function saveFullContent(db, article, html) {
+  // A fetch started before a newer reclassification must not repopulate
+  // the cache that the reader explicitly cleared with that request.
+  db.prepare(`UPDATE articles SET full_content = ? WHERE id = ?
+    AND (? IS NULL OR COALESCE((SELECT value FROM meta WHERE key = ?), '0') = ?)`)
+    .run(compressText(html), article.id, article.enrichRevision ?? null,
+      enrichmentRevisionKey(article.id), article.enrichRevision ?? null);
+}
+
 export function clearRecentCache(db) {
   _recentCaches.delete(db);
 }
@@ -270,8 +302,7 @@ async function expandShortContent(text, html, article, db, enrichCfg, pool, timi
   if (!page || page.text.length <= text.length) return { text, html };
   const combinedText = text + '\n\n---\n\n' + page.text;
   const combinedHtml = (html ?? '') + '\n\n<hr>\n\n' + page.html;
-  db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
-    .run(compressText(combinedHtml), article.id);
+  saveFullContent(db, article, combinedHtml);
   return { text: combinedText, html: combinedHtml };
 }
 
@@ -299,8 +330,7 @@ async function articleText(db, article, enrichCfg, timings) {
   // Readability sometimes grabs a footer or sidebar instead of the article.
   if (!page || page.text.length <= rssText.length) return rssText;
   // Persist immediately so a later classify failure doesn't refetch.
-  db.prepare('UPDATE articles SET full_content = ? WHERE id = ?')
-    .run(compressText(page.html), article.id);
+  saveFullContent(db, article, page.html);
   return (await expandShortContent(page.text, page.html, article, db, enrichCfg, 'enrich', timings)).text;
 }
 
@@ -343,22 +373,39 @@ export async function getReaderContent(db, article, config) {
 
 /**
  * Embeddings from different models (or dimensions, or storage precision)
- * live in different vector spaces and must never be compared. The version
- * key that produced the stored vectors is recorded in meta; when the
+ * live in different vector spaces and must never be compared. The document
+ * pipeline identity that produced the stored vectors is recorded in meta; when the
  * configured version differs (or vectors predate the record), all vectors
  * are cleared and articles get re-embedded by reembedMissing. Duplicate
  * marks from the old space are kept: they were real matches when made, and
- * re-deriving them would be O(N²). The trailing "::f16" isn't config-driven
- * — it's a fixed marker for the storage format bufToVec assumes, bumped
- * once (2026-07-11, float32 -> float16) so upgrading always invalidates
- * old vectors even for installs whose model/dimensions didn't change.
+ * re-deriving them would be O(N²). Prefixes and preprocessing/input versions
+ * are part of this identity; query-only prefixes do not affect documents.
  */
 /**
  * Track and detect embedding space changes separately for dedup and
  * text embeddings — they can now use different dimensions.
  */
-function checkEmbeddingSpace(db, config, column, key, dims, model) {
-  const current = `${model}::${dims ?? 'default'}::f16`;
+function embeddingIdentity(config, column) {
+  const dedup = column === 'embedding';
+  const model = dedup ? (config.ollama.dedupEmbedModel ?? config.ollama.embedModel) : config.ollama.embedModel;
+  const dims = dedup ? (config.ollama.dedupEmbedDimensions ?? config.ollama.embedDimensions) : config.ollama.embedDimensions;
+  return JSON.stringify({
+    version: 2, model, dimensions: dims ?? 'default', storage: 'f16',
+    documentPrefix: config.ollama.embedPrefixes?.document ?? '',
+    preprocessing: 'stripHtml-v1/sampleText-v2',
+    input: column === 'embedding' ? 'title-summary-v1' : 'title-text-4000-v1',
+  });
+}
+
+function requireEmbeddingIdentity(db, key, expected) {
+  const stored = db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value;
+  if (stored !== undefined && stored !== expected) {
+    throw new Error('embedding space changed during work; restart with the current model configuration');
+  }
+}
+
+function checkEmbeddingSpace(db, config, column, key) {
+  const current = embeddingIdentity(config, column);
   const stored = db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value;
   if (stored === current) return false;
   const record = () => db.prepare(`
@@ -376,10 +423,12 @@ export function syncEmbeddingSpace(db, config) {
   // The two embedding columns can use different models entirely (hybrid
   // setup): `embedding` holds the summary/dedup vectors, `text_embedding`
   // the text/taste ones — each column's space is keyed on its own model.
-  const dedupModel = config.ollama.dedupEmbedModel ?? config.ollama.embedModel;
-  const dedupDims = config.ollama.dedupEmbedDimensions ?? config.ollama.embedDimensions;
-  const dedupChanged = checkEmbeddingSpace(db, config, 'embedding', 'embed_model_dedup', dedupDims, dedupModel);
-  const textChanged = checkEmbeddingSpace(db, config, 'text_embedding', 'embed_model_text', config.ollama.embedDimensions, config.ollama.embedModel);
+  const { dedupChanged, textChanged } = db.transaction(() => {
+    const dedupChanged = checkEmbeddingSpace(db, config, 'embedding', 'embed_model_dedup');
+    const textChanged = checkEmbeddingSpace(db, config, 'text_embedding', 'embed_model_text');
+    if (textChanged) scheduleRecompute(db, 0);
+    return { dedupChanged, textChanged };
+  })();
   // The recent-articles dedup cache holds vectors from the 'embedding'
   // column — stale the moment that column's space changes.
   if (dedupChanged) clearRecentCache(db);
@@ -401,6 +450,8 @@ export function syncEmbeddingSpace(db, config) {
  */
 export async function reembedMissing(db, config, llm, { deadline, onItem } = {}) {
   const result = { reembedded: 0, failed: 0, errors: [] };
+  const dedupIdentity = embeddingIdentity(config, 'embedding');
+  const textIdentity = embeddingIdentity(config, 'text_embedding');
   const dedupCutoff = new Date(
     Date.now() - config.enrich.dupWindowDays * 24 * 60 * 60 * 1000,
   ).toISOString();
@@ -427,8 +478,8 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
       AND id NOT IN (SELECT value FROM json_each(?))
     ORDER BY COALESCE(published_at, created_at) DESC LIMIT 1
   `);
-  const saveDedup = db.prepare('UPDATE articles SET embedding = ? WHERE id = ?');
-  const saveText = db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ?');
+  const saveDedup = db.prepare('UPDATE articles SET embedding = ? WHERE id = ? AND embedding IS NULL');
+  const saveText = db.prepare('UPDATE articles SET text_embedding = ? WHERE id = ? AND text_embedding IS NULL');
 
   while (!deadline || Date.now() < deadline) {
     const article = next.get(dedupCutoff, dedupCutoff, JSON.stringify(tried));
@@ -443,11 +494,23 @@ export async function reembedMissing(db, config, llm, { deadline, onItem } = {})
           dedupDims,
           { dedup: true },
         );
-        saveDedup.run(Buffer.from(vec.buffer), article.id);
+        db.transaction(() => {
+          requireEmbeddingIdentity(db, 'embed_model_dedup', dedupIdentity);
+          saveDedup.run(Buffer.from(vec.buffer), article.id);
+        })();
       }
       if (article.needText) {
         const textVec = await llm.embed(`${article.title}\n${sampleText(text, 4000)}`);
-        saveText.run(Buffer.from(textVec.buffer), article.id);
+        db.transaction(() => {
+          requireEmbeddingIdentity(db, 'embed_model_text', textIdentity);
+          const { changes } = saveText.run(Buffer.from(textVec.buffer), article.id);
+          if (!changes) return;
+          // A vote may arrive while Ollama runs. Read it at commit time.
+          if (db.prepare('SELECT vote FROM articles WHERE id = ?').get(article.id)?.vote) {
+            scheduleRecompute(db, 0);
+          }
+          recomputeOneScore(db, config, article.id);
+        })();
       }
       result.reembedded++;
       onItem?.({ id: article.id, done: result.reembedded });
@@ -512,7 +575,9 @@ export function resolveTopicId(db, name) {
 }
 
 /** Classify + summarize + embed one article and persist the outcome. */
-async function enrichOne(db, llm, article, recent, enrichCfg) {
+async function enrichOne(db, llm, article, recent, enrichCfg, config) {
+  const dedupIdentity = embeddingIdentity(config, 'embedding');
+  const textIdentity = embeddingIdentity(config, 'text_embedding');
   // Per-article phase timings (ms), folded into the process-wide totals
   // (addPhaseMs, below) once this article finishes, and returned so
   // enrichPending can report a per-batch breakdown too. fetch/parse are
@@ -598,7 +663,10 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
     'INSERT OR IGNORE INTO article_topics (article_id, topic_id) VALUES (?, ?)',
   );
   t = performance.now();
-  db.transaction(() => {
+  const saved = db.transaction(() => {
+    if (enrichmentRevision(db, article.id) !== article.enrichRevision) return false;
+    requireEmbeddingIdentity(db, 'embed_model_dedup', dedupIdentity);
+    requireEmbeddingIdentity(db, 'embed_model_text', textIdentity);
     // replace, don't merge: re-enrichment must drop corrected-away topics
     db.prepare('DELETE FROM article_topics WHERE article_id = ?').run(article.id);
     for (const name of topics) {
@@ -617,8 +685,15 @@ async function enrichOne(db, llm, article, recent, enrichCfg) {
       duplicateOf,
       article.id,
     );
+    // Reclassification can change an already-voted training example.
+    // Persist the ripple request atomically with its replacement features.
+    if (db.prepare('SELECT vote FROM articles WHERE id = ?').get(article.id)?.vote) {
+      scheduleRecompute(db, 0);
+    }
+    return true;
   })();
   timings.db += performance.now() - t;
+  if (!saved) return { superseded: true, timings };
 
   // Window pruning happens once per batch in syncRecentCache, not per
   // article here — dupWindowDays is measured in days, a batch in seconds.
@@ -710,6 +785,7 @@ export async function enrichPending(
     const article = nextPending.get(maxAttempts, JSON.stringify(tried));
     if (article) {
       tried.push(article.id);
+      article.enrichRevision = enrichmentRevision(db, article.id);
       article.content = decompressText(article.content);
       article.full_content = decompressText(article.full_content);
     }
@@ -721,13 +797,23 @@ export async function enrichPending(
   const processOne = async (article) => {
     onArticleStart?.();
     try {
-      const { topics, summary, depth, duplicateOf, timings } =
-        await enrichOne(db, llm, article, recent, enrichCfg);
+      const enriched = await enrichOne(db, llm, article, recent, enrichCfg, config);
+      if (enriched.superseded) {
+        result.superseded = (result.superseded ?? 0) + 1;
+        onItem?.({ id: article.id, title: article.title, error: 'superseded by a newer classification request', ...position() });
+        return;
+      }
+      const { topics, summary, depth, duplicateOf, timings } = enriched;
       result.enriched++;
       if (duplicateOf) result.duplicates++;
       for (const [phase, ms] of Object.entries(timings)) result.timings[phase] += ms;
       onItem?.({ id: article.id, title: article.title, topics, summary, depth, duplicateOf, ...position() });
     } catch (err) {
+      if (enrichmentRevision(db, article.id) !== article.enrichRevision) {
+        result.superseded = (result.superseded ?? 0) + 1;
+        onItem?.({ id: article.id, title: article.title, error: 'superseded by a newer classification request', ...position() });
+        return;
+      }
       saveFailure.run(maxAttempts, article.id);
       result.failed++;
       result.errors.push({ id: article.id, error: err.message });

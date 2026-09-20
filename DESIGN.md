@@ -1079,6 +1079,38 @@ bucket, including ISO dates with `T`, and expires without requiring a write.
 This removes the repeated whole-archive COUNT/SUM scan previously used as
 a cache key; a changed token conservatively refreshes the aggregate query.
 
+## Feature changes and durable work — 2026-09-20
+
+Topic merges, taste-space invalidation and replacements of voted features
+schedule a full scoring ripple inside the transaction that changes the
+inputs. The existing revision-aware queue acknowledges only the work a
+sweep actually consumed. A missing taste vector on an unvoted article is
+scored locally when filled; dedup-only replacement does not rescore taste.
+Reclassification checks the article's vote at commit time, so feedback
+arriving while Ollama runs is included in this decision. Both scheduler
+and cron benefit because scheduling lives in the mutation functions.
+
+The scheduler probes the durable queue each tick with EXISTS. It never
+remembers "empty" indefinitely, and a deliberately absent dedup vector
+outside the retention window does not count as work. API reclassification
+must use `requestReclassification(db, id, note)`, which increments a durable
+request revision with the pending status. Older in-flight replies/failures
+cannot replace the newer request or consume its attempts. Origin-content
+cache writes made by enrichment carry the same guard. The request helper
+returns the usual SQLite `{changes}` result for the endpoint's 404 check.
+
+Embedding metadata now identifies document prefix, input form and explicit
+preprocessing version as well as model tag, dimensions and Float16 format.
+Changing only the query prefix preserves document vectors. Existing legacy
+identities lack this provenance: upgrading conservatively clears affected
+vectors once and refills them through the usual queue. During that refill,
+scores reflect the currently available evidence and pending full sweeps;
+they are not an atomic all-model deployment. Running workers reject results
+whose recorded space changed while the model call was in flight. Restart
+old workers when deploying a changed model configuration. Mutable model
+tags still require operational pinning; this metadata does not discover a
+remote model replacement hidden behind an unchanged tag/digest-less name.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).

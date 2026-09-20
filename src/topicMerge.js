@@ -1,4 +1,5 @@
 import { existingTopicNames } from './enrich.js';
+import { scheduleRecompute } from './scoring.js';
 
 // Topic merges are never applied automatically: unlike a plain relabel,
 // collapsing topic A into topic B retroactively blends their vote history
@@ -132,5 +133,6 @@ export function applyTopicMerge(db, fromName, toName) {
       ON CONFLICT (alias_name) DO UPDATE SET canonical_topic_id = excluded.canonical_topic_id
     `).run(fromName.trim().toLowerCase(), to.id);
     db.prepare('DELETE FROM topics WHERE id = ?').run(from.id);
+    scheduleRecompute(db, 0);
   })();
 }
