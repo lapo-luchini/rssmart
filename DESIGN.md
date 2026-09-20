@@ -1171,6 +1171,17 @@ fallback behavior. Invalid fields are named in the startup error. This
 checks representation and semantic domains, not whether a chosen workload
 fits the machine's memory or the model's supported dimensions.
 
+## Git version tests without checkout assumptions (2026-09-20)
+
+`test/gitmeta.test.js` builds isolated Git-format fixtures instead of
+requiring this checkout's object layout to match `git describe`. The
+reader's loose-history description, annotated/packed tag refs, detached
+linked-worktree support and hash/empty fallbacks are tested separately.
+An unavailable loose HEAD object models the reader's boundary for packed
+or incomplete history; the test does not claim to parse packfiles. Git
+does not need to be installed to run these fixtures. The version reader
+itself and its documented best-effort production behavior are unchanged.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).
