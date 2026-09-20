@@ -39,7 +39,7 @@ test('stripHtml keeps one marker per image and leaves non-image markup alone', (
   // images inside stripped active content vanish entirely, like the block
   assert.equal(stripHtml('<script><img src="x.png" alt="evil"></script>ok'), 'ok');
   // stored HTML is untouched: placeholders only exist in the text extraction
-  assert.equal(sanitizeHtml('<img src="x.png" alt="kept">'), '<img src="x.png" alt="kept">');
+  assert.equal(sanitizeHtml('<img src="x.png" alt="kept">'), '<img src="x.png" alt="kept" />');
 });
 
 test('truncate cuts at code points, never inside a surrogate pair', () => {
@@ -62,4 +62,3 @@ test('truncate cuts at code points, never inside a surrogate pair', () => {
   const cut3 = truncate('x' + family, 1 + family.length);
   assert.equal(cut3, 'x' + family, 'a boundary inside the sequence keeps it whole');
 });
-

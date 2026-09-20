@@ -7,6 +7,21 @@ day-one spec was retired for exactly that reason; it's in git history).
 
 ## Decisions and their reasons
 
+- **2026-09-20: parse and allowlist untrusted HTML at write and render boundaries.**
+  The regex blocklist admitted entity-encoded JavaScript URLs and malformed
+  event attributes. `sanitize-html` now preserves ordinary article structure,
+  tables, code, image descriptions and HTTP(S) images while removing active
+  elements, event attributes, inline styles, arbitrary IDs and unsafe URLs.
+  Its parser decodes entities before the URL policy. Detail and reader APIs
+  sanitize the final fragment again, covering legacy stored content and
+  transformations without a destructive database rewrite. Markup is normalized
+  (for example self-closing image serialization), and unsupported interactive
+  embeds/styles are intentionally omitted. This does not regenerate embeddings.
+  Regression tests inspect parsed output with script execution disabled and
+  exercise both API boundaries; they are not a claim of cross-browser proof.
+  Upstream policy documentation lives in the maintained Apostrophe monorepo:
+  https://github.com/apostrophecms/apostrophe/tree/main/packages/sanitize-html.
+
 - **2026-09-20: custom sliders multiply stored contributions.** The stored
   score components already contain their configured weights. Neutral custom
   multipliers and reset values are therefore 1, while freshness remains the

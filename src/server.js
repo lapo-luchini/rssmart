@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
 import { getReaderContent, recheckDuplicates, bufToVec, sampleText } from './enrich.js';
-import { stripHtml } from './html.js';
+import { stripHtml, sanitizeHtml } from './html.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
@@ -492,7 +492,7 @@ export function createApp(db, config, commitHash, describe = '') {
       WHERE a.id = ?
     `).get(id);
     if (!row) return c.json({ error: 'not found' }, 404);
-    row.content = decompressText(row.content);
+    row.content = sanitizeHtml(decompressText(row.content));
     return c.json(rowToArticle(row));
   });
 
@@ -509,7 +509,9 @@ export function createApp(db, config, commitHash, describe = '') {
     if (!article) return c.json({ error: 'not found' }, 404);
     try {
       const { html, source } = await getReaderContent(db, article, config);
-      return c.json({ html, source });
+      // Sanitize the final renderable fragment, including cached legacy HTML
+      // and any transformations performed while building the reader view.
+      return c.json({ html: sanitizeHtml(html), source });
     } catch (err) {
       return c.json({ error: `could not load article content: ${err.message}` }, 502);
     }

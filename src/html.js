@@ -1,21 +1,35 @@
-// Minimal HTML hygiene for feed-provided markup. This is a personal-use
-// reader, not a hostile-input boundary: we strip active content (scripts,
-// event handlers, javascript: URLs) and keep basic formatting.
+import cleanHtml from 'sanitize-html';
+
+// Feed HTML is untrusted even in a personal reader. Parse markup and use
+// explicit tag, attribute and URL allowlists; regexes cannot model HTML's
+// entity decoding or malformed-attribute recovery.
 
 const DANGEROUS_BLOCKS =
   /<(script|style|iframe|object|embed|form)\b[\s\S]*?<\/\1\s*>/gi;
-const DANGEROUS_SELF = /<(script|style|iframe|object|embed|form)\b[^>]*\/?>/gi;
-const EVENT_ATTRS = /\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
-const JS_URLS = /\s(href|src)\s*=\s*(["']?)\s*javascript:[^"'\s>]*\2/gi;
+const HTML_POLICY = {
+  allowedTags: [...cleanHtml.defaults.allowedTags, 'img', 'details', 'summary'],
+  allowedAttributes: {
+    '*': ['title', 'lang', 'dir'],
+    a: ['href', { name: 'target', values: ['_blank', '_self'] }, 'rel'],
+    img: ['src', 'srcset', 'alt', 'title', 'width', 'height', 'loading'],
+    td: ['colspan', 'rowspan'], th: ['colspan', 'rowspan', 'scope'],
+    ol: ['start', 'reversed', 'type'], li: ['value'],
+    time: ['datetime'],
+  },
+  allowedSchemes: ['http', 'https', 'mailto'],
+  allowedSchemesByTag: { img: ['http', 'https'] },
+  transformTags: {
+    a: (tagName, attribs) => ({
+      tagName,
+      attribs: { ...attribs, rel: 'noopener noreferrer' },
+    }),
+  },
+};
 
 /** Remove active content from feed HTML, keeping formatting tags. */
 export function sanitizeHtml(html) {
   if (!html) return '';
-  return String(html)
-    .replace(DANGEROUS_BLOCKS, '')
-    .replace(DANGEROUS_SELF, '')
-    .replace(EVENT_ATTRS, '')
-    .replace(JS_URLS, ' $1=""');
+  return cleanHtml(String(html), HTML_POLICY);
 }
 
 /**
