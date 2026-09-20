@@ -22,6 +22,34 @@ day-one spec was retired for exactly that reason; it's in git history).
   Upstream policy documentation lives in the maintained Apostrophe monorepo:
   https://github.com/apostrophecms/apostrophe/tree/main/packages/sanitize-html.
 
+- **2026-09-20: share feedback acknowledgements and cancel obsolete reader requests.**
+  Queue format v3 persists a monotonic acknowledgement revision and each
+  article's last acknowledged feedback/score fields in the same localStorage
+  write that removes the corresponding entry. The Web Locks storage critical
+  section covers that entire update. A quota/write failure leaves the exact
+  durable operation available for idempotent replay; no in-memory revision
+  falsely announces a committed local acknowledgement. Version 2 upgrades
+  retain client identities, sequences, bodies and FIFO order. Existing old
+  tabs reject the new format and should be closed when upgrading.
+  List, triage and permalink GETs capture the shared revision before I/O and
+  preserve fields acknowledged since then, even by another tab after the
+  shared queue has emptied. Older mutation callbacks use the same projection.
+  A later GET is allowed to observe newer server state from another device;
+  these local acknowledgements are not a distributed causality clock or a
+  subscription that refreshes idle views. Only the latest value/revision per
+  feedback field is retained, with no article content, but storage still
+  grows with the number of articles touched, alongside sequence bookkeeping.
+  There is no unsafe expiry while another tab could still hold an older GET.
+  Storage exhaustion remains visible and preserves pending intentions.
+  One reader generation covers permalink detail loading, direct local opens,
+  HTML requests, close and navigation away. Responses, errors and loading
+  completion are applied only to their generation, including close/reopen of
+  the same article id. AbortController reduces obsolete work; the generation
+  check remains authoritative when an aborted response still completes.
+  Permalink details are projected before deciding whether to mark read, so
+  a stale detail response cannot create a redundant read mutation after an
+  acknowledged vote already marked the article read.
+
 - **2026-09-20: persist and order every vote/read intent, including online writes.**
   List, reader and triage feedback all use the same outbox. Persistence must
   succeed before the optimistic UI changes; a storage/quota error leaves

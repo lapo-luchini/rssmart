@@ -165,3 +165,47 @@ test('storage errors do not report successful persistence or erase corrupt data'
   const full = createOutbox({ storage: { getItem: () => null, setItem: () => { throw new Error('quota'); } } });
   await assert.rejects(enqueue(full), /quota/);
 });
+
+test('shared acknowledgements retain each field revision across tabs and reloads', async () => {
+  const disk = storage(); const sharedLocks = locks();
+  const writer = createOutbox({ storage: disk, locks: sharedLocks, request: async (path) => new Response(JSON.stringify(
+    path.endsWith('/vote') ? { id: 1, vote: 1, read_at: 'first', voted_at: 'voted', score: .2, unexpectedContent: 'not persisted' }
+      : { id: 1, read_at: null },
+  )) });
+  await enqueue(writer, 1); await writer.flush();
+  const since = writer.revision;
+  await enqueue(writer, false, 1, 'read'); await writer.flush();
+  const reader = createOutbox({ storage: disk, locks: sharedLocks });
+  assert.equal(reader.revision, 2); assert.equal(reader.count, 0);
+  // The read ack is newer than this GET; the old vote ack is not.
+  const response = { id: 1, vote: -2, read_at: 'stale', score: .9 };
+  assert.deepEqual(reader.project(response, since), { ...response, read_at: null });
+  const beforeBoth = reader.project(response, 0);
+  assert.equal(beforeBoth.vote, 1); assert.equal(beforeBoth.read_at, null); assert.equal(beforeBoth.score, .2);
+  // A fresh GET can observe another device; historical local acks do not
+  // pin the UI forever to this browser's last vote.
+  assert.deepEqual(reader.project(response, reader.revision), response);
+  const saved = JSON.parse(disk.getItem());
+  assert.equal(saved.acknowledged['1'].vote.revision, 1);
+  assert.equal(saved.acknowledged['1'].read_at.revision, 2);
+  assert.equal(saved.acknowledged['1'].unexpectedContent, undefined);
+});
+
+test('version 2 upgrades keep exact queued bodies, identities and next sequences', async () => {
+  const disk = storage();
+  const old = createOutbox({ storage: disk, locks: locks(), newId: () => 'legacy-client' });
+  const first = await enqueue(old, 1); await enqueue(old, false, 1, 'read');
+  const version2 = JSON.parse(disk.getItem());
+  version2.version = 2; delete version2.revision; delete version2.acknowledged;
+  disk.setItem(null, JSON.stringify(version2));
+  const bodies = [];
+  const next = createOutbox({ storage: disk, locks: locks(), request: async (_, opts) => {
+    bodies.push(opts.body); return ok(1);
+  } });
+  const added = await enqueue(next, -1);
+  assert.equal(added.sequence, 3);
+  assert.equal(JSON.parse(disk.getItem()).entries[0].id, first.id);
+  await next.flush();
+  assert.deepEqual(bodies.slice(0, 2), version2.entries.map(entry => entry.options.body));
+  assert.equal(JSON.parse(disk.getItem()).version, 3); assert.equal(next.revision, 3);
+});

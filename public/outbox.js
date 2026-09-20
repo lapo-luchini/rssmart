@@ -4,6 +4,8 @@
 // receipts make ambiguous/lost responses safe to retry without re-dating.
 const STORAGE_KEY = 'rssmart_outbox';
 const RETRY_MS = 20_000;
+const ACK_FIELDS = ['vote', 'read_at', 'voted_at', 'score', 'score_topics',
+  'score_embedding', 'score_depth', 'score_feed', 'score_bonus'];
 
 function target(path, options) {
   const match = /^\/api\/articles\/(\d+)\/(vote|read)$/.exec(path);
@@ -26,8 +28,6 @@ export function createOutbox({
   if (!storage) throw new Error('createOutbox: no storage available');
   let flushing;
   let localIssue = null;
-  let revision = 0;
-  const acknowledged = new Map();
   const lock = (name, fn) => locks ? locks.request(`${STORAGE_KEY}:${name}`, async () => fn()) : Promise.resolve().then(fn);
 
   function append(state, path, options) {
@@ -46,14 +46,21 @@ export function createOutbox({
     const raw = storage.getItem(STORAGE_KEY);
     const parsed = raw === null ? [] : JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      const state = { version: 2, clientId: newId(), sequences: {}, entries: [] };
+      const state = { version: 3, clientId: newId(), sequences: {}, entries: [], revision: 0, acknowledged: {} };
       // Upgrade the old queue under the storage lock, retaining every SET
       // in order; all subsequent reads use the persisted client identity.
       for (const entry of parsed) append(state, entry.path, entry.options);
       return state;
     }
-    if (parsed?.version !== 2 || typeof parsed.clientId !== 'string' ||
+    if (![2, 3].includes(parsed?.version) || typeof parsed.clientId !== 'string' ||
         !parsed.sequences || !Array.isArray(parsed.entries)) throw new Error('Unrecognized feedback queue');
+    // Keep the durable mutation identities unchanged when upgrading. Old app
+    // tabs reject v3 instead of silently writing acknowledgements only to RAM.
+    if (parsed.version === 2) return { ...parsed, version: 3, revision: 0, acknowledged: {} };
+    if (!Number.isSafeInteger(parsed.revision) || parsed.revision < 0 ||
+        !parsed.acknowledged || typeof parsed.acknowledged !== 'object' || Array.isArray(parsed.acknowledged)) {
+      throw new Error('Unrecognized feedback acknowledgements');
+    }
     return parsed;
   }
 
@@ -128,14 +135,20 @@ export function createOutbox({
         const index = state.entries.findIndex(item => item.id === entry.id);
         if (index < 0) throw new Error('Feedback queue changed unexpectedly');
         if (issue) state.entries[index].issue = issue;
-        else state.entries.splice(index, 1); // Never shift a newer intent accidentally.
-        save(state);
-        if (!issue) {
-          const fields = acknowledged.get(entry.articleId) ?? {};
-          revision++;
-          for (const [key, value] of Object.entries(data)) fields[key] = { revision, value };
-          acknowledged.set(entry.articleId, fields);
+        else {
+          const revision = state.revision + 1;
+          if (!Number.isSafeInteger(revision)) throw new Error('Feedback revision exhausted');
+          const fields = state.acknowledged[entry.articleId] ??= {};
+          for (const key of ACK_FIELDS) {
+            if (Object.hasOwn(data, key)) fields[key] = { revision, value: data[key] };
+          }
+          state.revision = revision;
+          state.entries.splice(index, 1); // Never shift a newer intent accidentally.
         }
+        // Removal, acknowledged fields and revision commit in one storage
+        // write under the shared lock. On quota failure the durable entry
+        // still exists, with the same replay identity and FIFO position.
+        save(state);
       });
       if (issue?.permanent) {
         blockedArticles.add(entry.articleId);
@@ -159,7 +172,7 @@ export function createOutbox({
     try { return load(); }
     catch (err) {
       localIssue = { permanent: true, message: `Cannot access saved feedback: ${err.message}` };
-      return { entries: [] };
+      return { entries: [], revision: 0, acknowledged: {} };
     }
   }
 
@@ -172,17 +185,19 @@ export function createOutbox({
         ?? state.entries.find(entry => entry.issue)?.issue ?? null;
     },
     get coordinatedTabs() { return !!locks; },
-    get revision() { return revision; },
+    get revision() { return inspect().revision; },
     // Preserve optimistic intent when a list reload/older acknowledgement
     // contains the server's state from before queued changes.
-    project(article, since = revision) {
+    project(article, since) {
+      const state = inspect();
+      since ??= state.revision;
       const result = { ...article };
       // A GET begun before an acknowledgement may finish after the queue
       // has drained. Preserve only fields acknowledged since that GET.
-      for (const [key, field] of Object.entries(acknowledged.get(String(article.id)) ?? {})) {
+      for (const [key, field] of Object.entries(state.acknowledged[String(article.id)] ?? {})) {
         if (field.revision > since) result[key] = field.value;
       }
-      for (const entry of inspect().entries) {
+      for (const entry of state.entries) {
         if (entry.articleId !== String(article.id)) continue;
         const body = JSON.parse(entry.options.body);
         if (entry.field === 'vote') {
