@@ -1274,6 +1274,17 @@ modes reject incompatible schemas before migration. Review the JSON plan
 on a consistent backup before applying its component policy to that copy;
 semantic errors within a connected component still require review.
 
+## Reclassification races across connections — 2026-09-20
+
+Queue claims read the article inputs and request revision in the same
+SELECT snapshot. Failure accounting uses a revision condition in its
+UPDATE, not a separate check followed by an unconditional write. Reader
+fetches also capture the current content/revision together before awaiting
+network work and use guarded content-cache writes. An older reader request
+may finish displaying its response, but cannot repopulate content cleared
+by a newer classification request. Deterministic two-connection fixtures
+exercise all three interleavings, including a max-attempts-one failure.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).

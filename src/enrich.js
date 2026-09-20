@@ -347,6 +347,13 @@ async function articleText(db, article, enrichCfg, timings) {
  * get it for free.
  */
 export async function getReaderContent(db, article, config) {
+  // Read the cached inputs and their request revision in one SQLite
+  // snapshot, before awaiting a fetch. A newer reclassification may clear
+  // full_content while that request is in flight.
+  const current = db.prepare(`SELECT content, full_content, url, title,
+    COALESCE((SELECT value FROM meta WHERE key = 'enrich_request:' || articles.id), '0') AS enrichRevision
+    FROM articles WHERE id = ?`).get(article.id);
+  if (current) article = { ...article, ...current };
   const cachedFullContent = decompressText(article.full_content);
   if (cachedFullContent) return { html: cachedFullContent, source: 'cached' };
   const rssHtml = decompressText(article.content) ?? '';
@@ -368,7 +375,7 @@ export async function getReaderContent(db, article, config) {
     const expanded = await expandShortContent(stripHtml(rssHtml), rssHtml, article, db, config.enrich, 'reader');
     return { html: expanded.html, source: 'feed' };
   }
-  db.prepare('UPDATE articles SET full_content = ? WHERE id = ?').run(compressText(page.html), article.id);
+  saveFullContent(db, article, page.html);
   const expanded = await expandShortContent(page.text, page.html, article, db, config.enrich, 'reader');
   return { html: expanded.html, source: 'fetched' };
 }
@@ -762,7 +769,8 @@ export async function enrichPending(
   // Reader-requested reclassifications first, then newest first: fresh
   // articles are worth reading now, a backlog of old ones can wait.
   const nextPending = db.prepare(`
-    SELECT id, url, title, content, full_content, depth, enrich_note, created_at
+    SELECT id, url, title, content, full_content, depth, enrich_note, created_at,
+           COALESCE((SELECT value FROM meta WHERE key = 'enrich_request:' || articles.id), '0') AS enrichRevision
     FROM articles
     WHERE status = 'pending' AND enrich_attempts < ?
       AND id NOT IN (SELECT value FROM json_each(?))
@@ -795,6 +803,7 @@ export async function enrichPending(
     SET enrich_attempts = enrich_attempts + 1,
         status = CASE WHEN enrich_attempts + 1 >= ? THEN 'error' ELSE 'pending' END
     WHERE id = ?
+      AND COALESCE((SELECT value FROM meta WHERE key = ?), '0') = ?
   `);
 
   const result = {
@@ -810,7 +819,6 @@ export async function enrichPending(
     const article = nextPending.get(maxAttempts, JSON.stringify(tried));
     if (article) {
       tried.push(article.id);
-      article.enrichRevision = enrichmentRevision(db, article.id);
       article.content = decompressText(article.content);
       article.full_content = decompressText(article.full_content);
     }
@@ -834,12 +842,14 @@ export async function enrichPending(
       for (const [phase, ms] of Object.entries(timings)) result.timings[phase] += ms;
       onItem?.({ id: article.id, title: article.title, topics, summary, depth, duplicateOf, ...position() });
     } catch (err) {
-      if (enrichmentRevision(db, article.id) !== article.enrichRevision) {
+      // The revision condition belongs in the UPDATE itself: a separate
+      // read/check can race another connection before the failure write.
+      const { changes } = saveFailure.run(maxAttempts, article.id, enrichmentRevisionKey(article.id), article.enrichRevision);
+      if (!changes) {
         result.superseded = (result.superseded ?? 0) + 1;
         onItem?.({ id: article.id, title: article.title, error: 'superseded by a newer classification request', ...position() });
         return;
       }
-      saveFailure.run(maxAttempts, article.id);
       result.failed++;
       result.errors.push({ id: article.id, error: err.message });
       onItem?.({ id: article.id, title: article.title, error: err.message, ...position() });
