@@ -7,6 +7,40 @@ day-one spec was retired for exactly that reason; it's in git history).
 
 ## Decisions and their reasons
 
+- **2026-09-20: isolate durable feedback from upstream storage writers.**
+  The upstream array client treats a v3 object as an empty queue, then
+  overwrites it on its next enqueue. New clients therefore exclusively write
+  `rssmart_outbox_v3`, with storage/flush locks named for that key. The old
+  `rssmart_outbox` key is read once for migration and is never written or
+  removed by new code. Migration preserves existing v2/v3 identities,
+  sequences, queued bodies and acknowledgements; legacy arrays receive
+  durable identities before any request is sent. The isolated record is
+  authoritative after its first successful atomic save, including when its
+  pending queue becomes empty: a restart never reimports the retained source.
+  Quota or a crash before that save leaves the source intact; a crash after
+  it resumes the saved identities.
+  An exact `legacySnapshot` records the migration baseline, avoiding both
+  hash collisions and a compare/delete race with an uncoordinated old tab.
+  If that key changes later, sync pauses without absorbing or renumbering
+  old operations. Enqueue/flush also persist the first observed divergent
+  value as `legacyConflict.snapshot`; once saved, the pause survives restarts
+  and a later return of the old key to its baseline. Inspection alone does
+  not write storage, and this is not a journal of every transient old-tab
+  write. Both live records and any recorded conflict remain available for
+  manual reconciliation; explicit retry does not bypass the conflict.
+  Keeping the old record plus its baseline duplicates legacy storage once;
+  a recorded conflict can retain another value. Quota remains an explicit
+  failure, with no automatic deletion or eviction of pending intentions.
+  Close all older tabs/workers before upgrading or rolling back. An old
+  client can still send unsequenced legacy writes to the server, so key
+  isolation does not establish cross-version ordering. Before rollback,
+  export BOTH complete storage values and reconcile their intentions with
+  server receipts: the retained legacy source may contain operations already
+  acknowledged by the new client and must not be blindly replayed, even when
+  the new pending queue is empty. Restore compatible application, browser
+  state and DB together; never clear or automatically renumber a queue to
+  bypass receipt gaps. No UI for automatic reconciliation is introduced.
+
 - **2026-09-20: parse and allowlist untrusted HTML at write and render boundaries.**
   The regex blocklist admitted entity-encoded JavaScript URLs and malformed
   event attributes. `sanitize-html` now preserves ordinary article structure,
@@ -29,8 +63,9 @@ day-one spec was retired for exactly that reason; it's in git history).
   section covers that entire update. A quota/write failure leaves the exact
   durable operation available for idempotent replay; no in-memory revision
   falsely announces a committed local acknowledgement. Version 2 upgrades
-  retain client identities, sequences, bodies and FIFO order. Existing old
-  tabs reject the new format and should be closed when upgrading.
+  retain client identities, sequences, bodies and FIFO order. Intermediate
+  v2 tabs reject v3, whereas upstream array clients do not; the dedicated-key
+  isolation above prevents their writes from replacing the new queue.
   List, triage and permalink GETs capture the shared revision before I/O and
   preserve fields acknowledged since then, even by another tab after the
   shared queue has emptied. Older mutation callbacks use the same projection.
@@ -93,7 +128,8 @@ day-one spec was retired for exactly that reason; it's in git history).
   A restored/replaced server DB can have older receipts than the browser:
   the resulting 409 is intentionally retained, not retried in a loop or
   converted into a new identity. Recovery requires reconciling both states:
-  first preserve the complete `localStorage.rssmart_outbox` value externally,
+  first preserve the complete `localStorage.rssmart_outbox` AND
+  `localStorage.rssmart_outbox_v3` values externally,
   stop sending from every tab, then restore matching server receipts or
   manually reconcile the saved intentions against the restored articles.
   There is no automatic destructive queue reset. Clearing browser storage

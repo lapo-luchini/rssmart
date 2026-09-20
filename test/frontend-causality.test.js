@@ -2,13 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { app, deferred } from './frontendHelpers.js';
 import { createOutbox } from '../public/outbox.js';
+import { memoryStorage } from './feedbackStorage.js';
 import { openDb } from '../src/db.js';
 import { createApp } from '../src/server.js';
 import { testConfig } from './helpers.js';
 
 function storage() {
-  let value = null;
-  return { getItem: () => value, setItem: (_, next) => { value = next; } };
+  return memoryStorage();
 }
 function locks() {
   const tails = new Map();
@@ -103,7 +103,7 @@ test('B04: failed acknowledgement persistence retains replay identity, shared re
   const committed = state();
   assert.equal(committed.vote, 1); assert.ok(committed.read_at); assert.equal(a.count, 1);
   assert.equal(a.revision, 0); assert.match(a.issue.message, /quota/);
-  assert.equal(JSON.parse(disk.getItem()).entries[0].id, first.id);
+  assert.equal(JSON.parse(disk.getItem('rssmart_outbox_v3')).entries[0].id, first.id);
   failSave = false;
   const b = createOutbox({ storage: disk, locks: sharedLocks, request: baseRequest });
   await b.flush();

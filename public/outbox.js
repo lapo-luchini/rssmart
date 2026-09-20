@@ -2,8 +2,15 @@
 // FIFO is intentional: vote(+1), vote(0) still marks read, so dropping an
 // intermediate vote is not a semantics-preserving coalescence. Server-side
 // receipts make ambiguous/lost responses safe to retry without re-dating.
-const STORAGE_KEY = 'rssmart_outbox';
+// Upstream tabs write arrays to the old key and silently replace unknown
+// formats. A separate key keeps those writers away from durable new intents.
+const STORAGE_KEY = 'rssmart_outbox_v3';
+const LEGACY_KEY = 'rssmart_outbox';
 const RETRY_MS = 20_000;
+const LEGACY_ISSUE = {
+  permanent: true, legacyConflict: true,
+  message: 'Feedback from an older app changed. Sync is paused; both queues are kept. Close older tabs and reconcile the saved changes before retrying.',
+};
 const ACK_FIELDS = ['vote', 'read_at', 'voted_at', 'score', 'score_topics',
   'score_embedding', 'score_depth', 'score_feed', 'score_bonus'];
 
@@ -42,8 +49,7 @@ export function createOutbox({
     return entry;
   }
 
-  function load() {
-    const raw = storage.getItem(STORAGE_KEY);
+  function decode(raw) {
     const parsed = raw === null ? [] : JSON.parse(raw);
     if (Array.isArray(parsed)) {
       const state = { version: 3, clientId: newId(), sequences: {}, entries: [], revision: 0, acknowledged: {} };
@@ -54,14 +60,38 @@ export function createOutbox({
     }
     if (![2, 3].includes(parsed?.version) || typeof parsed.clientId !== 'string' ||
         !parsed.sequences || !Array.isArray(parsed.entries)) throw new Error('Unrecognized feedback queue');
-    // Keep the durable mutation identities unchanged when upgrading. Old app
-    // tabs reject v3 instead of silently writing acknowledgements only to RAM.
+    // Keep durable identities unchanged when upgrading an intermediate v2.
     if (parsed.version === 2) return { ...parsed, version: 3, revision: 0, acknowledged: {} };
     if (!Number.isSafeInteger(parsed.revision) || parsed.revision < 0 ||
         !parsed.acknowledged || typeof parsed.acknowledged !== 'object' || Array.isArray(parsed.acknowledged)) {
       throw new Error('Unrecognized feedback acknowledgements');
     }
     return parsed;
+  }
+
+  function load() {
+    const raw = storage.getItem(STORAGE_KEY);
+    const legacy = storage.getItem(LEGACY_KEY);
+    let state;
+    if (raw === null) {
+      // Persist this copy under the new storage lock before any network I/O.
+      // Never clear the old key: an old tab does not share our lock and can
+      // write between a compare and delete. The exact baseline also avoids
+      // hash collisions when detecting a later incompatible writer.
+      state = { ...decode(legacy), legacySnapshot: legacy };
+    } else {
+      state = decode(raw);
+      if (state.version !== 3 || !Object.hasOwn(state, 'legacySnapshot') ||
+          (state.legacySnapshot !== null && typeof state.legacySnapshot !== 'string')) {
+        throw new Error('Unrecognized isolated feedback queue');
+      }
+    }
+    if (legacy !== state.legacySnapshot && !state.legacyConflict) {
+      // Keep the first observed conflicting value as well. Once a mutation
+      // or flush saves it, an old tab clearing its queue cannot resume ours.
+      state.legacyConflict = { snapshot: legacy };
+    }
+    return state;
   }
 
   function save(state) {
@@ -100,6 +130,13 @@ export function createOutbox({
         const state = load();
         save(state); // Also makes a legacy queue's assigned IDs durable before I/O.
         localIssue = null;
+        // Detect a legacy write occurring during the migration save too.
+        const legacy = storage.getItem(LEGACY_KEY);
+        if (legacy !== state.legacySnapshot && !state.legacyConflict) {
+          state.legacyConflict = { snapshot: legacy };
+          save(state);
+        }
+        if (state.legacyConflict) return;
         for (const candidate of state.entries) {
           if (blockedArticles.has(candidate.articleId)) continue;
           if (candidate.issue?.permanent && !retryErrors) {
@@ -181,7 +218,8 @@ export function createOutbox({
     get count() { return inspect().entries.length; },
     get issue() {
       const state = inspect();
-      return localIssue ?? state.entries.find(entry => entry.issue?.status === 401)?.issue
+      return localIssue ?? (state.legacyConflict ? LEGACY_ISSUE : null)
+        ?? state.entries.find(entry => entry.issue?.status === 401)?.issue
         ?? state.entries.find(entry => entry.issue)?.issue ?? null;
     },
     get coordinatedTabs() { return !!locks; },

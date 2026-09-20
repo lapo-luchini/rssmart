@@ -7,6 +7,7 @@ import { openDb } from '../src/db.js';
 import { createApp } from '../src/server.js';
 import { testConfig } from './helpers.js';
 import { createOutbox } from '../public/outbox.js';
+import { memoryStorage } from './feedbackStorage.js';
 
 function seed(path = ':memory:') {
   const db = openDb(path);
@@ -84,8 +85,8 @@ test('independent clients use receipt order, without pretending to order offline
 
 test('C13 plus response loss: queued old vote never overwrites newer intent', async t => {
   const db = seed(); t.after(() => db.close()); const app = createApp(db, testConfig());
-  let disk = null; let time = 0; let calls = 0;
-  const box = createOutbox({ storage: { getItem: () => disk, setItem: (_, value) => { disk = value; } }, now: () => time,
+  const disk = memoryStorage(); let time = 0; let calls = 0;
+  const box = createOutbox({ storage: disk, now: () => time,
     request: async (path, options) => {
       const res = await app.request(path, options);
       if (++calls === 1) throw new Error('response lost after commit');

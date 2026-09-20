@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createOutbox } from '../public/outbox.js';
+import { memoryStorage } from './feedbackStorage.js';
 
 function storage(initial = null) {
-  let value = initial;
-  return { getItem: () => value, setItem: (_, next) => { value = next; } };
+  return memoryStorage(initial === null ? {} : { rssmart_outbox: initial });
 }
 const options = (field, value) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ [field]: value }) });
 const enqueue = (box, value = 1, id = 1, field = 'vote') => box.enqueue(`/api/articles/${id}/${field}`, options(field, value));
@@ -27,7 +27,7 @@ test('persists before sending, including per-article sequences shared by vote an
   const other = await enqueue(box, -1, 2);
   assert.equal(calls, 0);
   assert.deepEqual([vote.sequence, read.sequence, other.sequence], [1, 2, 1]);
-  assert.equal(JSON.parse(disk.getItem()).entries.length, 3);
+  assert.equal(JSON.parse(disk.getItem('rssmart_outbox_v3')).entries.length, 3);
   assert.equal(JSON.parse(vote.options.body).mutation.sequence, 1);
 });
 
@@ -161,7 +161,7 @@ test('unreadable acknowledgements retain the exact mutation for safe replay', as
 test('storage errors do not report successful persistence or erase corrupt data', async () => {
   const disk = storage('corrupt'); const box = createOutbox({ storage: disk });
   await assert.rejects(enqueue(box)); await box.flush();
-  assert.equal(disk.getItem(), 'corrupt'); assert.match(box.issue.message, /Cannot access/);
+  assert.equal(disk.getItem('rssmart_outbox'), 'corrupt'); assert.match(box.issue.message, /Cannot access/);
   const full = createOutbox({ storage: { getItem: () => null, setItem: () => { throw new Error('quota'); } } });
   await assert.rejects(enqueue(full), /quota/);
 });
@@ -185,7 +185,7 @@ test('shared acknowledgements retain each field revision across tabs and reloads
   // A fresh GET can observe another device; historical local acks do not
   // pin the UI forever to this browser's last vote.
   assert.deepEqual(reader.project(response, reader.revision), response);
-  const saved = JSON.parse(disk.getItem());
+  const saved = JSON.parse(disk.getItem('rssmart_outbox_v3'));
   assert.equal(saved.acknowledged['1'].vote.revision, 1);
   assert.equal(saved.acknowledged['1'].read_at.revision, 2);
   assert.equal(saved.acknowledged['1'].unexpectedContent, undefined);
@@ -195,17 +195,18 @@ test('version 2 upgrades keep exact queued bodies, identities and next sequences
   const disk = storage();
   const old = createOutbox({ storage: disk, locks: locks(), newId: () => 'legacy-client' });
   const first = await enqueue(old, 1); await enqueue(old, false, 1, 'read');
-  const version2 = JSON.parse(disk.getItem());
+  const version2 = JSON.parse(disk.getItem('rssmart_outbox_v3'));
   version2.version = 2; delete version2.revision; delete version2.acknowledged;
-  disk.setItem(null, JSON.stringify(version2));
+  disk.setItem('rssmart_outbox', JSON.stringify(version2));
+  disk.removeItem('rssmart_outbox_v3');
   const bodies = [];
   const next = createOutbox({ storage: disk, locks: locks(), request: async (_, opts) => {
     bodies.push(opts.body); return ok(1);
   } });
   const added = await enqueue(next, -1);
   assert.equal(added.sequence, 3);
-  assert.equal(JSON.parse(disk.getItem()).entries[0].id, first.id);
+  assert.equal(JSON.parse(disk.getItem('rssmart_outbox_v3')).entries[0].id, first.id);
   await next.flush();
   assert.deepEqual(bodies.slice(0, 2), version2.entries.map(entry => entry.options.body));
-  assert.equal(JSON.parse(disk.getItem()).version, 3); assert.equal(next.revision, 3);
+  assert.equal(JSON.parse(disk.getItem('rssmart_outbox_v3')).version, 3); assert.equal(next.revision, 3);
 });
