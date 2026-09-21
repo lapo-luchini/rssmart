@@ -20,7 +20,7 @@
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { openDb } from '../src/db.js';
+import { openReadOnlyDb } from '../src/db.js';
 import { decompressText } from '../src/compress.js';
 import { stripHtml, sanitizeHtml } from '../src/html.js';
 import { sampleText, classifyPrompt, contextTokens, existingTopicNames, SYSTEM } from '../src/enrich.js';
@@ -28,7 +28,7 @@ import { Ollama } from '../src/llm.js';
 
 const PAIRS = Number(process.argv[2] ?? 30);
 const config = loadConfig();
-const db = openDb(config.db);
+const db = openReadOnlyDb(config.db);
 let rngState = 99;
 const rand = () => (rngState = (rngState * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
 

@@ -14,7 +14,8 @@
 //   threshold-equivalence comparisons. Config resolves like bin/rssmart.js
 //   ($RSSMART_CONFIG or ./config.yaml).
 //
-// Quality is evaluated against ground truth that exists in the DB:
+// Diagnostics use the labels recorded in the DB; these are not held-out
+// human judgments and do not establish end-to-end ranking quality:
 //   - duplicate_of links (3.5k+ pairs) vs same-feed recent non-duplicate
 //     pairs -> ROC AUC + false/true rates at the configured dupThreshold,
 //     plus the threshold at which the candidate matches the baseline's
@@ -28,8 +29,9 @@
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { selectDedupPairs, writePairManifest, requireDedupPairs } from './bench-utils.js';
 import { loadConfig } from '../src/config.js';
-import { openDb } from '../src/db.js';
+import { openReadOnlyDb } from '../src/db.js';
 import { decompressText } from '../src/compress.js';
 import { stripHtml } from '../src/html.js';
 import { sampleText } from '../src/enrich.js';
@@ -53,23 +55,13 @@ if (models.length === 0) {
 }
 
 const config = loadConfig();
-const db = openDb(config.db);
+const db = openReadOnlyDb(config.db);
 
 function articleText(row) {
   const raw = decompressText(row.full_content) ?? decompressText(row.content) ?? '';
   return stripHtml(raw);
 }
 
-// Deterministic PRNG so re-runs compare the exact same subset.
-let rngState = 42;
-const rand = () => (rngState = (rngState * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-const pick = (arr) => arr[Math.floor(rand() * arr.length)];
-function sample(arr, n) {
-  const copy = [...arr];
-  const out = [];
-  while (out.length < n && copy.length > 0) out.push(copy.splice(Math.floor(rand() * copy.length), 1)[0]);
-  return out;
-}
 
 // ---- subset selection -----------------------------------------------------
 
@@ -94,33 +86,13 @@ for (let i = 0; i < TEXT_SAMPLE && withLen.length > 0; i++) {
   textArticles.push({ ...withLen[idx], isVoted: false });
 }
 
-const dupPairs = db.prepare(`
-  SELECT a.id AS dup_id, a.duplicate_of AS root_id FROM articles a
-  WHERE a.duplicate_of IS NOT NULL
-`).all();
-const dupSample = sample(dupPairs, DUP_PAIRS);
-const dupIds = [...new Set(dupSample.flatMap((p) => [p.dup_id, p.root_id]))];
-const dupArticles = db.prepare(`
-  SELECT id, feed_id, title, summary, published_at FROM articles WHERE id IN (${dupIds.map(() => '?').join(',')})
-`).all(...dupIds);
+const dedupSample = selectDedupPairs(db, { positiveCount: DUP_PAIRS, negativeCount: NEG_PAIRS });
+requireDedupPairs(dedupSample);
+const { positives: dupSample, negatives: negPairs, articles: dupArticles } = dedupSample;
 const byId = new Map(dupArticles.map((a) => [a.id, a]));
-
-// Same-feed pairs published within the dedup window (14d) that are NOT in
-// the same duplicate group — the realistic hard negatives dedup must reject.
-const DAY = 86400000;
-const negPairs = [];
-const pool = [...dupArticles];
-let guard = 0;
-while (negPairs.length < NEG_PAIRS && guard++ < 20000) {
-  const a = pick(pool);
-  const candidates = pool.filter((b) =>
-    b.id !== a.id && b.feed_id === a.feed_id &&
-    a.published_at && b.published_at &&
-    Math.abs(new Date(a.published_at) - new Date(b.published_at)) <= 14 * DAY &&
-    (a.duplicate_of ?? a.id) !== (b.duplicate_of ?? b.id) && b.duplicate_of !== a.id && a.duplicate_of !== b.id,
-  );
-  if (candidates.length > 0) negPairs.push([a.id, pick(candidates).id]);
-}
+const pairManifest = writePairManifest(dirname(config.db), dedupSample);
+console.log(`Pair manifest: ${pairManifest}`);
+console.log('Dedup labels are stored links versus cross-group candidate negatives, not independent human judgments.');
 
 console.log(`Subset: ${textArticles.length} text-embedding articles (${voted.length} voted + ${textArticles.length - voted.length} stratified), ${dupSample.length} duplicate pairs, ${negPairs.length} same-feed negative pairs, ${SEARCH_QUERIES.length} search queries`);
 
@@ -220,7 +192,8 @@ for (const model of models) {
     p50neg: quantile(negSims, 0.5), p95neg: quantile(negSims, 0.95),
   };
 
-  // Taste kNN: same-sign vs opposite-sign voted pairs (text embeddings).
+  // Representation diagnostic: same-sign vs opposite-sign voted pairs.
+  // This does not run the preference ranker or predict held-out votes.
   const votedIdx = textInputs.filter((t) => t.isVoted && r.text.vecs.has(t.id));
   const sameSign = [];
   const oppositeSign = [];
@@ -254,6 +227,8 @@ const lines = [];
 lines.push(`rssmart embedding benchmark -- ${new Date().toISOString()}`);
 lines.push(`Subset: ${textInputs.length} text articles, ${dupSample.length} dup pairs, ${negPairs.length} hard negatives, ${SEARCH_QUERIES.length} queries`);
 lines.push(`dupThreshold (config): ${config.enrich.dupThreshold}`);
+lines.push(`Pair manifest: ${pairManifest}`);
+lines.push('Dedup labels are proxies; vote-sign pair AUC is a representation diagnostic, not temporal ranking accuracy.');
 lines.push('');
 
 for (const model of models) {
@@ -265,7 +240,7 @@ for (const model of models) {
   lines.push(`  norm range (truncated, sample): ${r.normRange[0].toFixed(4)} - ${r.normRange[1].toFixed(4)}`);
   lines.push(`  dedup: AUC ${r.dedup.auc.toFixed(4)}, dup-pairs >= threshold ${(r.dedup.posAtThreshold * 100).toFixed(1)}%, false-pos rate ${(r.dedup.negAtThreshold * 100).toFixed(2)}%`);
   lines.push(`         sim p05/p50 pos: ${r.dedup.p05pos.toFixed(3)}/${r.dedup.p50pos.toFixed(3)}, p50/p95 neg: ${r.dedup.p50neg.toFixed(3)}/${r.dedup.p95neg.toFixed(3)}`);
-  lines.push(`  taste kNN (voted pairs): AUC ${r.knn.auc.toFixed(4)} (same-sign p50 ${r.knn.sameP50.toFixed(3)} vs opposite p50 ${r.knn.oppP50.toFixed(3)}, ${r.knn.pairs} pairs)`);
+  lines.push(`  vote-sign pair clustering (not ranker accuracy): AUC ${r.knn.auc.toFixed(4)} (same-sign p50 ${r.knn.sameP50.toFixed(3)} vs opposite p50 ${r.knn.oppP50.toFixed(3)}, ${r.knn.pairs} pairs)`);
   lines.push('');
 }
 

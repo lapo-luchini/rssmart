@@ -77,9 +77,9 @@
       <div class="custom-sliders" v-if="view === 'custom'" role="group" aria-label="Ranking weight experiment">
         <label v-for="axis in customAxes" :key="axis.key">
           <input type="range" min="0" max="2" step="0.05" :value="customWeights[axis.key] ?? axis.defaults"
-                 :title="axis.title" @input="setCustomWeight(axis.key, $event.target.value)">{{ axis.label }}
+                 :title="axis.perDay ? 'Score decay per day' : 'Multiplier: 1 keeps the configured contribution'" @input="setCustomWeight(axis.key, $event.target.value)">{{ axis.label }} {{ axis.perDay ? '' : '×' }}{{ customWeights[axis.key] ?? axis.defaults }}{{ axis.perDay ? '/day' : '' }}
         </label>
-        <button class="mark" title="reset the sliders to the configured scoring weights and decay" @click="resetCustomWeights">reset</button>
+        <button class="mark" title="reset multipliers to 1 and freshness to configured decay" @click="resetCustomWeights">reset</button>
       </div>
       <em v-else class="feed-notice">sorted by relevance</em>
       <input type="search" v-model="q" placeholder="search…" aria-label="Search articles">
@@ -101,6 +101,14 @@
               title="triage through exactly what's shown here, with the same filters">⚡ triage this</button>
     </div>
   </nav>
+
+  <p v-if="outboxCount || outboxIssue" class="notice" role="status" aria-live="polite">
+    <span v-if="outboxCount">{{ outboxCount }} changes saved locally, pending sync.</span>
+    <span v-if="outboxIssue">{{ outboxIssue.message }}</span>
+    <span v-if="!outboxCoordinatedTabs">Keep this app in one tab while syncing.</span>
+    <a v-if="outboxIssue?.status === 401" href="/login.html">sign in</a>
+    <button class="mark" @click="flushOutbox({ retryAuth: true, retryErrors: true })">retry sync</button>
+  </p>
 
   <section class="feeds-panel" v-if="panel === 'topics'">
     <div class="feed-row topic-grid feed-head">

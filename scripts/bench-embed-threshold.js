@@ -1,33 +1,18 @@
 // harrier@128 vs qwen3@64: matched-FPR recall comparison on the same pair sets.
+import { selectDedupPairs, writePairManifest, requireDedupPairs } from './bench-utils.js';
+import { dirname } from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { openDb } from '../src/db.js';
+import { openReadOnlyDb } from '../src/db.js';
 import { Ollama } from '../src/llm.js';
 
 const config = loadConfig();
-const db = openDb(config.db);
-let rngState = 7;
-const rand = () => (rngState = (rngState * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-const dupPairs = db.prepare('SELECT a.id AS dup_id, a.duplicate_of AS root_id FROM articles a WHERE a.duplicate_of IS NOT NULL').all();
-function sample(arr, n) {
-  const copy = [...arr], out = [];
-  while (out.length < n && copy.length > 0) out.push(copy.splice(Math.floor(rand() * copy.length), 1)[0]);
-  return out;
-}
-const dupSample = sample(dupPairs, 800);
-const ids = [...new Set(dupSample.flatMap((p) => [p.dup_id, p.root_id]))];
-const arts = db.prepare(`SELECT id, feed_id, title, summary, published_at FROM articles WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
-const DAY = 86400000;
-const negPairs = [];
-let guard = 0;
-while (negPairs.length < 800 && guard++ < 30000) {
-  const a = arts[Math.floor(rand() * arts.length)];
-  const cands = arts.filter((b) =>
-    b.id !== a.id && b.feed_id === a.feed_id && a.published_at && b.published_at &&
-    Math.abs(new Date(a.published_at) - new Date(b.published_at)) <= 14 * DAY &&
-    (a.duplicate_of ?? a.id) !== (b.duplicate_of ?? b.id) &&
-    b.duplicate_of !== a.id && a.duplicate_of !== b.id);
-  if (cands.length) negPairs.push([a.id, cands[Math.floor(rand() * cands.length)].id]);
-}
+const db = openReadOnlyDb(config.db);
+const dedupSample = selectDedupPairs(db);
+const { positives: dupSample, negatives: negPairs, articles: arts } = dedupSample;
+requireDedupPairs(dedupSample);
+console.log(`Pair manifest: ${writePairManifest(dirname(config.db), dedupSample)}`);
+console.log('Dedup labels are stored links versus cross-group candidate negatives, not independent human judgments.');
+
 const cos = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
 
 async function run(model, dims) {

@@ -30,7 +30,7 @@ createApp({
       sort: 'hot',
       // sort=custom experiment sliders: relative multipliers over the
       // stored per-signal score components (1.0 = the configured weight).
-      // The server's defaults are the configured profile; the client keeps
+      // The server defaults to 1.0 multipliers plus configured decay; the client keeps
       // its own copies lazily-set from /api/info's weight profile.
       customWeights: { topics: null, embedding: null, depth: null, feed: null, bonus: null, decay: null },
       customAxes: [
@@ -59,6 +59,10 @@ createApp({
       triagePos: 0,
       triageProcessed: 0,
       outboxCount: outbox.count, // votes/skips queued locally, not yet synced
+      outboxIssue: outbox.issue,
+      outboxCoordinatedTabs: outbox.coordinatedTabs,
+      feedbackIntent: {},
+      feedbackApplied: {},
       triageLoading: false,
       triageBusy: false,
       triageExpanded: false,
@@ -91,7 +95,15 @@ createApp({
       readerHtml: '',
       readerSource: null,
       readerLoading: false,
+      readerRequestId: 0,
+      readerController: null,
+      readerTargetId: null,
       loading: false,
+      listRequestId: 0,
+      listController: null,
+      listLoadedKey: null,
+      triageRequestId: 0,
+      triageController: null,
       error: null,
       prefByTopic: {},
       articlesByTopic: {},
@@ -151,6 +163,7 @@ createApp({
 
   watch: {
     q() {
+      this.invalidateList();
       clearTimeout(this.searchTimer);
       clearTimeout(this.customTimer);
       this.searchTimer = setTimeout(() => this.reload(), 300);
@@ -171,17 +184,14 @@ createApp({
     this.loadSidebarData();
     // Log the running version for debugging (git describe when available,
     // commit hash otherwise — see /api/info), and seed the custom-sort
-    // sliders with the server's REAL effective weight profile so entering
-    // custom mode shows what's actually applied (before this, sliders
-    // displayed "1.0" while the server ranked with the configured profile)
+    // sliders with the server's multiplier profile and configured decay.
     this.api('/api/info').then((v) => {
       console.log('rssmart', v.describe || v.commit);
       if (v.weightProfile) {
         for (const axis of this.customAxes) {
           const w = v.weightProfile[axis.key];
           if (w == null) continue;
-          // both the displayed value and the "reset" target follow the
-          // profile (uniform 1.0 is NOT the server's fallback)
+          // The displayed value and reset target follow the same defaults.
           if (this.customWeights[axis.key] == null) this.customWeights[axis.key] = w;
           axis.defaults = w;
         }
@@ -195,8 +205,12 @@ createApp({
     // actual reachability, so it can both under- and over-fire), and a
     // periodic fallback poll so a missed/wrong online event doesn't leave
     // votes stuck until the next unrelated trigger.
-    this.flushOutbox();
+    this.flushOutbox({ retryAuth: true });
     window.addEventListener('online', () => this.flushOutbox());
+    window.addEventListener('storage', () => {
+      this.outboxCount = outbox.count;
+      this.outboxIssue = outbox.issue;
+    });
     setInterval(() => this.flushOutbox(), OUTBOX_POLL_MS);
   },
 
@@ -207,12 +221,12 @@ createApp({
     // over the stored per-signal components (1.0 = the configured weight).
     setCustomWeight(axis, value) {
       this.customWeights[axis] = Number(value);
+      this.invalidateList();
       clearTimeout(this.customTimer);
       this.customTimer = setTimeout(() => this.reload(), 300);
     },
 
-    // Slider "reset": back to the server's configured profile — what the
-    // sliders showed on entering custom mode — not a blind uniform 1.0.
+    // Reset the signal multipliers to 1.0 and freshness to configured decay.
     resetCustomWeights() {
       for (const axis of this.customAxes) {
         this.customWeights[axis.key] = axis.defaults;
@@ -261,7 +275,7 @@ createApp({
 
     async api(path, options) {
       const res = await fetch(path, options);
-      this.flushOutbox(); // fire-and-forget: a response at all proves connectivity right now
+      if (res.ok) this.flushOutbox({ retryAuth: true });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `${res.status} ${res.statusText}`);
@@ -269,39 +283,57 @@ createApp({
       return res.json();
     },
 
-    async flushOutbox() {
-      await outbox.flush();
+    async flushOutbox(options) {
+      const feedbackRevision = outbox.revision;
+      const results = await outbox.flush(options);
       this.outboxCount = outbox.count;
+      this.outboxIssue = outbox.issue;
+      for (const { entry, data } of results) {
+        if ((this.feedbackApplied[entry.articleId] ?? 0) > entry.sequence) continue;
+        this.feedbackApplied[entry.articleId] = entry.sequence;
+        const visible = [...this.articles, ...this.triageQueue, this.readerArticle];
+        for (const article of visible) {
+          if (article?.id === data.id) Object.assign(article, outbox.project({ ...article, ...data }, feedbackRevision));
+        }
+      }
+      return results;
     },
 
-    /**
-     * Attempt a write; on success, hand the parsed response to onSuccess.
-     * On a real rejection (4xx) throw, same as api() -- that's not a
-     * connectivity problem. On a network failure or 5xx, apply onQueued's
-     * optimistic local update and queue the request in the outbox (see
-     * outbox.js) to replay later instead of blocking/erroring the caller.
-     */
+    // Persist first for every feedback surface. Local updates are applied
+    // only once persistence succeeds; acknowledgements may arrive later.
     async attemptOrQueue(path, options, { onSuccess, onQueued }) {
-      let res;
-      try {
-        res = await fetch(path, options);
-      } catch {
-        res = null;
-      }
-      if (res && res.ok) {
-        onSuccess(await res.json());
-        this.flushOutbox();
-      } else if (res && res.status < 500) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `${res.status} ${res.statusText}`);
-      } else {
-        onQueued();
-        outbox.enqueue(path, options);
-        this.outboxCount = outbox.count;
-      }
+      const feedbackRevision = outbox.revision;
+      const entry = await outbox.enqueue(path, options);
+      this.feedbackIntent[entry.articleId] = entry.id;
+      onQueued();
+      this.outboxCount = outbox.count;
+      this.flushOutbox().then(results => {
+        if (this.feedbackIntent[entry.articleId] !== entry.id) return;
+        const saved = results.find(item => item.entry.id === entry.id);
+        if (saved) onSuccess(outbox.project(saved.data, feedbackRevision));
+      });
+    },
+
+    invalidateList() {
+      this.listRequestId++;
+      this.listController?.abort();
+      this.loading = false;
+    },
+
+    listQueryKey() {
+      const params = this.params(0);
+      params.delete('cursor');
+      params.delete('offset');
+      return `${this.panel ?? ''}:${params}`;
     },
 
     async reload() {
+      const feedbackRevision = outbox.revision;
+      this.invalidateList();
+      const requestId = this.listRequestId;
+      const query = this.listQueryKey();
+      const current = () => requestId === this.listRequestId && query === this.listQueryKey();
+      const controller = this.listController = new AbortController();
       this.loading = true;
       this.error = null;
       this.expandedId = null;
@@ -311,28 +343,38 @@ createApp({
       this.shownOriginal = {};
       this.cursor = null; // a reload is page 1: a continuation left over from the previous filter/sort state would pin the wrong window
       try {
-        const data = await this.api(`/api/articles?${this.params(0)}`);
-        this.articles = data.articles;
+        const data = await this.api(`/api/articles?${this.params(0)}`, { signal: controller.signal });
+        if (!current()) return;
+        this.articles = data.articles.map(article => outbox.project(article, feedbackRevision));
         this.total = data.total;
         this.cursor = data.nextCursor ?? null; // keyset continuation
+        this.listLoadedKey = query;
       } catch (err) {
-        this.error = `Cannot load articles: ${err.message}`;
+        if (current() && err.name !== 'AbortError') this.error = `Cannot load articles: ${err.message}`;
       } finally {
-        this.loading = false;
+        if (current()) this.loading = false;
       }
     },
 
     async loadMore() {
+      const feedbackRevision = outbox.revision;
+      if (this.loading) return;
+      const query = this.listQueryKey();
+      if (query !== this.listLoadedKey) return this.reload();
+      const requestId = ++this.listRequestId;
+      const controller = this.listController = new AbortController();
+      const current = () => requestId === this.listRequestId && query === this.listQueryKey();
       this.loading = true;
       try {
-        const data = await this.api(`/api/articles?${this.params(this.articles.length)}`);
-        this.articles.push(...data.articles);
+        const data = await this.api(`/api/articles?${this.params(this.articles.length)}`, { signal: controller.signal });
+        if (!current()) return;
+        this.articles.push(...data.articles.map(article => outbox.project(article, feedbackRevision)));
         this.total = data.total;
         this.cursor = data.nextCursor ?? null;
       } catch (err) {
-        this.error = `Cannot load articles: ${err.message}`;
+        if (current() && err.name !== 'AbortError') this.error = `Cannot load articles: ${err.message}`;
       } finally {
-        this.loading = false;
+        if (current()) this.loading = false;
       }
     },
 
@@ -395,12 +437,16 @@ createApp({
         history.replaceState(null, '', `#/${this.currentRoute()}`);
         return;
       }
+      if (routes.includes(route)) this.closeReader({ restoreRoute: false });
       if (route === this.currentRoute()) return;
       if (['triage', 'topics', 'feeds'].includes(route)) this.openPanel(route);
       else if ([`interesting`, `unread`, `explore`, `custom`].includes(route)) this.setView(route);
     },
 
     setView(v) {
+      this.closeReader({ restoreRoute: false });
+      this.triageRequestId++;
+      this.triageController?.abort();
       this.panel = null;
       this.view = v;
       this.sort = v === 'interesting' ? 'hot' : v === 'explore' ? 'novelty' : v === 'custom' ? 'custom' : 'date';
@@ -409,6 +455,10 @@ createApp({
     },
 
     openPanel(name) {
+      this.closeReader({ restoreRoute: false });
+      this.invalidateList();
+      this.triageRequestId++;
+      this.triageController?.abort();
       this.panel = name;
       this.feedNotice = '';
       this.guidelinesNotice = '';
@@ -430,8 +480,9 @@ createApp({
     // (esc) returns to this same filtered view, since starting it never
     // touches view/topic/feedId/etc. themselves, only which panel is shown.
     triageThisView() {
-      this.startTriage('filtered');
+      this.invalidateList();
       this.panel = 'triage';
+      this.startTriage('filtered');
       this.feedNotice = '';
       this.guidelinesNotice = '';
       this.syncHash();
@@ -472,13 +523,22 @@ createApp({
     // session; the while loop below just keeps walking the offset forward
     // until it finds a batch with something new, or genuinely runs out.
     async loadTriageBatch() {
+      const feedbackRevision = outbox.revision;
+      const requestId = ++this.triageRequestId;
+      this.triageController?.abort();
+      const controller = this.triageController = new AbortController();
+      const panel = this.panel;
+      const query = `${this.triageScope}:${this.triageParams(0)}`;
+      const current = () => requestId === this.triageRequestId && panel === this.panel &&
+        query === `${this.triageScope}:${this.triageParams(0)}`;
       this.triageLoading = true;
       try {
         let offset = 0;
         let queue = [];
         for (;;) {
-          const data = await this.api(`/api/articles?${this.triageParams(offset)}`);
-          queue = data.articles.filter((a) => !this.triageSeen.has(a.id));
+          const data = await this.api(`/api/articles?${this.triageParams(offset)}`, { signal: controller.signal });
+          if (!current()) return;
+          queue = data.articles.filter((a) => !this.triageSeen.has(a.id)).map(article => outbox.project(article, feedbackRevision));
           if (queue.length > 0 || data.articles.length === 0) break;
           offset += data.articles.length;
         }
@@ -486,9 +546,9 @@ createApp({
         this.triagePos = 0;
         this.collapseTriageContent();
       } catch (err) {
-        this.error = `Cannot load triage queue: ${err.message}`;
+        if (current() && err.name !== 'AbortError') this.error = `Cannot load triage queue: ${err.message}`;
       } finally {
-        this.triageLoading = false;
+        if (current()) this.triageLoading = false;
       }
     },
 
@@ -828,13 +888,17 @@ createApp({
 
     async vote(article, vote) {
       try {
-        const updated = await this.api(`/api/articles/${article.id}/vote`, {
+        await this.attemptOrQueue(`/api/articles/${article.id}/vote`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ vote }),
+        }, {
+          onSuccess: updated => { Object.assign(article, updated); this.loadSidebarData(); },
+          onQueued: () => {
+            article.vote = vote;
+            if (vote !== 0) article.read_at ??= new Date().toISOString();
+          },
         });
-        Object.assign(article, updated); // vote, score and its components
-        this.loadSidebarData();
       } catch (err) {
         this.error = `Vote failed: ${err.message}`;
       }
@@ -842,13 +906,15 @@ createApp({
 
     async toggleRead(article) {
       try {
-        const updated = await this.api(`/api/articles/${article.id}/read`, {
+        const read = !article.read_at;
+        await this.attemptOrQueue(`/api/articles/${article.id}/read`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ read: !article.read_at }),
+          body: JSON.stringify({ read }),
+        }, {
+          onSuccess: updated => { article.read_at = updated.read_at; this.loadSidebarData(); },
+          onQueued: () => { article.read_at = read ? new Date().toISOString() : null; },
         });
-        article.read_at = updated.read_at;
-        this.loadSidebarData();
       } catch (err) {
         this.error = `Update failed: ${err.message}`;
       }
@@ -876,7 +942,20 @@ createApp({
     // the overlay remains as the real-new-tab escape hatch. The overlay's
     // URL is the article permalink (#/article/<id>); closing restores the
     // tab's hash.
+    invalidateReader() {
+      this.readerRequestId++;
+      this.readerController?.abort();
+      this.readerController = null;
+      this.readerTargetId = null;
+      this.readerLoading = false;
+    },
+
     async openReader(article) {
+      this.invalidateReader();
+      const requestId = this.readerRequestId;
+      const controller = this.readerController = new AbortController();
+      const current = () => requestId === this.readerRequestId;
+      this.readerTargetId = article.id;
       this.readerArticle = article;
       const permalink = `#/article/${article.id}`;
       if (location.hash !== permalink) location.hash = permalink;
@@ -885,41 +964,51 @@ createApp({
       this.readerLoading = true;
       if (!article.read_at) this.toggleRead(article);
       try {
-        const data = await this.api(`/api/articles/${article.id}/reader`);
-        // identity by id, never by reference: a deep-linked article arrives
-        // as a raw object while this.readerArticle reads back as Vue's
-        // reactive proxy of it — reference equality would always differ and
-        // leave the overlay on "Loading…" forever
-        if (this.readerArticle?.id !== article.id) return; // closed or switched while loading
+        const data = await this.api(`/api/articles/${article.id}/reader`, { signal: controller.signal });
+        // A generation also distinguishes closing/reopening the SAME id.
+        // It is independent of Vue's proxy identity and works if abort is late.
+        if (!current()) return;
         this.readerHtml = data.html;
         this.readerSource = data.source;
       } catch (err) {
-        if (this.readerArticle?.id !== article.id) return;
+        if (!current() || err.name === 'AbortError') return;
         this.error = `Cannot load article: ${err.message}`;
         this.readerArticle = null;
+        this.readerTargetId = null;
       } finally {
-        if (this.readerArticle?.id === article.id) this.readerLoading = false;
+        if (current()) this.readerLoading = false;
       }
     },
 
-    closeReader() {
+    closeReader({ restoreRoute = true } = {}) {
+      this.invalidateReader();
       this.readerArticle = null;
-      this.syncHash();
+      this.readerHtml = '';
+      this.readerSource = null;
+      if (restoreRoute) this.syncHash();
     },
 
     // Permalink target: reuse the list's copy of the article when present
     // (so votes stay in sync), otherwise fetch it — works from any mode,
     // including deep links straight into triage or topics.
     async openReaderById(id) {
-      if (this.readerArticle?.id === id) return;
-      const local = this.articles.find((a) => a.id === id);
+      // The hashchange generated by openReader belongs to the same request.
+      if (this.readerTargetId === id) return;
+      this.invalidateReader();
+      const requestId = this.readerRequestId;
+      const controller = this.readerController = new AbortController();
+      const feedbackRevision = outbox.revision;
+      this.readerTargetId = id;
+      const local = this.articles.find((a) => a.id === id) ?? (this.readerArticle?.id === id ? this.readerArticle : null);
       if (local) return this.openReader(local);
       try {
-        const article = await this.api(`/api/articles/${id}`);
-        if (this.readerArticle?.id === id) return;
-        this.openReader(article);
+        const article = await this.api(`/api/articles/${id}`, { signal: controller.signal });
+        if (requestId !== this.readerRequestId) return;
+        return this.openReader(outbox.project(article, feedbackRevision));
       } catch (err) {
+        if (requestId !== this.readerRequestId || err.name === 'AbortError') return;
         this.error = `Cannot load article: ${err.message}`;
+        this.readerTargetId = null;
       }
     },
 

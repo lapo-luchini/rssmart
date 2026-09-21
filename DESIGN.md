@@ -7,6 +7,187 @@ day-one spec was retired for exactly that reason; it's in git history).
 
 ## Decisions and their reasons
 
+- **2026-09-20: isolate durable feedback from upstream storage writers.**
+  The upstream array client treats a v3 object as an empty queue, then
+  overwrites it on its next enqueue. New clients therefore exclusively write
+  `rssmart_outbox_v3`, with storage/flush locks named for that key. The old
+  `rssmart_outbox` key is read once for migration and is never written or
+  removed by new code. Migration preserves existing v2/v3 identities,
+  sequences, queued bodies and acknowledgements; legacy arrays receive
+  durable identities before any request is sent. The isolated record is
+  authoritative after its first successful atomic save, including when its
+  pending queue becomes empty: a restart never reimports the retained source.
+  Quota or a crash before that save leaves the source intact; a crash after
+  it resumes the saved identities.
+  An exact `legacySnapshot` records the migration baseline, avoiding both
+  hash collisions and a compare/delete race with an uncoordinated old tab.
+  If that key changes later, sync pauses without absorbing or renumbering
+  old operations. Enqueue/flush also persist the first observed divergent
+  value as `legacyConflict.snapshot`; once saved, the pause survives restarts
+  and a later return of the old key to its baseline. Inspection alone does
+  not write storage, and this is not a journal of every transient old-tab
+  write. Both live records and any recorded conflict remain available for
+  manual reconciliation; explicit retry does not bypass the conflict.
+  Keeping the old record plus its baseline duplicates legacy storage once;
+  a recorded conflict can retain another value. Quota remains an explicit
+  failure, with no automatic deletion or eviction of pending intentions.
+  Close all older tabs/workers before upgrading or rolling back. An old
+  client can still send unsequenced legacy writes to the server, so key
+  isolation does not establish cross-version ordering. Before rollback,
+  export BOTH complete storage values and reconcile their intentions with
+  server receipts: the retained legacy source may contain operations already
+  acknowledged by the new client and must not be blindly replayed, even when
+  the new pending queue is empty. Restore compatible application, browser
+  state and DB together; never clear or automatically renumber a queue to
+  bypass receipt gaps. No UI for automatic reconciliation is introduced.
+
+- **2026-09-20: parse and allowlist untrusted HTML at write and render boundaries.**
+  The regex blocklist admitted entity-encoded JavaScript URLs and malformed
+  event attributes. `sanitize-html` now preserves ordinary article structure,
+  tables, code, image descriptions and HTTP(S) images while removing active
+  elements, event attributes, inline styles, arbitrary IDs and unsafe URLs.
+  Its parser decodes entities before the URL policy. Detail and reader APIs
+  sanitize the final fragment again, covering legacy stored content and
+  transformations without a destructive database rewrite. Markup is normalized
+  (for example self-closing image serialization), and unsupported interactive
+  embeds/styles are intentionally omitted. This does not regenerate embeddings.
+  Regression tests inspect parsed output with script execution disabled and
+  exercise both API boundaries; they are not a claim of cross-browser proof.
+  Upstream policy documentation lives in the maintained Apostrophe monorepo:
+  https://github.com/apostrophecms/apostrophe/tree/main/packages/sanitize-html.
+
+- **2026-09-20: share feedback acknowledgements and cancel obsolete reader requests.**
+  Queue format v3 persists a monotonic acknowledgement revision and each
+  article's last acknowledged feedback/score fields in the same localStorage
+  write that removes the corresponding entry. The Web Locks storage critical
+  section covers that entire update. A quota/write failure leaves the exact
+  durable operation available for idempotent replay; no in-memory revision
+  falsely announces a committed local acknowledgement. Version 2 upgrades
+  retain client identities, sequences, bodies and FIFO order. Intermediate
+  v2 tabs reject v3, whereas upstream array clients do not; the dedicated-key
+  isolation above prevents their writes from replacing the new queue.
+  List, triage and permalink GETs capture the shared revision before I/O and
+  preserve fields acknowledged since then, even by another tab after the
+  shared queue has emptied. Older mutation callbacks use the same projection.
+  A later GET is allowed to observe newer server state from another device;
+  these local acknowledgements are not a distributed causality clock or a
+  subscription that refreshes idle views. Only the latest value/revision per
+  feedback field is retained, with no article content, but storage still
+  grows with the number of articles touched, alongside sequence bookkeeping.
+  There is no unsafe expiry while another tab could still hold an older GET.
+  Storage exhaustion remains visible and preserves pending intentions.
+  One reader generation covers permalink detail loading, direct local opens,
+  HTML requests, close and navigation away. Responses, errors and loading
+  completion are applied only to their generation, including close/reopen of
+  the same article id. AbortController reduces obsolete work; the generation
+  check remains authoritative when an aborted response still completes.
+  Permalink details are projected before deciding whether to mark read, so
+  a stale detail response cannot create a redundant read mutation after an
+  acknowledged vote already marked the article read.
+
+- **2026-09-20: persist and order every vote/read intent, including online writes.**
+  List, reader and triage feedback all use the same outbox. Persistence must
+  succeed before the optimistic UI changes; a storage/quota error leaves
+  the article unchanged. FIFO is deliberate, not a missing optimization:
+  vote(+1), vote(0) implies read, whereas sending only vote(0) does not.
+  Vote/read therefore share a contiguous per-article sequence and no SET
+  is coalesced away. Later acknowledgements are projected through pending
+  intentions and cannot replace a newer local vote. GET responses also
+  preserve fields acknowledged since the request began, even after the
+  corresponding queue entry has been removed.
+  Each persisted body carries `mutation: { clientId, sequence }`. Migration
+  22 adds `feedback_receipts`, keyed by client/article/sequence, storing the
+  operation and value. The server atomically writes feedback, its receipt
+  and the pending scoring marker at FULL durability. It accepts only the
+  next sequence; an exact replay returns current state without re-dating,
+  recomputing or rescheduling. A gap or reused identity with different
+  content returns 409. Receipts persist across server restarts and are not
+  expired: this is retry bookkeeping, not a complete history of older API
+  writes. Other clients/devices have separate sequences; their new writes
+  follow server receipt order, not a claimed ordering of offline intentions.
+  Two tabs coordinate storage read/modify/write and flushing with separate
+  Web Locks, so an in-flight request does not block persisting a newer
+  intent. Without Web Locks, use one tab; the pending-sync notice says so.
+  The lock queue defines the order of simultaneous tab writes; wall clocks
+  do not decide winners. Independent browser profiles/devices and old tabs
+  do not participate in those locks. Close older app tabs when upgrading.
+  Legacy outbox arrays are converted in order and saved with stable IDs
+  before transmission. Already committed legacy requests cannot acquire
+  retroactive idempotency. API calls without `mutation` remain compatible
+  but have no receipt/order guarantee.
+  A 401 retains and pauses feedback until successful authenticated API
+  activity or explicit retry. 429 respects Retry-After (seconds or HTTP
+  date), including after reload; network, 408, 425 and 5xx failures back off
+  for 20 seconds by default. Requests time out after 15 seconds; receipt
+  identity handles the possibility that the server nevertheless committed.
+  Unreadable acknowledgements stay queued. Permanent rejections remain
+  visible and block later operations on that article, while independent
+  articles can sync. Retry never renumbers a rejected operation or bypasses
+  server sequence checks. Pending state and a retry action are visible in
+  all views; successful entries alone are removed, by exact identity.
+  A restored/replaced server DB can have older receipts than the browser:
+  the resulting 409 is intentionally retained, not retried in a loop or
+  converted into a new identity. Recovery requires reconciling both states:
+  first preserve the complete `localStorage.rssmart_outbox` AND
+  `localStorage.rssmart_outbox_v3` values externally,
+  stop sending from every tab, then restore matching server receipts or
+  manually reconcile the saved intentions against the restored articles.
+  There is no automatic destructive queue reset. Clearing browser storage
+  loses locally pending intentions; server receipts do not back them up.
+
+- **2026-09-20: only the current query can update list state.** Reload,
+  pagination and triage batches capture a generation and query identity;
+  result, error, cursor and loading changes are conditional on that identity.
+  AbortController also cancels superseded work but is not the correctness
+  guard. Search/slider edits invalidate at the start of the debounce period,
+  and a page continuation is accepted only for the query that loaded its
+  first page. Overlapping loadMore calls share no pagination window.
+
+- **2026-09-20: custom sliders multiply stored contributions.** The stored
+  score components already contain their configured weights. Neutral custom
+  multipliers and reset values are therefore 1, while freshness remains the
+  configured score decay per day. Applying the configured weights again
+  squared their effect and changed the default order. The UI labels the
+  multipliers explicitly. This lens cannot restore a component whose
+  persisted contribution was zero; raw-feature reweighting is a different
+  contract and would require storing or recomputing those features.
+
+- **2026-09-20: identify pending score work by revision as well as due time.**
+  A zero-delay vote can arrive while a chunked sweep is running and schedule
+  exactly the same second-resolution timestamp. Clearing by timestamp alone
+  loses that update. Scheduling now increments a persistent revision in the
+  same transaction as the due marker; completion acknowledges only the
+  captured revision. Old markers without a revision remain consumable. The
+  counter stays after completion, so an explicit clear followed by another
+  request cannot reuse the previous identity. Scoring remains asynchronous.
+
+- **List cursors use the exact SQL ordering tuple (2026-09-20).** A single
+  tuple drives `ORDER BY`, the strictly-smaller keyset predicate and the
+  values returned in the opaque cursor. A presence flag before each
+  numeric rank puts NULLs last and makes the finite-to-NULL boundary
+  traversable; replacing a missing novelty score with `+1e9` previously
+  contradicted DESC's NULL-last order. Date and id break ties. Hot/custom
+  use `score + decay * publicationDay`: linear decay's `-decay * now` is
+  common to every candidate and cannot affect the intended ordering.
+  Publication days are counted from the Unix epoch to avoid the large
+  Julian-day offset, and the cursor copies SQLite's computed values rather
+  than rebuilding them with a later JavaScript clock. This preserves
+  exact ties across page requests and clock changes. Group representatives
+  keep their existing selection rule (custom ranking for custom, score
+  otherwise), with the cursor predicate applied after representative
+  selection. Versioned cursors bind to the effective sort, filters,
+  grouping rule and weights, so changes require a new first page; the page
+  size can change. Legacy tuple cursors and malformed/incompatible cursors
+  return HTTP 400 with a restart instruction. The scope digest is a
+  compatibility check, not a signature or authorization mechanism.
+  **This remains a live list**, not a ranking snapshot: a vote, enrichment,
+  recompute or changed group representative can move an article across
+  an existing cursor. Marking already-returned articles read does not
+  shift the remaining stable keys, unlike OFFSET. Date round-robin and
+  semantic search keep OFFSET and reject keyset cursors. No schema change
+  is needed. `test/pagination.test.js` covers missing keys, ties, clock
+  changes, read churn, group representatives and incompatible cursors.
+
 - **Duplicate detection uses embeddings, not a generative prompt.** Cosine
   similarity of summary embeddings is cheap, deterministic, and needs no
   prompt engineering. The summary embedding is deliberately built from *our
@@ -623,30 +804,9 @@ day-one spec was retired for exactly that reason; it's in git history).
   the exact same slot for free: `apiView` maps it to `unread` (or `all`,
   same as any other tab, when `includeRead` is checked) since the
   backend has no "explore" concept of its own, only the sort differs.
-- **Triage votes/skips survive a flaky mobile connection via a small
-  persisted retry queue (`public/outbox.js`), not a blocking retry.** A
-  failed vote used to leave the card in place until you noticed the error
-  and manually retried — fine on a desk, bad mid-triage on a phone in a
-  tunnel or elevator. Now: on a network failure or 5xx (not a real 4xx
-  rejection — that still surfaces as an error immediately, retrying won't
-  fix a bad request), the vote is applied to the local article object
-  right away, triage advances immediately, and the request is queued to
-  `localStorage` for replay. Safe to replay blindly, no dedup/conflict
-  logic needed: `/vote` and `/read` are both plain idempotent `SET`s
-  server-side, not toggles — the client already resolves "toggle" to an
-  explicit target value before sending, so resending the identical
-  request is a no-op either way. Retried on load (a previous session's
-  queue), on the browser's `online` event, on a 20s fallback poll (the
-  `online` event reflects network-interface state, not actual
-  reachability, so it can misfire either direction), and piggybacked on
-  any other successful API call. A small "N pending sync" badge in the
-  triage panel is the only new UI. Deliberately scoped to triage's
-  vote/skip only, not every write action in the app (feed edits,
-  guidelines, reclassify) — those are rarer, less time-pressured actions
-  where today's "show an error, let them retry" is an acceptable
-  experience — and does not extend to `loadTriageBatch` fetching the next
-  *batch* of articles (a read, not a queued write); that still fails
-  visibly on a dead connection.
+- **The original triage-only retry queue has been superseded.** See the
+  2026-09-20 feedback decision above: idempotent SET values alone did not
+  protect ordering, timestamps or non-triage votes.
 - **Feed titles are user-editable** (`PATCH /api/feeds/:id` now also
   accepts `title`, alongside its existing `active`). A blank title clears
   the override back to `NULL` rather than rejecting the request — `NULL`
@@ -934,22 +1094,367 @@ Two paths, with very different scaling:
   the fused JS pass - the next ladder rung if this ever matters is
   batching or moving those, not more kernel tuning.
 
+## Mastodon forward cursors — 2026-09-20
+
+Status IDs stay opaque strings, including when they exceed JavaScript's
+integer precision. The home timeline is returned in server order,
+newest-first; each page is reversed for ingestion, and its first wire ID
+is the next `min_id`. No client-side ID ordering is assumed. See the
+[Mastodon ID and pagination guidelines](https://docs.joinmastodon.org/api/guidelines/)
+and [home timeline API](https://docs.joinmastodon.org/methods/timelines/).
+This uses the public status IDs of the home endpoint, not cursors derived
+from a different endpoint's related entities.
+
+With an existing cursor, fetch at most ten pages per run, continuing after
+short pages (a server may filter results or impose a smaller limit). Stop
+on an empty page; fail on a repeated cursor instead of looping or claiming
+success. Return deduplicated posts oldest-first. Without a cursor, ingest
+one latest page, up to 40 posts; initial synchronization deliberately does
+not backfill historical posts. Further runs walk forward from that seed.
+
+`meta.mastodon_watermark:<feed id>` stores the exact last returned ID in
+the same transaction as the articles and feed success counters. It does
+not depend on local article IDs or retention. Fetch or insert failure
+leaves that checkpoint unchanged. Concurrent fetches compare the saved
+checkpoint again inside the write transaction; a stale fetch fails and
+retries on the next scheduled run, rather than replacing a newer marker.
+This adds no schema migration. Existing feeds without a marker use their
+last inserted Mastodon GUID once, as before, safely replaying duplicates.
+It cannot reconstruct posts already skipped before that legacy cursor;
+historical gap repair needs an explicit earlier cursor/backfill policy.
+Compatibility still requires the server to implement forward `min_id`
+and newest-first page order; IDs themselves need not be numeric.
+
+The regression fixture uses 100 new IDs around `115000000000000001` and
+one-page ingestion budgets: additions are `[40, 40, 20, 0]`, with every ID
+stored once. Other fixtures cover opaque IDs, bounded resume, overlapping
+and short pages, initial/empty sync, legacy replay, retention, no-progress
+responses, transaction rollback and competing fetches. They use mocked
+HTTP and in-memory SQLite; no live timeline is part of the test gate.
+
+## Cache freshness and vote time — 2026-09-20
+
+Scoring caches use a token from SQLite `data_version` (other connections'
+commits) and `total_changes()` (this connection's writes). Tokens are only
+compared within one connection, and caches/statements are held in WeakMaps.
+This detects equal-size embedding replacements, vote swaps whose sums do
+not change, and topic edits without relying on article counts or timestamp
+precision. See [data_version](https://www.sqlite.org/pragma.html#pragma_data_version)
+and [total_changes](https://www.sqlite.org/c3ref/total_changes.html).
+Unrelated writes conservatively invalidate too; this favors correctness
+over a growing list of invalidation hooks. The token is not a durable
+application revision, a cross-connection ordering, or a replacement for a
+transaction. Score scheduling retains its separate persistent revision.
+
+The voted-vector cache stores raw votes and times. Each prediction/sweep
+computes decay at its current time without mutating a snapshot leased by
+another yielding sweep. Topic statistics with vote decay expire at the
+next one-second clock bucket, even if no rows changed. No scoring weights,
+neighbor selection, embedding dimensions or formulas are changed.
+
+## HTML rendering boundary — 2026-09-20
+
+Feed, reader and legacy stored HTML pass through `sanitize-html` 2.17.7,
+using an explicit allowlist. Scripts, handlers, styles, frames, forms,
+SVG/MathML and unsafe URL schemes are removed. Common feed formatting,
+code, tables, links and HTTP(S) images remain supported; styles, IDs and
+unsupported embeds do not. Link targets are restricted and external links
+receive `noopener noreferrer`. This introduces a maintained parser-based
+security dependency; keep its lockfile and security updates current.
+
+Sanitization also runs immediately before both article HTML API responses,
+so protection does not depend on rewriting every legacy database row.
+Article navigation URLs and feed website URLs are separate from the HTML
+fragment. API responses expose only absolute HTTP(S) navigation targets;
+unsupported targets become null, including in legacy rows and version lists.
+Stored source URLs remain available for inspection and are not rewritten.
+This closes an independent navigation boundary; no browser exploit through
+that field was demonstrated by the review.
+
+Malformed markup and encoded-URL regressions are parsed with happy-dom as
+a test oracle only; happy-dom is not the sanitizer and these fixtures do
+not constitute a cross-browser security proof. Review real feed formatting
+when deploying the stricter allowlist.
+
+## Feed statistics cache — 2026-09-20
+
+The feed list uses the same connection-local database version token as
+scoring and expires once per second. Equal-count vote changes, feed edits
+and commits from other connections are visible on the next request.
+The 28-day publishing rate compares Julian timestamps at that same clock
+bucket, including ISO dates with `T`, and expires without requiring a write.
+This removes the repeated whole-archive COUNT/SUM scan previously used as
+a cache key; a changed token conservatively refreshes the aggregate query.
+
+## Feature changes and durable work — 2026-09-20
+
+Topic merges, taste-space invalidation and replacements of voted features
+schedule a full scoring ripple inside the transaction that changes the
+inputs. The existing revision-aware queue acknowledges only the work a
+sweep actually consumed. A missing taste vector on an unvoted article is
+scored locally when filled; dedup-only replacement does not rescore taste.
+Reclassification checks the article's vote at commit time, so feedback
+arriving while Ollama runs is included in this decision. Both scheduler
+and cron benefit because scheduling lives in the mutation functions.
+
+The scheduler probes the durable queue each tick with EXISTS. It never
+remembers "empty" indefinitely, and a deliberately absent dedup vector
+outside the retention window does not count as work. API reclassification
+must use `requestReclassification(db, id, note)`, which increments a durable
+request revision with the pending status. Older in-flight replies/failures
+cannot replace the newer request or consume its attempts. Origin-content
+cache writes made by enrichment carry the same guard. The request helper
+returns the usual SQLite `{changes}` result for the endpoint's 404 check.
+
+Embedding metadata now identifies document prefix, input form and explicit
+preprocessing version as well as model tag, dimensions and Float16 format.
+Changing only the query prefix preserves document vectors. Existing legacy
+identities lack this provenance: upgrading conservatively clears affected
+vectors once and refills them through the usual queue. During that refill,
+scores reflect the currently available evidence and pending full sweeps;
+they are not an atomic all-model deployment. Running workers reject results
+whose recorded space changed while the model call was in flight. Restart
+old workers when deploying a changed model configuration. Mutable model
+tags still require operational pinning; this metadata does not discover a
+remote model replacement hidden behind an unchanged tag/digest-less name.
+
+## Read-only benchmark databases (2026-09-20)
+
+Database-backed `bench-*` scripts use `openReadOnlyDb`, which opens an
+existing file with the driver's readonly flag and never creates a database,
+changes journal mode or runs migrations. Incompatible schema versions fail
+before any model request, with an instruction to migrate a separate copy.
+The serving/migration path remains `openDb`. Readonly prevents benchmark
+writes; it does not freeze concurrent writes by a running application.
+Use a consistent SQLite backup for repeatable measurements, including its
+committed WAL state. A live read may use SQLite's WAL sidecars. Tests check
+failed writes, byte-for-byte preservation, missing files and the entry
+points of all six database benchmarks against an incompatible fixture.
+
+## Benchmark labels and dimensionality diagnostics (2026-09-20)
+
+The four embedding/dedup comparison scripts share one sampler and write
+the exact article pairs, seed, window and selection version to a JSON
+manifest. Candidates explicitly carry their stored group root. Parent/
+child and sibling pairs are excluded from negatives, pairs are unordered
+and unique, and malformed non-flat groups fail without being repaired.
+Reservoir sampling covers the eligible same-feed, within-window pool with
+bounded memory; small pools return fewer pairs and missing classes fail
+before dedup metrics or embedding calls. All model comparisons in a run
+use the same pairs. **Stored links are proxy labels**: false groups can
+contaminate positives and missed links can contaminate negatives. Multiple
+pairs can share articles/events, so pair counts are not independent sample
+sizes. These corrected samples are not the historical benchmark samples.
+
+The historical "taste kNN AUC" measures same-sign versus opposite-sign
+vote-pair clustering. Output now names that diagnostic explicitly; it does
+not execute the production ranker, test future votes or measure top-list
+utility. Existing historical figures in this document refer to that pair
+diagnostic. Preference claims require a temporal replay with all learned
+aggregates rebuilt using past data, plus evaluation of the combined score.
+
+The MRL probe reports retained prefix energy and the cosine between the
+native prefix and the returned short embedding separately. The previous
+unequal-length dot/padded cosine equals the square root of retained energy
+when the short vector is a normalized prefix: a lower value need not mean
+worse semantic ranking. Neither energy nor prefix agreement proves MRL
+training or preserves task performance. Compare each dimensionality on
+the same independent dedup/search/preference examples before selecting it.
+
+## Numeric configuration domains (2026-09-20)
+
+Configuration loading rejects non-finite numbers and invalid domains before
+workers, kNN buffers or timers start. Counts use nonnegative/positive safe
+integers as appropriate, bounded by JavaScript's array-length limit;
+Ollama timeout milliseconds also obey the signed 32-bit timer limit. Workers,
+attempts, input/storage character limits and configured embedding dimensions
+must be positive. Cosine thresholds lie in [-1,1]; ports allow 0 through
+65535 (0 asks the runtime to assign one). Scheduler intervals are positive
+and ordered min <= max, with fractional minutes supported. Weights are
+finite and nonnegative, their sum must stay finite, and need not equal one.
+Zero still disables kNN, vote decay, hot decay and debounce, or the existing
+fetch/link/topic-limit options; nullable/omitted optional keys retain their
+fallback behavior. Invalid fields are named in the startup error. This
+checks representation and semantic domains, not whether a chosen workload
+fits the machine's memory or the model's supported dimensions.
+
+## Git version tests without checkout assumptions (2026-09-20)
+
+`test/gitmeta.test.js` builds isolated Git-format fixtures instead of
+requiring this checkout's object layout to match `git describe`. The
+reader's loose-history description, annotated/packed tag refs, detached
+linked-worktree support and hash/empty fallbacks are tested separately.
+An unavailable loose HEAD object models the reader's boundary for packed
+or incomplete history; the test does not claim to parse packfiles. Git
+does not need to be installed to run these fixtures. The version reader
+itself and its documented best-effort production behavior are unchanged.
+
+## Duplicate cache and group structure — 2026-09-20
+
+The recent-vector cache uses the same connection change token as scoring.
+An existing article may receive a vector long after its creation time,
+including from another process. Creation-time watermarks cannot detect
+that write, a same-sized replacement or a deletion. Any detected write now
+reloads the eligible window; calls with no writes reuse it, with time-based
+pruning. Enrichment checks again after its network awaits before deciding
+the duplicate match. This is conservative cache invalidation, not an
+incremental vector-change log.
+
+There is a measured CPU cost. A synthetic in-memory fixture with 48,487
+articles, 8,000 dedup vectors at 256 dimensions and batches of 12 articles
+(mocked Ollama, one worker) had warm-batch median 141.6 ms before and
+356.8 ms after these changes: about 17.9 ms extra per article. These are
+local fixture timings, not production throughput measurements. A dedicated
+vector-write revision could avoid unrelated-write reloads later, but must
+cover every writer and retain external-connection detection. The current
+implementation deliberately favors correct vectors over stale matches.
+
+Rechecking and reclassification share one transactional group move. When
+a root matches another root, all its descendants move to the destination;
+matching its own child keeps it a root. Root resolution walks chains with
+cycle detection, and the descendant update also flattens legacy nested
+members. This preserves the single-level grouping invariant used by API
+queries. It is a structural guarantee, not evidence that all stories in a
+cosine-connected group describe the same event.
+
+## Duplicate repair checks connected components — 2026-09-20
+
+`node scripts/repair-dedup.js --json` now reports connected components for
+each stored group, opening the database through `openReadOnlyDb`. No model
+calls or migrations run in inspection mode. A child with one similar
+sibling is insufficient: a root may still be isolated, or two internally
+coherent subgroups may have no edge between them. Comparisons cost the sum
+of squared group sizes, not all-pairs over the entire archive.
+
+Groups are `connected`, `disconnected` (complete comparable evidence), or
+`unmeasurable`. Missing/wrong-dimensional/nonfinite/non-unit vectors,
+invalid nesting and incompatible recorded model metadata prevent automatic
+repair. Missing vectors could bridge observed components, so their absence
+does not establish disconnection. Legacy metadata can establish only the
+recorded model tag/dimensions; the report names this provenance explicitly.
+Even complete cosine connectivity is not proof of one semantic event.
+
+Explicit `--fix` atomically separates only complete disconnected groups.
+The original root remains root of its component; each other component uses
+its smallest article ID as a deterministic root. It preserves article
+content, vectors, votes and read state, and does not immediately rerun
+dedup across the separated components. Repeating repair is idempotent.
+`--fix-legacy` and `--drop-old-dedup` retain their targeted vector-cleanup
+roles; dimension cleanup requires explicit configured dimensions. All
+modes reject incompatible schemas before migration. Review the JSON plan
+on a consistent backup before applying its component policy to that copy;
+semantic errors within a connected component still require review.
+
+## Reclassification races across connections — 2026-09-20
+
+Queue claims read the article inputs and request revision in the same
+SELECT snapshot. Failure accounting uses a revision condition in its
+UPDATE, not a separate check followed by an unconditional write. Reader
+fetches also capture the current content/revision together before awaiting
+network work and use guarded content-cache writes. An older reader request
+may finish displaying its response, but cannot repopulate content cleared
+by a newer classification request. Deterministic two-connection fixtures
+exercise all three interleavings, including a max-attempts-one failure.
+
+## Clock-driven ranking refresh — 2026-09-20
+
+Each completed full sweep records its start time and vote-decay half-life
+in `meta.score_decay_snapshot`. `recomputeIfDue`, already called by serve
+and cron, requests fresh scores without needing another vote: at most
+24 hours between requested refreshes for multi-year half-lives, or one
+percent of a shorter half-life. Execution remains bounded by scheduler
+ticks/cron invocation and the normal asynchronous sweep. Half-life changes,
+including disabling decay, refresh an existing profile once. An existing
+debounce request is left intact. This defines a refresh policy for stored
+scores; it does not change the decay formula or make every score continuously
+current between sweeps.
+
+## Experimental local kernel shadow scorer — 2026-09-20
+
+`src/kernelScore.js` and `scripts/score-kernel-shadow.js` provide an isolated
+experiment using the existing text embeddings and observed votes. They do
+not change production scoring, configuration defaults, APIs or the weights
+of the existing scoring axes. There is no training step, model call,
+logistic regression or automatic parameter optimization. The method is a
+local, regularized average of neighboring votes, not a recommendation to
+deploy a new ranker.
+
+For each candidate, omit its own article ID and select the `k` most similar
+training articles by clipped dot product, before applying vote decay. Ties
+preserve the training input order; the CLI uses article ID ascending.
+For similarity `s`, vote `v`, vote age in years `a` and half-life `h`:
+
+```
+kernel = max(0, (s - tau) / (1 - tau)) ** exponent
+weight = kernel * 2 ** (-max(0, a) / h)
+score  = sum(weight * v/2) / (lambda + sum(weight))
+```
+
+The prior has value zero and mass `lambda`. Votes are signed integers
+`-2, -1, 1, 2`. Missing vote time falls back to creation time; future times
+have age zero. A year is 365.25 days. Half-life zero/null disables decay.
+`lambda` and exponent must be positive; `k=0` returns the zero prior.
+The pure batch API takes an explicit Unix `now` in seconds:
+
+```
+scoreKernel(
+  [{ id, vote, vector, voteTime, createdTime }, ...],
+  [{ id, vector }, ...],
+  { now, tau: .2, k: 15, exponent: 1, lambda: 1, halfLifeYears: 1.5 }
+)
+```
+
+Those five parameter values are frozen experimental defaults, independent
+of production settings. All are emitted in the JSON, along with the exact
+evaluation time. A repeatable small run on a consistent database backup is:
+
+```sh
+node scripts/score-kernel-shadow.js --config config.yaml \
+  --now 2026-09-20T00:00:00Z --tau .2 --k 15 --exponent 1 \
+  --lambda 1 --half-life 1.5 --limit 100 > kernel-shadow.json
+```
+
+The default selection is the latest 100 unvoted articles having text
+embeddings, ordered by `created_at DESC, id DESC`. Use `--all` for all such
+articles or repeat `--candidate-id ID` for a specific unvoted set. These
+selection modes are exclusive. The JSON retains selection order, rather
+than implying a production feed order. CPU cost is approximately
+`candidates * training * dimensions`, plus a neighborhood sort per
+candidate; `--all` may be expensive. No score is persisted.
+
+The CLI opens only through `openReadOnlyDb`, rejects incompatible schemas,
+and copies metadata/training/candidates within one read transaction before
+closing the database. It never migrates or calls a model. Voted articles
+without vectors stop the experiment; unvoted articles without vectors are
+counted as excluded candidates. Every used vector must have one common
+dimension, finite values and squared norm within .02 of one, allowing
+float16 rounding. Vectors are not renormalized. Unselected vectors are not
+validated. Unknown or mismatched text-space metadata stops execution.
+Legacy `model::dimensions::f16` metadata is explicitly labelled as legacy:
+it cannot verify past prefixes/preprocessing. Matching version-2 metadata
+also records an assertion, not per-row proof or an immutable model digest.
+
+Output contains article IDs, signed scores, support and neighbor
+contributions; it omits titles, bodies, credentials and stored scores. A
+SHA-256 fingerprint covers the selected raw vectors, votes, timestamps,
+IDs and space metadata, not the whole database. Support includes weight
+mass and `effectiveNeighbors = sum(w)^2 / sum(w^2)`, computed with rescaling
+to avoid tiny-weight underflow. These describe evidence concentration,
+not confidence intervals or probabilities. No-support zero and conflicting-
+evidence zero are distinguishable through these fields. Each neighbor's
+`scoreContribution` sums to the final score.
+
+Tests include both useful and adverse examples. A close positive and distant
+negative retain different influence instead of cancelling through separate
+sign normalization. Conversely, many moderately similar positives can
+overwhelm one very close negative. Event duplicates, selection/exposure
+bias and correlated votes are not corrected. The tool does not establish
+superiority: that requires a frozen prospective/temporal evaluation with
+the same training history, candidates and freshly recomputed baseline,
+including checks for duplicate/event leakage and new-user or topic shifts.
+
 ## Deferred ideas
 
-- Harden `sanitizeHtml` (`src/html.js`): it's a regex blocklist, not a
-  parser-based allowlist, so it's more exposed to malformed/nested-markup
-  evasion than a real sanitizer library. Every `v-html` in the app relies
-  on this same write-time sanitization. Investigated: DOMPurify silently
-  passed *everything* through unsanitized against happy-dom (the DOM
-  implementation this project carries) while working correctly against
-  jsdom, and its `isSupported` self-check reports `true` for happy-dom
-  regardless — no detectable signal to fall back on, so DOMPurify is
-  ruled out unless jsdom comes back. `sanitize-html` (string-based,
-  verified live to strip every tested payload) is the real option; the
-  design cost is moving from blocklist to allowlist — real feed HTML
-  needs checking against the declared tags/attributes first so
-  legitimate formatting doesn't quietly get stripped. Deferred, not
-  implemented.
 - Non-RSS sources (the feeds table would grow a `kind` column).
 - Bookmarkable filter state in the URL hash (tabs already have routes).
 - "Promote this note to guidelines" one-click from a reclassify note.

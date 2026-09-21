@@ -33,31 +33,45 @@ typecheck — `node --test` is the only automated gate.
   harrier@512). Each column's model+dims is versioned in `meta`
   (`embed_model_text`/`embed_model_dedup`); switching a model clears only
   that column and `reembedMissing` rebuilds it progressively — embeddings
-  only, no LLM classification, and only the missing column. The dedup
+  only, no LLM classification, and only the missing column. Each column's
+  document prefix and preprocessing/input contract are versioned too;
+  legacy identities trigger a conservative rebuild. The dedup
   vector is only kept for articles inside the dedup window
   (`enrich.dupWindowDays`): dedup compares against recent articles
   exclusively, so syncRecentCache drops aged-out vectors from storage and
   reembedMissing deliberately does not refill them — don't "fix" that NULL.
-- Scoring is entirely vote-driven. A vote recomputes only its own article
-  (`recomputeOneScore`, cheap, synchronous in the request) and schedules a
+- Scoring learns from votes. Votes, relevant feature changes and elapsed
+  decay time can schedule score work. A vote recomputes only its own article
+  (`recomputeOneScore`, synchronous in the request) and schedules a
   debounced full sweep (`recomputeIfDue` → `recomputeScores`), which is
-  async/chunked (`yieldEveryMs`) precisely so it never blocks the event
-  loop. Never call the full sweep synchronously from a request path; never
+  async/chunked (`yieldEveryMs`) to yield between chunks; preparation and an
+  individual chunk can still block the event loop. Never call the full sweep
+  synchronously from a request path; never
   make tests depend on real Ollama — use `startOllamaStub` from
   `test/helpers.js` (tests run on `tempDb()` in-memory DBs).
 - `src/html.js`'s `stripHtml` is the single html→text chokepoint for all
   LLM prompts and embedding inputs (it emits `[image: alt]` markers for
-  images). Feed HTML is blocklist-sanitized at every write path
-  (`sanitizeHtml`) — keep sanitizing new write paths.
+  images). Feed HTML is parser-sanitized with an allowlist at write paths
+  and final article/reader rendering boundaries (`sanitizeHtml`). Keep both
+  boundaries, including when handling legacy content or new transformations.
 - `data/rssmart.db` is a snapshot of real production data used for local
   benchmarks (`scripts/bench-embed.js`, `bench-model.js`,
-  `bench-comic-alt.js` — read-only against it, reports land in `data/`;
+  `bench-comic-alt.js` — use `openReadOnlyDb`, which requires an existing
+  database with the current schema; migrate only a copy of older snapshots.
+  Reports land in `data/`;
   `bench-dot.js` is the standalone kernel benchmark, no DB involved).
   Don't write to it from experiments; copy it first.
-- `scripts/repair-dedup.js` re-validates every stored duplicate link in the
-  current dedup space (`--fix` un-links stale ones and re-runs detection per
-  detached copy). Run it after any dedup model/dims mismatch window — links
-  made in a mismatched space are never re-derived on their own.
+- `scripts/repair-dedup.js` inspects connected components within stored
+  groups, readonly by default. `--fix` splits only complete, compatible,
+  disconnected groups without immediately reattaching them. Incomplete or
+  incompatible groups remain unmeasurable; connectivity is not a semantic
+  event label. Inspect after a model/dims mismatch, then review before repair.
+- Vote/read intents share durable per-article sequences and server receipts.
+  Persist before sending, retain ambiguous failures and preserve every FIFO
+  operation. Never reset sequences or discard rejected entries automatically.
+  The v3 outbox has its own storage key; legacy divergence pauses synchronization.
+  Close old tabs before upgrading; preserve and reconcile both storage keys
+  before rollback, since legacy entries may already have been replayed.
 
 ## Docs
 

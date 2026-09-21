@@ -5,6 +5,7 @@ import { fetchIntervalMinutes, ingestAll, syncFeeds } from '../src/ingest.js';
 import { acquireLease, releaseLease } from '../src/lease.js';
 import { startScheduler } from '../src/scheduler.js';
 import { compressText } from '../src/compress.js';
+import { syncEmbeddingSpace } from '../src/enrich.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -114,16 +115,21 @@ test('classifying a new article never rescores unrelated already-scored articles
   rss.routes.set('/feed.xml', rssXml({ items: [{ title: 'New story', description: 'body' }] }));
 
   try {
-    db.prepare("INSERT INTO feeds (id, url) VALUES (99, 'http://other-feed')").run();
-    const untouchedScore = 0.4242;
-    const { lastInsertRowid: otherId } = db.prepare(`
-      INSERT INTO articles (feed_id, guid, title, content, status, vote, score, score_topics)
-      VALUES (99, 'g-other', 'Unrelated already-scored article', ?, 'enriched', 1, ?, ?)
-    `).run(compressText('body'), untouchedScore, untouchedScore);
-
-    syncFeeds(db, [{ url: `${rss.url}/feed.xml` }]);
     const config = testConfig();
     config.ollama.url = ollama.url;
+    syncEmbeddingSpace(db, config);
+    db.prepare("INSERT INTO feeds (id, url) VALUES (99, 'http://other-feed')").run();
+    const untouchedScore = 0.4242;
+    // This fixture isolates initial classification of an unvoted article.
+    // A voted example missing vectors legitimately schedules a global
+    // ripple during re-embedding, so its feature space must already exist.
+    const vector = Buffer.from(Float16Array.from([1, 0, 0, 0, 0, 0, 0, 0]).buffer);
+    const { lastInsertRowid: otherId } = db.prepare(`
+      INSERT INTO articles (feed_id, guid, title, content, status, vote, score, score_topics, embedding, text_embedding)
+      VALUES (99, 'g-other', 'Unrelated already-scored article', ?, 'enriched', 1, ?, ?, ?, ?)
+    `).run(compressText('body'), untouchedScore, untouchedScore, vector, vector);
+
+    syncFeeds(db, [{ url: `${rss.url}/feed.xml` }]);
 
     const stop = startScheduler(db, config, {
       log: () => {},

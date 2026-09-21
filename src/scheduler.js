@@ -42,7 +42,6 @@ export function startScheduler(db, config, {
         log(`scheduler: ${plural(r.added, 'new article')} from ${plural(r.feedsOk, 'feed')}` +
           (r.feedsFailed ? `, ${r.feedsFailed} failed` : ''));
       }
-      if (r.added > 0) classifierWorkPending = -1;
     } catch (err) {
       logError('scheduler fetch:', err.message);
     } finally {
@@ -50,16 +49,16 @@ export function startScheduler(db, config, {
     }
   };
 
-  let classifierWorkPending = -1; // -1 = unknown, 0 = none, >0 = count
+  // Recheck the durable queue each tick: API reclassification and external
+  // ingestion must wake an idle scheduler without an in-process callback.
   const hasClassifierWork = () => {
-    if (classifierWorkPending < 0) {
-      classifierWorkPending = db.prepare(`
-        SELECT COUNT(*) AS c FROM articles
+    const dedupCutoff = new Date(Date.now() - config.enrich.dupWindowDays * 86400000).toISOString();
+    return !!db.prepare(`
+        SELECT EXISTS(SELECT 1 FROM articles
         WHERE (status = 'pending' AND enrich_attempts < ?)
-           OR (status = 'enriched' AND (embedding IS NULL OR text_embedding IS NULL))
-      `).get(config.enrich.maxAttempts).c;
-    }
-    return classifierWorkPending > 0;
+           OR (status = 'enriched' AND
+             (text_embedding IS NULL OR (embedding IS NULL AND created_at >= ?)))) AS needed
+      `).get(config.enrich.maxAttempts, dedupCutoff).needed;
   };
 
   // One lease-guarded batch: re-embed vectors missing in the current
@@ -75,17 +74,9 @@ export function startScheduler(db, config, {
     const re = await reembedMissing(db, config, llm, { deadline, onItem: heartbeat });
     if (re.reembedded) log(`scheduler: re-embedded ${plural(re.reembedded, 'article')}`);
 
-    // A newly-classified article needs its own score computed (fresh
-    // depth/topics didn't exist before), but nothing about *other*
-    // articles' scores changes: scoring is entirely vote-driven, and an
-    // unvoted article (every article straight out of classification)
-    // contributes nothing to any topic/feed preference aggregate.
-    // recomputeOneScore per classified article is therefore exactly as
-    // correct here as a full recomputeScores() sweep, not an
-    // approximation — and unlike it, doesn't block the event loop for
-    // the ~48s a full recompute takes against a real ~6k-article archive
-    // (measured live), which used to make every concurrent request,
-    // including a vote, hang until this batch's recompute finished.
+    // Each classified article gets its own score here. enrichPending also
+    // schedules a full ripple when the committed article has a vote;
+    // reclassification is not necessarily an unvoted new article.
     const classifiedIds = [];
     const r = await enrichPending(db, config, llm, {
       deadline,
@@ -113,7 +104,6 @@ export function startScheduler(db, config, {
         log(`scheduler: enrich timing (s) fetch=${s(t.fetch)} parse=${s(t.parse)} chat=${s(t.chat)} embed=${s(t.embed)} dedup=${s(t.dedup)} db=${s(t.db)}`);
       }
     }
-    classifierWorkPending = -1; // invalidate after batch
     enriching = false;
   };
 

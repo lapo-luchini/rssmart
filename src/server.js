@@ -2,18 +2,20 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { recomputeOneScore, scheduleRecompute, topicPrefs } from './scoring.js';
-import { getReaderContent, recheckDuplicates, bufToVec, sampleText } from './enrich.js';
-import { stripHtml } from './html.js';
+import { getReaderContent, recheckDuplicates, bufToVec, sampleText, requestReclassification } from './enrich.js';
+import { stripHtml, sanitizeHtml, webNavigationUrl } from './html.js';
 import { parseOpml, buildOpml } from './opml.js';
 import { ingestAll } from './ingest.js';
 import { Ollama } from './llm.js';
 import { semanticSearch } from './search.js';
 import { decompressText } from './compress.js';
-import { pragma } from './db.js';
+import { applyFeedback } from './feedback.js';
 import { proposeTopicMerges, applyTopicMerge } from './topicMerge.js';
 import { renderMetrics } from './metrics.js';
 import { getDbQueryMs } from './db.js';
+import { databaseVersion } from './dbVersion.js';
 import { log } from './log.js';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { SESSION_COOKIE, SESSION_TTL_MS, signSession, verifySession, passwordMatches, ipAllowed } from './auth.js';
@@ -49,7 +51,7 @@ const ARTICLE_COLUMNS = `
 `;
 
 function rowToArticle(row) {
-  return { ...row, topics: row.topics ? row.topics.split('|') : [] };
+  return { ...row, url: webNavigationUrl(row.url), topics: row.topics ? row.topics.split('|') : [] };
 }
 
 // Hono's c.req.json() throws on an empty/invalid body; every route here
@@ -123,91 +125,55 @@ const FEED_LATEST_JOIN = `
   ) fl ON fl.feed_id = a.feed_id
 `;
 
-/**
- * Keyset pagination: columns+cursor values per sort mode. All sorts are
- * DESC, so "rows after the cursor" = row-value tuples strictly smaller
- * than the cursor's (SQLite supports row-value comparison with mixed
- * expressions, 3.15+). A final a.id tiebreak in every orderBy makes the
- * sort a total order — without it, equal-key rows can shuffle between
- * pages even when values are stable, so cursors alone wouldn't be
- * skip-free. NULL score_novelty sorts last under DESC; the 1e9 sentinel
- * (novelty lives in ~[0,1]) encodes it in both the keyset predicate and
- * the cursor, keeping rows at a NULL boundary contiguous.
- *
- * The hot/custom expressions embed their wall-clock term (julianday('now'))
- * inline: between two pages of one session it drifts by seconds, i.e. by
- * ~1e-7 of a day-unit at production decay rates — a row could flip
- * ordering across a page boundary in that window, but the drift is far
- * below the score differences that would matter for a triage list.
- * 'date-rr' (per-feed ROW_NUMBER is only stable within one query) and
- * semantic search (JS-computed cosine list) stay on OFFSET: date-rr is
- * triage-only and re-walks from offset 0 per session with its own seen-set.
- */
-const CURSOR_SENTINEL = 1e9;
 const dateKey = 'COALESCE(a.published_at, a.created_at)';
-const hotExpr = (decayPerDay) => `a.score - ${decayPerDay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at)))`;
 
-function cursorKeyExprs(w, hotDecayPerDay, customExprBody) {
-  // every tuple ends with a.id, the total-order tiebreak appended to each
-  // orderBy — the cursor always records it last
+// For linear decay, -decay*now is common to every candidate. Removing it
+// keeps the order but makes the key independent of the request time. Days
+// since the Unix epoch avoid adding the much larger Julian-day constant
+// to the interest score. SQL calculates this key AND the returned cursor:
+// reconstructing it with Date.parse/new Date introduces rounding/clock
+// differences that can repeat even an exactly tied row on the next page.
+const freshnessKey = (scoreExpr, decay) =>
+  `(${scoreExpr}) + ${decay} * (julianday(${dateKey}) - 2440587.5)`;
+
+/**
+ * One SQL tuple defines ORDER BY, the keyset predicate and cursor values.
+ * All keys sort DESC and end with id, so rows after the cursor have a
+ * strictly smaller tuple. A separate presence flag puts missing values
+ * last without a sentinel that might conflict with a real score. The
+ * remaining values are non-NULL, including on that missing-value shelf.
+ * date-rr and semantic search keep their existing OFFSET contract.
+ */
+function cursorKeyExprs(sortKey, rankExpr) {
+  if (sortKey === 'date') return { exprs: [dateKey, 'a.id'], types: ['date', 'id'] };
   return {
-    date: {
-      sql: '(COALESCE(a.published_at, a.created_at), a.id)',
-      vals: ['published_at'],
-    },
-    score: {
-      sql: '(COALESCE(a.score, 0), COALESCE(a.published_at, a.created_at), a.id)',
-      vals: ['score', 'published_at'],
-    },
-    novelty: {
-      sql: `(COALESCE(a.score_novelty, ${CURSOR_SENTINEL}), COALESCE(a.published_at, a.created_at), a.id)`,
-      vals: ['score_novelty', 'published_at'],
-    },
-    hot: {
-      sql: `(${hotExpr(hotDecayPerDay)}, COALESCE(a.published_at, a.created_at), a.id)`,
-      vals: ['hotScore', 'published_at'],
-    },
-    custom: {
-      sql: `((${customExprBody}) - ${w?.decay ?? 0} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))), COALESCE(a.published_at, a.created_at), a.id)`,
-      vals: ['custom', 'published_at'],
-    },
+    exprs: [`((${rankExpr}) IS NOT NULL)`, `COALESCE((${rankExpr}), 0)`, dateKey, 'a.id'],
+    types: ['present', 'number', 'date', 'id'],
   };
 }
 
-/** The cursor-encoded value for one row & key name. */
-function cursorValueFor(name, row, { w, hotDecayPerDay, customExprBody }) {
-  const jd = (t) => {
-    if (t === null || t === undefined) return jd(new Date().toISOString().slice(0, 19) + 'Z');
-    return Date.parse(t) / 86400000 + 2440587.5;
-  };
-  switch (name) {
-    case 'score': return row.score ?? 0;
-    case 'score_novelty': return row.score_novelty ?? CURSOR_SENTINEL;
-    case 'published_at': return row.published_at ?? row.created_at;
-    case 'hotScore': return (row.score ?? 0) - hotDecayPerDay * (jd(new Date()) - jd(row.published_at ?? row.created_at));
-    case 'custom': {
-      const base = (row.score_topics ?? 0) * w.topics + (row.score_embedding ?? 0) * w.embedding +
-        (row.score_depth ?? 0) * w.depth + (row.score_feed ?? 0) * w.feed + (row.score_bonus ?? 0) * w.bonus;
-      return base - w.decay * (jd(new Date()) - jd(row.published_at ?? row.created_at));
-    }
-    default: return null;
-  }
-}
-
-function decodeCursor(raw, sortKey, cursorDefs) {
-  let tuple;
+function decodeCursor(raw, def, scope) {
+  const invalid = { error: 'invalid or incompatible cursor; restart from the first page' };
+  let decoded;
   try {
-    tuple = JSON.parse(Buffer.from(String(raw), 'base64url').toString('utf8'));
+    if (raw.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(raw)) return invalid;
+    decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
   } catch {
-    return { error: 'bad cursor' };
+    return invalid;
   }
-  const def = cursorDefs[sortKey];
-  if (!Array.isArray(tuple) || tuple.length !== def.vals.length + 1 ||
-      !tuple.every((v) => v === null || ['number', 'string'].includes(typeof v)) ||
-      !Number.isInteger(tuple[tuple.length - 1])) {
-    return { error: 'cursor does not match this sort' };
+  if (decoded?.v !== 1 || decoded.scope !== scope ||
+      !Array.isArray(decoded.key) || decoded.key.length !== def.types.length) return invalid;
+  for (let i = 0; i < def.types.length; i++) {
+    const value = decoded.key[i];
+    const valid = {
+      present: value === 0 || value === 1,
+      number: typeof value === 'number' && Number.isFinite(value),
+      date: typeof value === 'string' && value.length > 0,
+      id: Number.isSafeInteger(value) && value > 0,
+    }[def.types[i]];
+    if (!valid) return invalid;
   }
-  return { tuple };
+  return { tuple: decoded.key };
 }
 
 /**
@@ -248,17 +214,17 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
   // per-signal score components (score_topics etc. — the same numbers the
   // score tooltip shows). Read-time lens only: it never re-derives the
   // stored score, so experimentation can't feed back into scoring. Weights
-  // arrive as query params, fall back to the configured profile, and are
+  // arrive as query params, default to neutral multipliers, and are
   // clamped to sane ranges before they touch the SQL text.
   const clamp = (name, fallback, max = 2) => {
     const raw = Number(query[name]);
-    return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), max) : Math.min(Math.max(fallback, 0), fallback);
+    return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), max) : Math.min(Math.max(fallback, 0), max);
   };
   const w = sortKey === 'custom' ? {
-    topics: clamp('w_topics', config.scoring.weights.topics),
-    embedding: clamp('w_embedding', config.scoring.weights.embedding),
-    depth: clamp('w_depth', config.scoring.weights.depth),
-    feed: clamp('w_feed', config.scoring.weights.feed),
+    topics: clamp('w_topics', 1),
+    embedding: clamp('w_embedding', 1),
+    depth: clamp('w_depth', 1),
+    feed: clamp('w_feed', 1),
     bonus: clamp('w_bonus', 1),
     decay: clamp('w_decay', config.scoring.hotDecayPerDay, 2),
   } : null;
@@ -268,72 +234,58 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
       ` + COALESCE(a.score_bonus, 0) * ${w.bonus}`
     : null;
 
-  // "hot" blends interest with freshness (à la Hacker News) so an old
-  // article can't outrank a fresh one on score alone; computed at query
-  // time from published_at, so it's always current with no stored/stale
-  // column. orderParams must be spliced in right after the WHERE params —
-  // it's the only sort with a bound value of its own.
-  const customExpr = sortKey === 'custom'
-    ? `(${customExprBody}) - ${w.decay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))) DESC, `
-    : '';
-  const orderByBuilt = {
-    hot: 'a.score - ? * (julianday(\'now\') - julianday(COALESCE(a.published_at, a.created_at))) DESC, ' + BY_DATE,
-    score: 'a.score DESC, ' + BY_DATE,
-    date: BY_DATE,
-    'date-rr': dateRoundRobinSql(config.triage.roundRobinWindowDays),
-    // How different from everything voted on so far (see score_novelty's
-    // migration comment, src/db.js). NULLs (no embedding yet, or nothing
-    // voted on at all) sort last under SQLite's default DESC ordering —
-    // exactly where "no basis to judge novelty" belongs.
-    novelty: 'a.score_novelty DESC, ' + BY_DATE,
-    custom: (customExpr ?? '') + BY_DATE,
+  const rankExpr = {
+    hot: freshnessKey('a.score', config.scoring.hotDecayPerDay),
+    score: 'a.score',
+    novelty: 'a.score_novelty',
+    custom: w ? freshnessKey(customExprBody, w.decay) : null,
   }[sortKey];
   // The grouped view's group representative is ranked by whichever
   // ordering the list itself uses: under sort=custom, that's the
   // experimental weighted expression (groups then order by that winner).
   const rankOrderBy = sortKey === 'custom'
-    ? `(${customExprBody}) - ${w.decay} * (julianday('now') - julianday(COALESCE(a.published_at, a.created_at))) DESC, (a.duplicate_of IS NULL) DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC`
+    ? `${rankExpr} DESC, (a.duplicate_of IS NULL) DESC, ${dateKey} DESC, a.id DESC`
     : 'a.score DESC, (a.duplicate_of IS NULL) DESC, COALESCE(a.published_at, a.created_at) DESC, a.id DESC';
-  const orderParams = sortKey === 'hot' ? [config.scoring.hotDecayPerDay] : [];
-
-  // deterministic final tiebreak: an id makes each sort a total order so a
-  // row can never appear on two pages, nor vanish between — a prerequisite
-  // for skip-free pagination
-  const orderBy = orderByBuilt + ', a.id DESC';
 
   // Keyset pagination replaces OFFSET on the sort modes whose key set is a
   // comparable tuple (cursorKeyExprs above). date-rr's per-feed ROW_NUMBER
   // is only stable within one query and semantic search ranks in JS — both
   // stay on OFFSET (date-rr is triage-only and re-walks from offset 0 per
   // session with its own seen-set as the guard).
-  const cursorMode = ['date', 'score', 'novelty', 'hot', 'custom'].includes(sortKey);
+  const cursorMode = !skipTextFilter && ['date', 'score', 'novelty', 'hot', 'custom'].includes(sortKey);
+  const cursorDef = cursorMode ? cursorKeyExprs(sortKey, rankExpr) : null;
+  const orderBy = cursorDef
+    ? cursorDef.exprs.map((expr) => `${expr} DESC`).join(', ')
+    : (sortKey === 'date-rr' ? dateRoundRobinSql(config.triage.roundRobinWindowDays) : BY_DATE) + ', a.id DESC';
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const grouped = dupes !== '1';
+  // Bind a versioned cursor to the effective selection and ranking rules.
+  // The digest is a compatibility check, not an authentication token: the
+  // query still enforces its own filters. Page size can change mid-walk.
+  const cursorScope = cursorMode
+    ? createHash('sha256').update(JSON.stringify([
+      sortKey, whereSql, params, grouped, grouped ? rankOrderBy : null, cursorDef.exprs,
+    ])).digest('base64url')
+    : null;
+  const cursorCols = cursorDef ? cursorDef.exprs.map((_, i) => `_cursor${i}`) : [];
+  const cursorSelect = cursorDef
+    ? cursorDef.exprs.map((expr, i) => `, ${expr} AS ${cursorCols[i]}`).join('')
+    : '';
   let keyWhere = null; // { sql, params }
-  if (cursorMode && cursor !== undefined && cursor !== null && cursor !== '') {
-    const cursorDefs = cursorKeyExprs(w, config.scoring.hotDecayPerDay, customExprBody);
-    const dec = decodeCursor(cursor, sortKey, cursorDefs);
+  if (cursor !== undefined && cursor !== null && cursor !== '') {
+    if (!cursorMode) return { error: 'cursor is unsupported for this sort; restart from the first page' };
+    const dec = decodeCursor(cursor, cursorDef, cursorScope);
     if (dec.error) return { error: dec.error };
-    if (sortKey === 'novelty' && dec.tuple[0] === CURSOR_SENTINEL) {
-      // the cursor row sat on the NULL shelf (nothing novel yet); rows after
-      // it stay there, ordered by date — non-position rows have already
-      // been passed, and a plain sentinel tuple would wrongly include them
-      keyWhere = {
-        sql: '(a.score_novelty IS NULL AND (COALESCE(a.published_at, a.created_at), a.id) < (?, ?))',
-        params: [dec.tuple[1], dec.tuple[2]],
-      };
-    } else {
-      const tuple = [...dec.tuple.slice(0, -1), dec.tuple[dec.tuple.length - 1]];
-      keyWhere = {
-        sql: `${cursorDefs[sortKey].sql} < (${tuple.map(() => '?').join(', ')})`,
-        params: tuple,
-      };
-    }
+    keyWhere = {
+      sql: `(${cursorDef.exprs.join(', ')}) < (${dec.tuple.map(() => '?').join(', ')})`,
+      params: dec.tuple,
+    };
   }
 
   return {
-    whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '',
+    whereSql,
     params,
-    orderParams,
-    grouped: dupes !== '1', // default: bundle repeats, show best of each group
+    grouped, // default: bundle repeats, show best of each group
     extraJoin: sortKey === 'date-rr' ? FEED_LATEST_JOIN : '',
     orderBy,
     lim: Math.min(Math.max(Number(limit) || 50, 1), 200),
@@ -341,8 +293,9 @@ function articleQuery(query, config, { skipTextFilter = false } = {}) {
     off: Math.max(Number(offset) || 0, 0),
     cursorMode,
     keyWhere,
-    cursorKeyVals: cursorMode ? cursorKeyExprs(w, config.scoring.hotDecayPerDay, customExprBody)[sortKey].vals : null,
-    cursorCtx: cursorMode ? { w, hotDecayPerDay: config.scoring.hotDecayPerDay, customExprBody } : null,
+    cursorCols,
+    cursorSelect,
+    cursorScope,
   };
 }
 
@@ -439,8 +392,8 @@ export function createApp(db, config, commitHash, describe = '') {
 
     const parsed = articleQuery(query, config, { skipTextFilter: isSemantic });
     if (parsed.error) return c.json({ error: parsed.error }, 400);
-    const { whereSql, params, orderParams, grouped, extraJoin, orderBy, lim, off,
-            keyWhere, cursorMode, cursorKeyVals } = parsed;
+    const { whereSql, params, grouped, extraJoin, orderBy, lim, off,
+            keyWhere, cursorMode, cursorCols, cursorSelect, cursorScope } = parsed;
     const keysetJoin = keyWhere ? (whereSql ? ' AND ' : 'WHERE ') + keyWhere.sql : '';
     const keysetParams = keyWhere ? keyWhere.params : [];
     const pageSql = keyWhere ? 'LIMIT ?' : 'LIMIT ? OFFSET ?';
@@ -482,18 +435,16 @@ export function createApp(db, config, commitHash, describe = '') {
       : `SELECT a.id FROM articles a ${extraJoin} ${whereSql}${keysetJoin}
          ORDER BY ${orderBy} ${pageSql}`;
 
-    // bindings follow the text: WHERE params, then the keyset predicate's
-    // placeholders (it sits between the WHERE and the ORDER BY), then the
-    // ORDER BY's own params (hot's decay), then LIMIT/OFFSET
+    // Bindings follow the text: WHERE params, keyset predicate, LIMIT/OFFSET.
     const rows = db.prepare(`
       WITH winners AS (${winnersSql})
-      SELECT ${ARTICLE_COLUMNS}, ${VERSIONS_COL}
+      SELECT ${ARTICLE_COLUMNS}, ${VERSIONS_COL}${cursorSelect}
       FROM winners
       JOIN articles a ON a.id = winners.id
       JOIN feeds f ON f.id = a.feed_id
       ${extraJoin}
       ORDER BY ${orderBy}
-    `).all(...params, ...keysetParams, ...orderParams, lim, ...(keyWhere ? [] : [off]), ...orderParams);
+    `).all(...params, ...keysetParams, lim, ...(keyWhere ? [] : [off]));
 
     const { total } = db.prepare(grouped
       ? `SELECT COUNT(*) AS total FROM (
@@ -502,16 +453,21 @@ export function createApp(db, config, commitHash, describe = '') {
       : `SELECT COUNT(*) AS total FROM articles a ${whereSql}`
     ).get(...params);
 
-    // Next-page cursor for keyset modes: the last row's sort-tuple + id —
-    // opaque to the client, validated against the requested sort on replay
+    // Preserve the SQL values exactly; do not recreate their arithmetic or
+    // date conversion in JavaScript. Scores remain live across requests:
+    // a vote/recompute can still move rows; this is not a ranking snapshot.
     let nextCursor = null;
-    if (cursorMode && cursorKeyVals && rows.length) {
+    if (cursorMode && rows.length) {
       const last = rows.at(-1);
-      const vals = cursorKeyVals.map((name) => cursorValueFor(name, last, parsed.cursorCtx));
-      nextCursor = Buffer.from(JSON.stringify([...vals, last.id])).toString('base64url');
+      const key = cursorCols.map((name) => last[name]);
+      nextCursor = Buffer.from(JSON.stringify({ v: 1, scope: cursorScope, key })).toString('base64url');
     }
 
-    return c.json({ total, articles: rows.map(rowToArticle), nextCursor });
+    const articles = rows.map((row) => {
+      for (const name of cursorCols) delete row[name];
+      return rowToArticle(row);
+    });
+    return c.json({ total, articles, nextCursor });
   });
 
   app.get('/api/articles/:id/versions', (c) => {
@@ -537,7 +493,7 @@ export function createApp(db, config, commitHash, describe = '') {
       WHERE a.id = ?
     `).get(id);
     if (!row) return c.json({ error: 'not found' }, 404);
-    row.content = decompressText(row.content);
+    row.content = sanitizeHtml(decompressText(row.content));
     return c.json(rowToArticle(row));
   });
 
@@ -554,7 +510,9 @@ export function createApp(db, config, commitHash, describe = '') {
     if (!article) return c.json({ error: 'not found' }, 404);
     try {
       const { html, source } = await getReaderContent(db, article, config);
-      return c.json({ html, source });
+      // Sanitize the final renderable fragment, including cached legacy HTML
+      // and any transformations performed while building the reader view.
+      return c.json({ html: sanitizeHtml(html), source });
     } catch (err) {
       return c.json({ error: `could not load article content: ${err.message}` }, 502);
     }
@@ -562,39 +520,32 @@ export function createApp(db, config, commitHash, describe = '') {
 
   app.post('/api/articles/:id/vote', async (c) => {
     const id = c.req.param('id');
-    const vote = (await jsonBody(c))?.vote;
+    const body = await jsonBody(c);
+    const vote = body?.vote;
     if (!Number.isInteger(vote) || vote < -2 || vote > 2) {
       return c.json({ error: 'vote must be an integer from -2 to 2' }, 400);
     }
     // Casting a real vote (not retracting one) implies the article was
     // read — you can't rate what you haven't seen. Retraction (vote = 0)
     // leaves read_at alone: it doesn't mean you un-read it.
-    // Durability: synchronous runs NORMAL process-wide (see db.js) for
-    // cheap background commits, but a recorded vote is worth one fsync —
-    // raise to FULL around the vote's own commit and restore immediately.
-    // better-sqlite3 commits synchronously inside .run(), so nothing can
-    // interleave between the flip and the restore.
-    pragma(db, 'synchronous = FULL');
-    let results;
-    try {
-      results = db.prepare(`
+    // Article, retry receipt and pending score work commit together.
+    const result = applyFeedback(db, id, 'vote', vote, body.mutation, () => {
+      db.prepare(`
         UPDATE articles
         SET vote = ?,
             read_at = CASE WHEN ? != 0 THEN COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ELSE read_at END,
             voted_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
         WHERE id = ?
       `).run(vote, vote, id);
-    } finally {
-      pragma(db, 'synchronous = NORMAL');
-    }
-    if (!results.changes) return c.json({ error: 'not found' }, 404);
+      scheduleRecompute(db, config.scoring.recomputeDebounceSec);
+    });
+    if (result.error) return c.json(result, result.status);
     // Instant, cheap: this article's own score only. The full-corpus
     // ripple (this vote can shift any other article's kNN term) is
     // debounced — see DESIGN.md — rather than blocking this response.
     // The scoring cache notices the changed voted set via its own
     // freshness check — no manual invalidation needed here.
-    recomputeOneScore(db, config, id);
-    scheduleRecompute(db, config.scoring.recomputeDebounceSec);
+    if (result.applied) recomputeOneScore(db, config, id);
     const row = db.prepare(`
       SELECT id, vote, read_at, voted_at, score,
              score_topics, score_embedding, score_depth, score_feed, score_bonus
@@ -663,13 +614,7 @@ export function createApp(db, config, commitHash, describe = '') {
     }
     // full_content is cleared so the source text is re-fetched and
     // re-judged too — reclassify doubles as "try this article again".
-    const { changes } = db.prepare(`
-      UPDATE articles
-      SET status = 'pending', enrich_attempts = 0, enrich_priority = 1,
-          full_content = NULL,
-          enrich_note = COALESCE(NULLIF(TRIM(?), ''), enrich_note)
-      WHERE id = ?
-    `).run(note ?? '', id);
+    const { changes } = requestReclassification(db, id, note ?? '');
     if (!changes) return c.json({ error: 'not found' }, 404);
     const row = db
       .prepare('SELECT id, status, enrich_note FROM articles WHERE id = ?')
@@ -700,16 +645,19 @@ export function createApp(db, config, commitHash, describe = '') {
 
   app.post('/api/articles/:id/read', async (c) => {
     const id = c.req.param('id');
-    const read = (await jsonBody(c))?.read;
+    const body = await jsonBody(c);
+    const read = body?.read;
     if (typeof read !== 'boolean') {
       return c.json({ error: 'read must be a boolean' }, 400);
     }
-    const { changes } = db.prepare(`
-      UPDATE articles
-      SET read_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END
-      WHERE id = ?
-    `).run(read ? 1 : 0, id);
-    if (!changes) return c.json({ error: 'not found' }, 404);
+    const result = applyFeedback(db, id, 'read', read ? 1 : 0, body.mutation, () => {
+      db.prepare(`
+        UPDATE articles
+        SET read_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END
+        WHERE id = ?
+      `).run(read ? 1 : 0, id);
+    });
+    if (result.error) return c.json(result, result.status);
     const row = db
       .prepare('SELECT id, read_at FROM articles WHERE id = ?')
       .get(id);
@@ -748,16 +696,10 @@ export function createApp(db, config, commitHash, describe = '') {
   let feedListKey = null;
   let feedListCache = null;
   const feedList = () => {
-    const state = db.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM feeds) AS feedCount,
-        COALESCE((SELECT SUM(active) FROM feeds), 0) AS activeSum,
-        (SELECT COUNT(*) FROM articles) AS articleCount,
-        COALESCE((SELECT SUM(vote != 0) FROM articles), 0) AS voteCount,
-        COALESCE((SELECT SUM(read_at IS NULL) FROM articles), 0) AS unreadCount,
-        COALESCE((SELECT SUM(ok_count + error_count) FROM feeds), 0) AS fetchTotal
-    `).get();
-    const key = `${state.feedCount}:${state.activeSum}:${state.articleCount}:${state.voteCount}:${state.unreadCount}:${state.fetchTotal}`;
+    // Counts do not detect vote sign changes, edits, or read-state swaps.
+    // The clock also matters: per_week changes when an article ages out.
+    const now = Math.floor(Date.now() / 1000);
+    const key = `${databaseVersion(db)}:${now}`;
     if (feedListKey === key) return feedListCache;
     feedListKey = key;
     feedListCache = db.prepare(`
@@ -768,12 +710,12 @@ export function createApp(db, config, commitHash, describe = '') {
              COUNT(CASE WHEN a.read_at IS NULL THEN a.id END) AS unread,
              AVG(CASE WHEN a.vote != 0 THEN a.vote END) AS avg_vote,
              COALESCE(SUM(a.vote != 0), 0) AS votes,
-             ROUND(COUNT(CASE WHEN COALESCE(a.published_at, a.created_at)
-                                   >= datetime('now', '-28 days') THEN 1 END) / 4.0, 1)
+             ROUND(COUNT(CASE WHEN julianday(COALESCE(a.published_at, a.created_at))
+                                   >= julianday(?, 'unixepoch', '-28 days') THEN 1 END) / 4.0, 1)
                AS per_week
       FROM feeds f LEFT JOIN articles a ON a.feed_id = f.id
       GROUP BY f.id ORDER BY f.active DESC, COALESCE(f.title, f.url)
-    `).all();
+    `).all(now).map(row => ({ ...row, html_url: webNavigationUrl(row.html_url) }));
     return feedListCache;
   };
 
@@ -829,12 +771,6 @@ export function createApp(db, config, commitHash, describe = '') {
       .prepare(`UPDATE feeds SET ${updates.join(', ')} WHERE id = ?`)
       .run(...params, id);
     if (!changes) return c.json({ error: 'not found' }, 404);
-    // feedList()'s cache key is derived from row counts (feed/vote/unread
-    // totals etc.) so it happens to invalidate on an active toggle (it
-    // shifts activeSum) but never would on a title-only edit -- nothing
-    // counted changes. Force a fresh read rather than teach the key about
-    // every mutable column.
-    feedListKey = null;
     return c.json(feedList().find((f) => f.id === Number(id)));
   });
 
@@ -887,13 +823,13 @@ export function createApp(db, config, commitHash, describe = '') {
     return c.json({
       commit: commitHash || 'unknown',
       describe: describe || undefined,
-      // The weight profile the custom-sort sliders reset to (the same
-      // fallback the server applies when the w_* params are absent): the
-      // sliders must DISPLAY these actual numbers, not a fixed 1.0 —
-      // otherwise entering custom mode with untouched sliders reorders the
-      // list while they claim "1.0 everywhere".
+      // Stored components already include the configured scoring weights.
+      // Reset applies each once, with the same temporal decay as hot sort.
       weightProfile: {
-        ...config.scoring.weights,
+        topics: 1,
+        embedding: 1,
+        depth: 1,
+        feed: 1,
         bonus: 1,
         decay: config.scoring.hotDecayPerDay,
       },

@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { compressText } from './compress.js';
 
@@ -228,6 +228,16 @@ const MIGRATIONS = [
   // means only queries that spell COALESCE(duplicate_of, id) use it —
   // which is precisely the shape those hot paths already use.
   "CREATE INDEX idx_articles_group ON articles(COALESCE(duplicate_of, id));",
+  // v22 — durable receipts for ordered browser vote/read retries. These
+  // cover the mutation protocol, not a complete history of legacy writes.
+  `CREATE TABLE feedback_receipts (
+    client_id TEXT NOT NULL,
+    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    operation TEXT NOT NULL CHECK (operation IN ('vote', 'read')),
+    value INTEGER NOT NULL,
+    PRIMARY KEY (client_id, article_id, sequence)
+  );`,
 ];
 
 /**
@@ -402,4 +412,27 @@ export function openDb(path) {
     })();
   }
   return db;
+}
+
+/** Open an existing, compatible database for inspection without migrating it.
+ * Unlike openDb, this cannot create a database or change its journal mode.
+ * Use a consistent SQLite backup for repeatable benchmarks: readonly does
+ * not freeze another process's writes, and a live WAL may have sidecars.
+ */
+export function openReadOnlyDb(path) {
+  if (!statSync(path).isFile()) throw new Error(`not a database file: ${path}`);
+  const db = new Database(path, typeof Bun !== 'undefined'
+    ? { readonly: true, create: false }
+    : { readonly: true, fileMustExist: true });
+  try {
+    instrumentQueryTiming(db);
+    const version = pragma(db, 'user_version').user_version;
+    if (version !== MIGRATIONS.length) {
+      throw new Error(`read-only benchmark requires database schema ${MIGRATIONS.length}; found ${version}. Migrate a separate copy with this application version first.`);
+    }
+    return db;
+  } catch (err) {
+    db.close();
+    throw err;
+  }
 }
