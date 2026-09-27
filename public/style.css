@@ -517,6 +517,8 @@ body {
   font-family: var(--sans);
   font-size: 0.98rem;
   overflow-wrap: break-word;
+  text-align: justify;
+  hyphens: auto;
 }
 
 .story-body img { max-width: 100%; height: auto; }
@@ -877,6 +879,19 @@ body {
   font-size: 1.05rem;
   line-height: 1.65;
   overflow-wrap: break-word;
+  text-align: justify;
+  hyphens: auto;
+}
+
+/* Keep short/hand-centered pieces at their natural alignment; justification
+   is for running prose — titles, lists, meta and fallback copy read worse
+   stretched (and CJK/plain-text notices gain nothing from it). */
+.reader-title,
+.reader-body li:not(:has(ul, ol)),
+.reader-meta,
+.notice {
+  text-align: initial;
+  hyphens: none;
 }
 
 .reader-body img { max-width: 100%; height: auto; }
