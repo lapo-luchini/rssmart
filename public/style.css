@@ -522,6 +522,12 @@ body {
 .story-body img { max-width: 100%; height: auto; }
 .story-body a { color: var(--ink); }
 
+/* Wide blocks (code, tables) scroll inside their own box instead of
+   pushing the whole article wider than the phone viewport — otherwise
+   reading requires zooming out to fit the full text width. */
+.story-body pre { overflow-x: auto; }
+.story-body table { display: block; max-width: 100%; overflow-x: auto; }
+
 .reclassify {
   display: flex;
   gap: 0.45rem;
@@ -875,6 +881,8 @@ body {
 
 .reader-body img { max-width: 100%; height: auto; }
 .reader-body a { color: var(--ink); }
+.reader-body pre { overflow-x: auto; }
+.reader-body table { display: block; max-width: 100%; overflow-x: auto; }
 
 /* ---- notices ----------------------------------------------------------- */
 
