@@ -39,10 +39,10 @@ function mathTextNodes(root) {
 }
 
 // TeX-dollar atom like $(x_i, x_{i+1})$: separated from money by
-// requiring a TeX marker inside (backslash, ^, _, or a {foo} group) —
+// requiring a TeX marker inside (backslash, ^, _, {}, or a {foo} group) —
 // "$3 and $5" has none, LaTeX always does.
 const DOLLAR_MATH = /\$([^$\n]{1,256}?)\$/g;
-const hasTexMarkers = (s) => /\\|\^|_\{|\{[a-zA-Z]/.test(s);
+const hasTexMarkers = (s) => /[\\^_{}]/.test(s);
 
 function looksLikeMath(root) {
   for (const node of mathTextNodes(root)) {
