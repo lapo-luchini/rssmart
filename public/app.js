@@ -42,7 +42,12 @@ function mathTextNodes(root) {
 // requiring a TeX marker inside (backslash, ^, _, {}, or a {foo} group) —
 // "$3 and $5" has none, LaTeX always does.
 const DOLLAR_MATH = /\$([^$\n]{1,256}?)\$/g;
-const hasTexMarkers = (s) => /[\\^_{}]/.test(s);
+// Genuine math, in three tiers: commands/markers (\\frac, x_i), plain
+// simple algebra ($n - 1$, $x + y$ — letters but no English words), and
+// braced groups. Money prose like "$5 and $6" always has a double-letter
+// word inside ("and"), never a command, so it stays untouched.
+const hasTexMarkers = (s) => /[\\^_{}]/.test(s) ||
+  (!(/[a-zA-Z]{2,}/.test(s)) && /[a-zA-Z]/.test(s));
 
 function looksLikeMath(root) {
   for (const node of mathTextNodes(root)) {
