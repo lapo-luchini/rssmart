@@ -233,9 +233,10 @@ createApp({
       this.searchTimer = setTimeout(() => this.reload(), 300);
     },
     // When an article's text lands, scan it for LaTeX and render if the
-    // math switch is on (new article ⇒ switch resets to on).
+    // math switch is on. The switch itself defaults back to on per new
+    // article (openReader), not here — this watcher also fires for the
+    // toggle-off re-prime, where it must not stomp the user's choice.
     readerHtml() {
-      this.readerMathOn = true;
       this.detectAndMaybeRenderMath();
     },
   },
@@ -1031,8 +1032,11 @@ createApp({
       const permalink = `#/article/${article.id}`;
       if (location.hash !== permalink) location.hash = permalink;
       this.readerHtml = '';
+      this.readerHtmlRaw = '';
       this.readerSource = null;
       this.readerLoading = true;
+      this.readerHasMath = false;
+      this.readerMathOn = true;
       if (!article.read_at) this.toggleRead(article);
       try {
         const data = await this.api(`/api/articles/${article.id}/reader`, { signal: controller.signal });
@@ -1071,19 +1075,19 @@ createApp({
         this.readerHasMath = false;
         return;
       }
-      const body = this.$el?.querySelector('.reader-overlay .reader-body');
+      const body = document.querySelector('.reader-overlay .reader-body');
       this.readerHasMath = !!body && looksLikeMath(body);
       if (this.readerHasMath && this.readerMathOn) this.applyReaderMath();
     },
 
     async applyReaderMath() {
-      const body = this.$el?.querySelector('.reader-overlay .reader-body');
+      const body = document.querySelector('.reader-overlay .reader-body');
       if (!body) return;
       try {
-        const { renderMathInElement } = await loadKatexAutorender();
+        const { default: renderMathInElement } = await loadKatexAutorender();
         // Double-check the same DOM is still the displayed reader body —
         // the settled import promise can outlive a fast close/reopen.
-        if (this.$el?.querySelector('.reader-overlay .reader-body') !== body) return;
+        if (document.querySelector('.reader-overlay .reader-body') !== body) return;
         promoteDollarMath(body);
         renderMathInElement(body, {
           delimiters: [
