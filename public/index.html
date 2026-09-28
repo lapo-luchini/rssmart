@@ -462,6 +462,7 @@
         <p v-if="readerLoading" class="notice">Loading…</p>
         <p v-else-if="!readerHtml" class="notice">No content available.</p>
         <div v-else v-html="readerHtml" class="reader-body"></div>
+        <p v-if="readerMathError" class="notice">math rendering unavailable — the deployed copy is missing public/vendor/katex; run scripts/vendor-katex.js on the server</p>
         <form class="reclassify" @submit.prevent="reclassify(readerArticle)">
           <input type="text" v-model="readerArticle.enrich_note"
                  placeholder="optional note to the classifier, e.g. “this is about hardware, not software”">

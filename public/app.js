@@ -156,6 +156,7 @@ createApp({
       // button (only shown for math-bearing articles) disables/re-enables.
       readerHasMath: false,
       readerMathOn: true,
+      readerMathError: false,
       // Body text size for the reader/story view: 'auto' tracks the
       // viewport, the others fix the size; persisted per device.
       readerTextSize: 'auto',
@@ -1037,6 +1038,7 @@ createApp({
       this.readerLoading = true;
       this.readerHasMath = false;
       this.readerMathOn = true;
+      this.readerMathError = false;
       if (!article.read_at) this.toggleRead(article);
       try {
         const data = await this.api(`/api/articles/${article.id}/reader`, { signal: controller.signal });
@@ -1073,6 +1075,7 @@ createApp({
       await this.$nextTick();
       if (!this.readerHtml || this.readerLoading) {
         this.readerHasMath = false;
+        this.readerMathError = false;
         return;
       }
       const body = document.querySelector('.reader-overlay .reader-body');
@@ -1099,6 +1102,10 @@ createApp({
         });
       } catch (err) {
         this.error = `Math rendering failed: ${err.message}`;
+        // The app-level error notice renders behind the reader overlay;
+        // surface it in the article too (e.g. missing vendor files after
+        // deploying a fresh tree without postinstall).
+        this.readerMathError = true;
       }
     },
 
