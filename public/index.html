@@ -426,9 +426,11 @@
     </button>
   </main>
 
-  <div class="reader-overlay" v-if="readerArticle">
+  <div class="reader-overlay" v-if="readerArticle" :class="'ts-' + readerTextSize">
     <div class="reader-bar">
       <button class="mark reader-close" @click="closeReader">← back (esc)</button>
+      <button class="mark" @click="cycleReaderTextSize"
+              :title="readerTextSize === 'auto' ? 'text size: auto (click for fixed sizes)' : 'text size: ' + readerTextSize + ' (click to change)'">{{ { auto: 'A·', small: 'A−', medium: 'A', large: 'A+' }[readerTextSize] }}</button>
       <span class="reader-spacer"></span>
       <button class="vote up" :class="{ on: readerArticle.vote > 0, max: readerArticle.vote === 2 }"
               @click="voteClick(readerArticle, 1)"

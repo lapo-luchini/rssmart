@@ -95,6 +95,9 @@ createApp({
       readerHtml: '',
       readerSource: null,
       readerLoading: false,
+      // Body text size for the reader/story view: 'auto' tracks the
+      // viewport, the others fix the size; persisted per device.
+      readerTextSize: 'auto',
       readerRequestId: 0,
       readerController: null,
       readerTargetId: null,
@@ -174,6 +177,7 @@ createApp({
     // Hash routes (#/unread, #/feeds, ...): bookmarkable tabs, working
     // back/forward, and a reload stays on the current tab.
     this.applyRoute(location.hash, { replace: true });
+    this.readerTextSize = localStorage.getItem('rssmart.readerTextSize') || 'auto';
     window.addEventListener('hashchange', () => this.applyRoute(location.hash));
     window.addEventListener('keydown', this.handleGlobalKey);
     window.addEventListener('wheel', this.handleGlobalWheel, { passive: false });
@@ -986,6 +990,14 @@ createApp({
       this.readerHtml = '';
       this.readerSource = null;
       if (restoreRoute) this.syncHash();
+    },
+
+    // Reader text size: auto → small → medium → large → auto, persisted
+    // locally so a phone's preference survives reloads.
+    cycleReaderTextSize() {
+      const order = ['auto', 'small', 'medium', 'large'];
+      this.readerTextSize = order[(order.indexOf(this.readerTextSize) + 1) % order.length];
+      localStorage.setItem('rssmart.readerTextSize', this.readerTextSize);
     },
 
     // Permalink target: reuse the list's copy of the article when present
