@@ -913,6 +913,9 @@ body {
 .reader-body a { color: var(--ink); }
 .reader-body pre { overflow-x: auto; }
 .reader-body table { display: block; max-width: 100%; overflow-x: auto; }
+.math-on { color: var(--ink); border-color: var(--hairline); }
+.reader-body .katex { font-size: 1.08em; }
+.reader-body .katex-display { overflow-x: auto; }
 
 /* ---- notices ----------------------------------------------------------- */
 

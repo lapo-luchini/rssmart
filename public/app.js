@@ -13,6 +13,62 @@ const TRIAGE_BATCH = 30;
 const outbox = createOutbox();
 const OUTBOX_POLL_MS = 20_000;
 
+// Rendered math (KaTeX, vendored): loaded lazily the first time an
+// article actually contains LaTeX — no module is even requested until a
+// detection routine sees TeX delimiters in the article text, and the
+// browser only fetches from this origin (public/vendor/katex/).
+let katexAutorender = null;
+function loadKatexAutorender() {
+  if (!katexAutorender) {
+    katexAutorender = import('./vendor/katex/contrib/auto-render.mjs');
+  }
+  return katexAutorender;
+}
+
+// Text walks for detection + rendering, restricted to text nodes (both
+// skip tags/attributes entirely, so this cannot resurrect any markup).
+function mathTextNodes(root) {
+  const out = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const s = node.nodeValue;
+    if (s.includes('$') || s.includes('\\')) out.push(node);
+  }
+  return out;
+}
+
+// TeX-dollar atom like $(x_i, x_{i+1})$: separated from money by
+// requiring a TeX marker inside (backslash, ^, _, or a {foo} group) —
+// "$3 and $5" has none, LaTeX always does.
+const DOLLAR_MATH = /\$([^$\n]{1,256}?)\$/g;
+const hasTexMarkers = (s) => /\\|\^|_\{|\{[a-zA-Z]/.test(s);
+
+function looksLikeMath(root) {
+  for (const node of mathTextNodes(root)) {
+    const s = node.nodeValue;
+    if (/\\(\(|\[)|\\\]|\$\$|\\begin\{/.test(s)) return true;
+    let m;
+    DOLLAR_MATH.lastIndex = 0;
+    while ((m = DOLLAR_MATH.exec(s))) {
+      if (hasTexMarkers(m[1])) return true;
+    }
+  }
+  return false;
+}
+
+// Rewrite high-confidence single-$ spans into \( \) so the auto-render
+// pass (which we keep to the unambiguous delimiters) also picks them up.
+// Rewriting nodeValue only — no element creation, no parsing.
+function promoteDollarMath(root) {
+  for (const node of mathTextNodes(root)) {
+    const s = node.nodeValue;
+    if (!s.includes('$')) continue;
+    node.nodeValue = s.replace(/\$([^$\n]{1,256}?)\$/g, (whole, inner) =>
+      hasTexMarkers(inner) ? `\\(${inner}\\)` : whole);
+  }
+}
+
 createApp({
   data() {
     return {
@@ -93,8 +149,13 @@ createApp({
       scoreDetailId: null,
       readerArticle: null,
       readerHtml: '',
+      readerHtmlRaw: '',
       readerSource: null,
       readerLoading: false,
+      // Rendered math: detected from the article text itself; the π
+      // button (only shown for math-bearing articles) disables/re-enables.
+      readerHasMath: false,
+      readerMathOn: true,
       // Body text size for the reader/story view: 'auto' tracks the
       // viewport, the others fix the size; persisted per device.
       readerTextSize: 'auto',
@@ -170,6 +231,12 @@ createApp({
       clearTimeout(this.searchTimer);
       clearTimeout(this.customTimer);
       this.searchTimer = setTimeout(() => this.reload(), 300);
+    },
+    // When an article's text lands, scan it for LaTeX and render if the
+    // math switch is on (new article ⇒ switch resets to on).
+    readerHtml() {
+      this.readerMathOn = true;
+      this.detectAndMaybeRenderMath();
     },
   },
 
@@ -973,6 +1040,7 @@ createApp({
         // It is independent of Vue's proxy identity and works if abort is late.
         if (!current()) return;
         this.readerHtml = data.html;
+        this.readerHtmlRaw = data.html;
         this.readerSource = data.source;
       } catch (err) {
         if (!current() || err.name === 'AbortError') return;
@@ -989,7 +1057,58 @@ createApp({
       this.readerArticle = null;
       this.readerHtml = '';
       this.readerSource = null;
+      this.readerHasMath = false;
       if (restoreRoute) this.syncHash();
+    },
+
+    // Rendered math pipeline. Detection is conservative (unambiguous TeX
+    // delimiters, or a $...$ span carrying a TeX marker — so "$3 and $5"
+    // never triggers), the rewrite below touches text nodes only, and
+    // rendering is skipped entirely for non-math articles.
+    async detectAndMaybeRenderMath() {
+      await this.$nextTick();
+      if (!this.readerHtml || this.readerLoading) {
+        this.readerHasMath = false;
+        return;
+      }
+      const body = this.$el?.querySelector('.reader-overlay .reader-body');
+      this.readerHasMath = !!body && looksLikeMath(body);
+      if (this.readerHasMath && this.readerMathOn) this.applyReaderMath();
+    },
+
+    async applyReaderMath() {
+      const body = this.$el?.querySelector('.reader-overlay .reader-body');
+      if (!body) return;
+      try {
+        const { renderMathInElement } = await loadKatexAutorender();
+        // Double-check the same DOM is still the displayed reader body —
+        // the settled import promise can outlive a fast close/reopen.
+        if (this.$el?.querySelector('.reader-overlay .reader-body') !== body) return;
+        promoteDollarMath(body);
+        renderMathInElement(body, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '\\[', right: '\\]', display: true },
+            { left: '\\(', right: '\\)', display: false },
+          ],
+          throwOnError: false,
+        });
+      } catch (err) {
+        this.error = `Math rendering failed: ${err.message}`;
+      }
+    },
+
+    // Toggle: render math from raw text, or revert to the pristine
+    // (sanitized) HTML by re-priming v-html.
+    async toggleReaderMath() {
+      this.readerMathOn = !this.readerMathOn;
+      if (this.readerMathOn) {
+        this.detectAndMaybeRenderMath();
+        return;
+      }
+      this.readerHtml = '';
+      await this.$nextTick();
+      this.readerHtml = this.readerHtmlRaw;
     },
 
     // Reader text size: auto → small → medium → large → auto, persisted

@@ -1453,6 +1453,26 @@ superiority: that requires a frozen prospective/temporal evaluation with
 the same training history, candidates and freshly recomputed baseline,
 including checks for duplicate/event leakage and new-user or topic shifts.
 
+- **2026-09-28: rendered math in the reader, via vendored KaTeX on
+  demand.** Feed HTML is sanitized down to text before storage, so the
+  LaTeX that MathJax/KaTeX on the original site rendered comes through as
+  raw `$(x_i…)$` text. Instead of baking rendered math into stored HTML —
+  it would pollute `full_content` for every consumer (prompts, embeddings,
+  dedup), and can't be undone — the reader detects math in the served
+  article and renders client-side, never baked in. Detection is
+  conservative: unambiguous delimiters (`$$`, `\(`, `\[`, `\begin{`), or a
+  single-$ span carrying a TeX marker (backslash, `^`, `_{`, `{name}`) —
+  "$3 and $5" never triggers. KaTeX 0.18.9 is vendored like Vue
+  (`scripts/vendor-katex.js`, tarball SHA-256 pinned: js + css +
+  auto-render + woff2 fonts only, ~600KB JS + ~100KB fonts, no other
+  format requested by current browsers). The module loads lazily on the
+  first math-bearing article; nothing is fetched (even same-origin) for
+  math-free articles. Single-$ spans are rewritten to `\(...\)` in text
+  nodes before the auto-render pass, whose delimiters stay
+  high-confidence — precision gates on the rewrite, which requires the
+  same TeX markers. Rendering ignores pre/code (library default) and the
+  π button in the reader bar disables/re-enables for borderline cases.
+
 ## Deferred ideas
 
 - Non-RSS sources (the feeds table would grow a `kind` column).

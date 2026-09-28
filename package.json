@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "postinstall": "if command -v bun >/dev/null 2>&1; then exec bun scripts/vendor.js; else exec node scripts/vendor.js; fi",
+    "postinstall": "if command -v bun >/dev/null 2>&1; then bun scripts/vendor.js && bun scripts/vendor-katex.js; else node scripts/vendor.js && node scripts/vendor-katex.js; fi",
     "cron": "if command -v bun >/dev/null 2>&1; then exec bun bin/rssmart.js cron; else exec node bin/rssmart.js cron; fi",
     "serve": "if command -v bun >/dev/null 2>&1; then exec bun bin/rssmart.js serve; else exec node bin/rssmart.js serve; fi",
     "dbstats": "if command -v bun >/dev/null 2>&1; then exec bun scripts/dbstats.js; else exec node scripts/dbstats.js; fi",

@@ -9,6 +9,7 @@
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#128225;</text></svg>">
 </head>
 <body>
@@ -431,6 +432,8 @@
       <button class="mark reader-close" @click="closeReader">← back (esc)</button>
       <button class="mark" @click="cycleReaderTextSize"
               :title="readerTextSize === 'auto' ? 'text size: auto (click for fixed sizes)' : 'text size: ' + readerTextSize + ' (click to change)'">{{ { auto: 'A·', small: 'A−', medium: 'A', large: 'A+' }[readerTextSize] }}</button>
+      <button v-if="readerHasMath" class="mark" :class="{ 'math-on': readerMathOn }" @click="toggleReaderMath"
+              :title="readerMathOn ? 'math rendering: on (click for raw LaTeX)' : 'math rendering: off (click to render)'">π</button>
       <span class="reader-spacer"></span>
       <button class="vote up" :class="{ on: readerArticle.vote > 0, max: readerArticle.vote === 2 }"
               @click="voteClick(readerArticle, 1)"
